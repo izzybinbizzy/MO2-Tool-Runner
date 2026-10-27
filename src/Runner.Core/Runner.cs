@@ -389,10 +389,7 @@ public static class Runner
 		var notBack = PutBackParked(a_ctx, null);
 		var filesNotBack = StepKit.PutFilesBack(a_ctx);
 		if (notBack.Count > 0 || filesNotBack.Count > 0) {
-			// a mod whose old output could not come back is kept OFF (never ticked half empty) and Restore stays on offer
-			foreach (var m in notBack.Where(m => !j.Retire.Contains(m, StringComparer.OrdinalIgnoreCase))) {
-				j.Retire.Add(m);
-			}
+			// a mod whose old output could not come back is kept OFF (never ticked half empty, PutBack) and Restore stays on offer
 			j.NeedsRestore = true;
 			j.Save();
 		}
@@ -402,6 +399,16 @@ public static class Runner
 			j.State = RunState.Failed;
 			j.NeedsRestore = true;
 			j.Verdict = $"the profile could NOT be put back ({Plain(e)}) - press \"Put my profile back\" once Mod Organizer can close";
+			j.Save();
+			a_ctx.Log.Error(j.Verdict);
+			return new RunOutcome(j.State, j.Verdict, j.Folder);
+		}
+		if (notBack.Count > 0 || filesNotBack.Count > 0) {
+			// the run did not end cleanly, whatever its steps did: said so, never "finished" or "back as it was"
+			j.State = RunState.Failed;
+			j.Ended = DateTime.Now;
+			j.Verdict = "the profile is back except " + string.Join(", ", notBack.Concat(filesNotBack.Select(Path.GetFileName)).OfType<string>()) +
+				" (kept off / in the backup) - press \"Put my profile back\" once the files are free";
 			j.Save();
 			a_ctx.Log.Error(j.Verdict);
 			return new RunOutcome(j.State, j.Verdict, j.Folder);
@@ -434,9 +441,11 @@ public static class Runner
 			a_ctx.Profile.Restore(a_snap);
 		}
 		var st = a_ctx.Profile.States();
-		var retire = a_ctx.Journal.Retire.Where(m => st.ContainsKey(m)).ToList();
+		// replaced by this run for good, or its old output still in the backup (off only while it is out)
+		var retire = a_ctx.Journal.Retire.Concat(a_ctx.Journal.Parked.Where(p => !p.Replaced && !p.PutBack).Select(p => p.Mod))
+			.Distinct(StringComparer.OrdinalIgnoreCase).Where(st.ContainsKey).ToList();
 		if (retire.Count > 0) {
-			a_ctx.Log.Detail("replaced by this run, kept off: " + string.Join(", ", retire));
+			a_ctx.Log.Detail("kept off (replaced by this run, or its old output still in the backup): " + string.Join(", ", retire));
 			a_ctx.Profile.SetMods([], retire, a_ctx.Log);
 			a_ctx.Profile.DeactivatePlugins(retire);
 		}
@@ -491,9 +500,6 @@ public static class Runner
 			control.Close();
 			notBack = PutBackParked(ctx, null);
 			filesNotBack = StepKit.PutFilesBack(ctx);
-			foreach (var m in notBack.Where(m => !a_j.Retire.Contains(m, StringComparer.OrdinalIgnoreCase))) {
-				a_j.Retire.Add(m);
-			}
 			PutBack(ctx, a_j.LoadSnapshot());
 		} catch (Exception e) {
 			log.Error("restore failed: " + Plain(e));

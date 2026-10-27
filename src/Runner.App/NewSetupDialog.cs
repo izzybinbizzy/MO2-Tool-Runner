@@ -48,9 +48,12 @@ public static class NewSetupDialog
 		Row("Output mod names ({output} and {profile} are filled in)", pattern);
 		stack.Children.Add(note);
 
-		// the instances this program can open: beside it (portable), and the global ones
+		// the instances this program can open: beside it (portable), and the global ones (filled again only for another program,
+		// so a picked instance and profile survive a click in and out of the box)
+		string? loaded = null;
 		void FillInstances()
 		{
+			loaded = exe.Text.Trim();
 			var list = new List<KeyValuePair<string, string?>>();
 			var dir = File.Exists(exe.Text.Trim()) ? Path.GetDirectoryName(Path.GetFullPath(exe.Text.Trim())) : null;
 			if (dir != null && File.Exists(Path.Combine(dir, "ModOrganizer.ini"))) {
@@ -80,6 +83,9 @@ public static class NewSetupDialog
 			}
 		}
 		exe.LostFocus += (_, _) => {
+			if (exe.Text.Trim() == loaded) {
+				return;
+			}
 			FillInstances();
 			Fill();
 		};

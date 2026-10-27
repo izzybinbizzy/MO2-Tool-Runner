@@ -384,12 +384,15 @@ public sealed partial class MainViewModel : Observable
 		LoadHistory();
 	}
 
+	bool _checking;
+
 	async Task Check()
 	{
-		Issues.Clear();
-		if (Setup == null) {
+		if (_checking || Setup == null) {
 			return;
 		}
+		_checking = true;
+		Issues.Clear();
 		Say("Checking every tool and setting ...", "");
 		var setup = Setup;
 		List<ToolRunner.Steps.Issue> found;
@@ -397,6 +400,7 @@ public sealed partial class MainViewModel : Observable
 			found = await Task.Run(() => Preflight.Run(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), setup.EnabledSteps.Select(s => s.Key).ToList()));
 		} catch (Exception e) {
 			Say("The check could not finish: " + e.Message, "bad");
+			_checking = false;
 			return;
 		}
 		foreach (var i in found) {
@@ -404,6 +408,7 @@ public sealed partial class MainViewModel : Observable
 		}
 		var blocks = found.Count(i => i.Blocking);
 		Say(blocks > 0 ? $"{blocks} thing(s) would stop the run." : found.Count > 0 ? "Ready - with notes." : "Ready - everything checks out.", blocks > 0 ? "bad" : "good");
+		_checking = false;
 	}
 
 	// a step switched on / off for the setup (saved at once)

@@ -748,6 +748,8 @@ public static class Program
 		Check(ToolUpdates.IsNewer("1.0.4.0", "1.0.6"), "1.0.6 is newer than 1.0.4");
 		Check(!ToolUpdates.IsNewer("0.2.54.0", "0.2.11"), "an older number on the page is not newer");
 		Check(!ToolUpdates.IsNewer("", "1.0"), "no version of ours: never called newer");
+		Check(ToolUpdates.IsNewer("1.9.2", "2.0"), "2.0 (its zero trimmed) is newer than 1.9.2");
+		Check(!ToolUpdates.IsNewer("2.1.0", "2.0"), "2.0 is not newer than 2.1.0");
 	}
 
 	// the settings a tool's own window wrote: found, kept, put in place for a run and put back after
@@ -1102,6 +1104,58 @@ public static class Program
 		var p = ProfileOf(f);
 		Check(!p.IsOn("Replaced"), "the replaced mod stays off");
 		Check(!f.Text("plugins.txt").Contains("*Old.esp", StringComparison.Ordinal), "its plugin unticked");
+	}
+
+	// an old output that cannot come back (a file of it locked): the run says so (never "back as it was"), the mod stays off while
+	// it is out - and once Restore puts it back, it is on again (it was never "replaced for good")
+	static void T_OutputStillOutIsOffUntilItComesBack()
+	{
+		using var f = new FakeMo2();
+		FileStream? held = null;
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			StepKit.ParkMod(ctx, "snowfixer", "Output A");
+			var parked = ctx.Journal.Parked.Last(p => p.Mod == "Output A");
+			held = new FileStream(Path.Combine(parked.To, "OutA.esp"), FileMode.Open, FileAccess.Read, FileShare.None);
+			throw new StepFailedException("the tool crashed");
+		}));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		try {
+			var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+			Equal(RunState.Failed, r.State, "failed");
+			Check(r.Verdict.Contains("except Output A", StringComparison.Ordinal), "the verdict names what is still out: " + r.Verdict);
+			Check(!ProfileOf(f).IsOn("Output A"), "kept off while its old output is out");
+			var j = Journal.Interrupted(Runner.RunsDir(f.Data));
+			Check(j is { NeedsRestore: true }, "Restore is offered");
+			Check(!j!.Retire.Contains("Output A"), "never marked replaced for good");
+			held!.Dispose();
+			held = null;
+			Equal(RunState.Restored, Runner.Restore(Journal.Load(j.Folder)).State, "Restore once the file is free");
+			Check(File.Exists(Path.Combine(f.Mods, "Output A", "OutA.esp")), "its old output is back");
+			var p = ProfileOf(f);
+			Check(p.IsOn("Output A") && p.IsOn("Output B") && p.IsOn("Needs B"), "the profile as it was, Output A on again");
+		} finally {
+			held?.Dispose();
+		}
+	}
+
+	// a learned-settings record that names a file outside its own folder (damaged or edited by hand) is refused, nothing read
+	static void T_LearnedSettingsStayInTheirFolder()
+	{
+		using var f = new FakeMo2();
+		var live = Path.Combine(f.Root, "tool.ini");
+		File.WriteAllText(live, "mine=1");
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A", ["executable"] = "SomeTool" }));
+		var setup = Setup.Load(f.SetupFile);
+		ToolSettings.Keep(setup, "snowfixer", "SomeTool", [live]);
+		var rec = Path.Combine(ToolSettings.Folder(setup, "snowfixer"), "learned.json");
+		var o = JsonNode.Parse(File.ReadAllText(rec))!.AsObject();
+		o["Files"]![0]!["Stored"] = @"..\..\..\..\Setups\Test.json";
+		File.WriteAllText(rec, o.ToJsonString());
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => throw new InvalidOperationException("must not run")));
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Failed, r.State, "refused");
+		Check(r.Verdict.Contains("outside their folder", StringComparison.Ordinal), "said why: " + r.Verdict);
+		Equal("mine=1", File.ReadAllText(live), "the player's file untouched");
 	}
 
 	// the window looks every second: a run record is read again only when its file changed, a removed run drops out, a broken

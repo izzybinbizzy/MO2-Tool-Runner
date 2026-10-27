@@ -76,10 +76,12 @@ public static partial class ToolUpdates
 		if (y.Count == 0 || n.Count == 0 || y.SequenceEqual(n)) {
 			return false;
 		}
-		if (n.Count < y.Count && y.Skip(y.Count - n.Count).SequenceEqual(n)) {
+		// the two short-form rules only for a page version written short ("Alpha-217"), never one shortened by its zeros ("2.0")
+		var shortForm = n.Count == Numbers().Count(a_newest);
+		if (shortForm && n.Count < y.Count && y.Skip(y.Count - n.Count).SequenceEqual(n)) {
 			return false;
 		}
-		if (n.Count < y.Count && n.Count == 1) {
+		if (shortForm && n.Count < y.Count && n.Count == 1) {
 			// one number on the page ("Alpha-218") against a full version: the last part decides
 			return n[0] > y[^1];
 		}
@@ -127,9 +129,13 @@ public static partial class ToolUpdates
 
 	static async Task<string> Nexus(HttpClient a_http, string a_id, CancellationToken a_ct)
 	{
+		// a setup's own "nexus_id" may be anything the player typed: a bad one is that tool's problem, not the whole check's
+		if (!int.TryParse(a_id, System.Globalization.NumberStyles.None, InvariantCulture, out var modId) || modId <= 0) {
+			throw new InvalidOperationException($"\"{a_id}\" is not a Nexus mod number");
+		}
 		var query = new JsonObject {
 			["query"] = "query($ids: [CompositeDomainWithIdInput!]!) { legacyModsByDomain(ids: $ids) { nodes { modId version } } }",
-			["variables"] = new JsonObject { ["ids"] = new JsonArray(new JsonObject { ["gameDomain"] = "skyrimspecialedition", ["modId"] = int.Parse(a_id, InvariantCulture) }) },
+			["variables"] = new JsonObject { ["ids"] = new JsonArray(new JsonObject { ["gameDomain"] = "skyrimspecialedition", ["modId"] = modId }) },
 		};
 		using var r = await a_http.PostAsJsonAsync("https://api.nexusmods.com/v2/graphql", query, a_ct).ConfigureAwait(false);
 		r.EnsureSuccessStatusCode();

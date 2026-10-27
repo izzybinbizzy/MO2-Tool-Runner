@@ -137,8 +137,9 @@ public static class ToolSettings
 				a_ct.ThrowIfCancellationRequested();
 				Thread.Sleep(1000);
 			}
-			// a packed tool keeps its window in a child: wait for its whole tree
-			while (Procs.ByImage(image).Any(p => { using (p) { return control.Started.Contains(p.Id); } })) {
+			// a packed tool keeps its window in a child after its launcher ends: wait for the launcher's whole tree
+			var root = proc.Id;
+			while (Procs.Tree(root).Any(pid => pid != root && Procs.StartTime(pid) != null)) {
 				a_ct.ThrowIfCancellationRequested();
 				Thread.Sleep(1000);
 			}
@@ -163,6 +164,11 @@ public static class ToolSettings
 			return [];
 		}
 		var dir = Folder(a_ctx.Setup, a_step);
+		// a damaged or hand-edited record never reads a file from outside its own folder
+		var bad = l.Files.FirstOrDefault(f => !Files.IsUnder(Path.Combine(dir, f.Stored), dir) || !Path.IsPathFullyQualified(f.Live));
+		if (bad != null) {
+			throw new StepFailedException($"its learned settings name a file outside their folder ({bad.Stored}) - learn its settings again");
+		}
 		foreach (var f in l.Files) {
 			StepKit.KeepFile(a_ctx, f.Live);
 			Directory.CreateDirectory(Path.GetDirectoryName(f.Live)!);

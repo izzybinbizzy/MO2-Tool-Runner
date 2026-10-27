@@ -145,9 +145,19 @@ public static class SettingsPanel
 		System.Windows.Automation.AutomationProperties.SetName(pick, "Step to edit");
 		var stepHost = new StackPanel();
 		var stepApply = new List<Func<string?>>();
+		var shown = -1;
 		pick.SelectionChanged += (_, _) => {
+			// the step on screen keeps its fields until every value reads (a wrong one stays where it can be fixed)
 			var wrong = stepApply.Select(f => f()).OfType<string>().ToList();
-			errors.Text = wrong.Count > 0 ? "Fix before saving:\n" + string.Join("\n", wrong) : errors.Text;
+			if (wrong.Count > 0) {
+				errors.Text = "Fix this step first:\n" + string.Join("\n", wrong);
+				pick.SelectedIndex = shown;
+				return;
+			}
+			if (pick.SelectedIndex == shown) {
+				return;
+			}
+			shown = pick.SelectedIndex;
 			stepHost.Children.Clear();
 			stepApply.Clear();
 			if (pick.SelectedIndex < 0) {

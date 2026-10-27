@@ -6,7 +6,7 @@ namespace ToolRunner.App;
 //   "MO2 Tool Runner.exe" restore [--setup <file>]                                              put back an interrupted run
 //   "MO2 Tool Runner.exe" stop | stop-after                                                     ask the running run to stop
 //   "MO2 Tool Runner.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
-// exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments
+// exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
 	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "restore" or "stop" or "stop-after" or "import" or "updates" or "--help" or "-h" or "/?";
@@ -91,7 +91,7 @@ public static class Cli
 		foreach (var r in res) {
 			Console.WriteLine($"{(r.Newer ? "NEWER " : "      ")}  {r.Tool}: yours {r.Yours}, its page {r.Newest}{(r.Problem == null ? "" : " - " + r.Problem)}  {r.Page}");
 		}
-		return res.Any(r => r.Newer) ? 2 : 0;
+		return res.Any(r => r.Newer) ? 4 : 0;
 	}
 
 	static int RestoreCmd(string[] a_args)

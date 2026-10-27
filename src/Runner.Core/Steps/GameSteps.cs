@@ -430,6 +430,8 @@ public sealed class ShaderStep : IStep
 			} catch {
 				InGame.CloseGame(a_ctx);
 				throw;
+			} finally {
+				g?.Dispose();
 			}
 			a_ctx.Log.Detail(result);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 30)));
