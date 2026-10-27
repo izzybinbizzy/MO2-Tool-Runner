@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- WPF0001: the Fluent theme's ThemeMode is marked experimental -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <AssemblyName>MO2 Tool Runner</AssemblyName>
+    <RootNamespace>ToolRunner.App</RootNamespace>
+    <ApplicationIcon>Icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Authors>izzydoingit</Authors>
+    <Product>MO2 Tool Runner</Product>
+    <Description>Runs Mod Organizer 2's generators in the right order, unattended, and puts the profile back.</Description>
+    <Copyright>izzydoingit - GPL-3.0-or-later</Copyright>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Icon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Runner.Core\Runner.Core.csproj" />
+  </ItemGroup>
+
+</Project>
