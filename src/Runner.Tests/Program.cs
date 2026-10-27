@@ -959,6 +959,17 @@ public static class Program
 		Equal<string?>(null, SynthesisStep.Failure("[INF] [T2] Starting Patcher A Run\n[INF] [T2] Finished patcher run\n"), "a clean run is no failure");
 	}
 
+	static void T_SynthesisLoadingErrorIsNotAFailure()
+	{
+		var t = new DateTime(2026, 10, 27, 23, 29, 20, DateTimeKind.Utc);
+		DateTime? since = null;
+		Check(!SynthesisStep.StillBlocked(ref since, true, t), "a blocking error just seen is not judged yet");
+		Check(!SynthesisStep.StillBlocked(ref since, false, t.AddSeconds(5)), "gone 5 s later (its settings loaded)");
+		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(40)), "seen again: its clock starts over");
+		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(69)), "29 s later still not judged");
+		Check(SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(70)), "30 s without a break: the step fails");
+	}
+
 	static void T_BeforeRunCommandMustSucceed()
 	{
 		using var f = new FakeMo2();

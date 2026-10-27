@@ -292,10 +292,11 @@ public sealed class SynthesisStep : IStep
 		List<System.Windows.Automation.AutomationElement> Buttons() => Uia.All(a_w, System.Windows.Automation.ControlType.Button)
 			.Where(b => Regex.IsMatch(Uia.AutomationId(b) + " " + Uia.Name(b), @"^GoButton|\bRun\b|RunPatchers", RegexOptions.IgnoreCase) && Uia.Usable(b)).ToList();
 		var go = Buttons();
+		DateTime? blockedSince = null;
 		while (go.Count == 0) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			var txt = Uia.TextOf(a_w, 300);
-			if (Regex.IsMatch(txt, "Build required|Blocking Error")) {
+			if (StillBlocked(ref blockedSince, Regex.IsMatch(txt, "Build required|Blocking Error"), DateTime.UtcNow)) {
 				throw new StepFailedException("Synthesis still wants a build inside Mod Organizer: " + txt);
 			}
 			if (sw.Elapsed > idle) {
@@ -321,6 +322,18 @@ public sealed class SynthesisStep : IStep
 			a_ctx.Log.Warn("Synthesis: a Run button pressed, nothing changed in 45 s - trying the next one");
 		}
 		throw new StepFailedException("Synthesis did not start its patchers when Run was pressed. Its window shows: " + Uia.TextOf(a_w, 300));
+	}
+
+	// Synthesis shows a blocking error for a few seconds while it loads its settings (2026-10-27 19:29: "no enabled groups to run",
+	// then "No global error" 5 s later), so only one that stays 30 s is real
+	public static bool StillBlocked(ref DateTime? a_since, bool a_blockedNow, DateTime a_now)
+	{
+		if (!a_blockedNow) {
+			a_since = null;
+			return false;
+		}
+		a_since ??= a_now;
+		return a_now - a_since.Value >= TimeSpan.FromSeconds(30);
 	}
 
 	static void Build(RunContext a_ctx, StepSettings a_s, string a_image, string a_exe)
