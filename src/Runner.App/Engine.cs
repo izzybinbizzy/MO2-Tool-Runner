@@ -18,6 +18,9 @@ public static class AppPaths
 	{
 		var beside = Path.Combine(AppContext.BaseDirectory, "MO2 Tool Runner Data");
 		try {
+			if (Files.IsUnder(AppContext.BaseDirectory, Path.GetTempPath())) {
+				throw new UnauthorizedAccessException("a temporary folder");
+			}
 			Directory.CreateDirectory(beside);
 			var probe = Path.Combine(beside, ".write test");
 			File.WriteAllText(probe, "");
@@ -54,6 +57,18 @@ public static class Engine
 	}
 
 	static readonly JournalCache Cache = new(AppPaths.Runs);
+
+	// a start the engine refused writes its reason here (no run record exists for it)
+	public static string RefusalFile => Path.Combine(AppPaths.Runs, "last refusal.txt");
+
+	public static string? LastRefusal(DateTime a_since)
+	{
+		try {
+			return File.Exists(RefusalFile) && File.GetLastWriteTime(RefusalFile) >= a_since.AddSeconds(-5) ? Files.ReadSharedText(RefusalFile).Trim() : null;
+		} catch (IOException) {
+			return null;
+		}
+	}
 
 	// every run record, newest first (read again only where a record changed)
 	public static List<Journal> Runs() => Cache.Read();

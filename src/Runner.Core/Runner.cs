@@ -95,6 +95,7 @@ public static class Runner
 		var journal = new Journal {
 			Id = id, Folder = Path.Combine(runs, id), SetupFile = Path.GetFullPath(a_req.SetupFile), SetupName = setup.Name, Profile = setup.Profile,
 			Mo2Exe = setup.Mo2Exe, Mo2Instance = setup.Mo2Instance, BackupDir = Path.Combine(setup.BackupDir, id), Pid = Environment.ProcessId,
+			PidStarted = Process.GetCurrentProcess().StartTime.ToUniversalTime(),
 			Started = DateTime.Now, State = RunState.Running,
 			Steps = todo.Select(s => new StepRecord { Key = s.Key, Name = StepCatalog.Name(s.Key), State = StepState.Pending }).ToList(),
 		};
@@ -147,21 +148,21 @@ public static class Runner
 						RunPhase(ctx, "cleansave", "the clean save, first half: into a house with the profile as it is", () => InGame.Deactivate(ctx, new StepSettings(s.Key == "cleansave" ? s.Settings : setup.StepSettings("cleansave")!)));
 						control.Close();
 					}
-					OutputsOff(ctx, todo);
+					OutputsOff(ctx);
 					outputsOff = true;
 				}
 				if (!RunStep(ctx, s)) {
-					return Finish(ctx, snap0, commands.Stopped ? RunState.Stopped : RunState.Failed, total);
+					return Finish(ctx, snap0, commands.Stopped ? RunState.Stopped : RunState.Failed);
 				}
 				if (journal.StopAfterStep && s != todo.Last(t => t.Key != "playsave")) {
 					log.Say("stopped after this step, as asked");
 					foreach (var r in journal.Steps.Where(r => r.State == StepState.Pending)) {
 						r.State = StepState.Skipped;
 					}
-					return Finish(ctx, snap0, RunState.Stopped, total, $"stopped after {StepCatalog.Name(s.Key)}, as asked - carry on from the next step");
+					return Finish(ctx, snap0, RunState.Stopped, $"stopped after {StepCatalog.Name(s.Key)}, as asked - carry on from the next step");
 				}
 			}
-			var outcome = Finish(ctx, snap0, RunState.Finished, total);
+			var outcome = Finish(ctx, snap0, RunState.Finished);
 			if (outcome.State != RunState.Finished) {
 				return outcome;
 			}
@@ -197,7 +198,7 @@ public static class Runner
 			return new RunOutcome(RunState.Failed, journal.Verdict, journal.Folder);
 		} catch (Exception e) {
 			log.Error("the run stopped: " + Plain(e));
-			return Finish(ctx, snap0, commands.Stopped ? RunState.Stopped : RunState.Failed, total, Plain(e));
+			return Finish(ctx, snap0, commands.Stopped ? RunState.Stopped : RunState.Failed, Plain(e));
 		} finally {
 			commands.Dispose();
 			Native.KeepAwake(false);
@@ -231,13 +232,22 @@ public static class Runner
 			r.Activity = a_title;
 			a_ctx.Journal.Save();
 		}
-		a_work();
+		try {
+			a_work();
+		} catch (Exception e) when (r != null) {
+			r.State = e is OperationCanceledException ? StepState.Stopped : StepState.Failed;
+			r.Note = Plain(e);
+			r.Ended = DateTime.Now;
+			r.Activity = "";
+			a_ctx.Journal.Save();
+			throw;
+		}
 	}
 
 	// every output the setup's steps make goes OFF before the first step (his rule 2026-10-02: no tool reads its own or a later
 	// step's output) - except the shader caches (no tool reads one, and with it off every game start recompiles) - plus every
 	// mod a step replaces and the setup's LOD outputs
-	static void OutputsOff(RunContext a_ctx, List<Setup.StepEntry> a_todo)
+	static void OutputsOff(RunContext a_ctx)
 	{
 		var st = a_ctx.Profile.States();
 		var all = a_ctx.Setup.EnabledSteps.Where(s => s.Key != "shaders").Select(s => new StepSettings(s.Settings)).ToList();
@@ -251,9 +261,8 @@ public static class Runner
 		foreach (var (m, why) in deps) {
 			a_ctx.Log.Detail($"also off for the run: {m} ({why})");
 		}
-		a_ctx.Control.Close();
+		a_ctx.Control.Close(null, a_ctx.Cancel);
 		a_ctx.Profile.SetMods([], off.Concat(deps.Keys), a_ctx.Log);
-		_ = a_todo;
 	}
 
 	// one step: run, put its parked output back if it did not finish, its built output switched on, the plugins placed
@@ -267,6 +276,7 @@ public static class Runner
 		r.Started ??= DateTime.Now;
 		r.Activity = "starting";
 		a_ctx.Journal.Save();
+		var overwriteBefore = OverwriteFiles(a_ctx);
 		var sw = Stopwatch.StartNew();
 		try {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
@@ -290,6 +300,8 @@ public static class Runner
 				a_ctx.Log.Warn("could not close the tool: " + e2.Message);
 			}
 			PutBackParked(a_ctx, a_s.Key);
+			StepKit.PutFilesBack(a_ctx);
+			MoveNewOverwrite(a_ctx, overwriteBefore);
 			return false;
 		}
 		foreach (var m in new[] { new StepSettings(a_s.Settings).OutputMod }.OfType<string>().Concat(a_ctx.PendingEnable)) {
@@ -317,7 +329,7 @@ public static class Runner
 		var en = a_ctx.PendingEnable.Distinct().Where(m => st.TryGetValue(m, out var f) && f != '+').ToList();
 		a_ctx.PendingEnable.Clear();
 		if (en.Count > 0 || a_ctx.Setup.Placement.Count > 0) {
-			a_ctx.Control.Close();
+			a_ctx.Control.Close(null, a_ctx.Cancel);
 		}
 		if (en.Count > 0) {
 			a_ctx.Log.Detail("new outputs switched on:");
@@ -331,8 +343,9 @@ public static class Runner
 	}
 
 	// a step that did not finish: its parked old output goes back into its mod (what it half wrote goes to the backup)
-	public static void PutBackParked(RunContext a_ctx, string? a_step)
+	public static List<string> PutBackParked(RunContext a_ctx, string? a_step)
 	{
+		var failed = new List<string>();
 		foreach (var p in a_ctx.Journal.Parked.Where(p => (a_step == null || p.Step == a_step) && !p.Replaced && !p.PutBack).Reverse()) {
 			try {
 				if (Directory.Exists(p.From)) {
@@ -354,17 +367,29 @@ public static class Runner
 				a_ctx.Journal.Save();
 				a_ctx.Log.Detail($"{p.Mod}: its old output put back");
 			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				failed.Add(p.Mod);
 				a_ctx.Log.Error($"{p.Mod}: its old output could NOT be put back ({e.Message}) - it is in {p.To}");
 			}
 		}
+		return failed;
 	}
 
 	// the order files back as they were before the run, then this run's outputs on, the replaced mods off, the plugins placed
-	static RunOutcome Finish(RunContext a_ctx, Dictionary<string, byte[]>? a_snap, RunState a_state, Stopwatch a_total, string? a_why = null)
+	static RunOutcome Finish(RunContext a_ctx, Dictionary<string, byte[]>? a_snap, RunState a_state, string? a_why = null)
 	{
 		var j = a_ctx.Journal;
 		foreach (var r in j.Steps.Where(r => r.State == StepState.Pending)) {
 			r.State = StepState.Skipped;
+		}
+		var notBack = PutBackParked(a_ctx, null);
+		var filesNotBack = StepKit.PutFilesBack(a_ctx);
+		if (notBack.Count > 0 || filesNotBack.Count > 0) {
+			// a mod whose old output could not come back is kept OFF (never ticked half empty) and Restore stays on offer
+			foreach (var m in notBack.Where(m => !j.Retire.Contains(m, StringComparer.OrdinalIgnoreCase))) {
+				j.Retire.Add(m);
+			}
+			j.NeedsRestore = true;
+			j.Save();
 		}
 		try {
 			PutBack(a_ctx, a_snap);
@@ -390,7 +415,6 @@ public static class Runner
 			j.State = RunState.Finished;
 		}
 		j.Save();
-		_ = a_total;
 		return new RunOutcome(j.State, j.Verdict, j.Folder);
 	}
 
@@ -417,7 +441,7 @@ public static class Runner
 
 	// an interrupted run (a crash, Stop now, a power cut): every unfinished output back, the profile as before + the finished
 	// outputs on - the window's Restore button and the command line's --restore
-	public static RunOutcome Restore(Journal a_j, string a_dataDir)
+	public static RunOutcome Restore(Journal a_j)
 	{
 		if (a_j.OwnerAlive) {
 			return new RunOutcome(a_j.State, "that run is still going", a_j.Folder);
@@ -439,6 +463,7 @@ public static class Runner
 		try {
 			control.Close();
 			PutBackParked(ctx, null);
+			StepKit.PutFilesBack(ctx);
 			PutBack(ctx, a_j.LoadSnapshot());
 		} catch (Exception e) {
 			log.Error("restore failed: " + Plain(e));
@@ -453,7 +478,6 @@ public static class Runner
 		a_j.Verdict = "put back after an interrupted run - the profile is as it was, with the outputs that finished on";
 		a_j.Save();
 		log.Say(a_j.Verdict);
-		_ = a_dataDir;
 		return new RunOutcome(RunState.Restored, a_j.Verdict, a_j.Folder);
 	}
 
@@ -478,12 +502,45 @@ public static class Runner
 			if (!Files.IsUnder(d, scratch) || !Directory.Exists(d)) {
 				continue;
 			}
-			try {
-				Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(d, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-				a_ctx.Log.Detail("scratch folder to the Recycle Bin: " + d);
-			} catch (Exception e) when (e is IOException or OperationCanceledException or UnauthorizedAccessException) {
-				a_ctx.Log.Warn($"scratch folder NOT recycled ({e.Message}): {d}");
+			// its output went into its mod, so the folder is normally empty; one that still holds files is left (never a box on the
+			// player's screen, never an erase)
+			if (Files.CountFiles(d) > 0) {
+				a_ctx.Log.Warn($"scratch folder left as it is - it still holds {Files.CountFiles(d)} file(s): {d}");
+				continue;
 			}
+			try {
+				Directory.Delete(d, true);
+				a_ctx.Log.Detail("empty scratch folder removed: " + d);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				a_ctx.Log.Warn($"scratch folder not removed ({e.Message}): {d}");
+			}
+		}
+	}
+
+	// overwrite's files and their times (what a step adds there is told apart from what was there before)
+	static Dictionary<string, DateTime> OverwriteFiles(RunContext a_ctx)
+	{
+		var d = a_ctx.Mo2.OverwriteDir;
+		return Directory.Exists(d) ? Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories)
+			.ToDictionary(f => f, File.GetLastWriteTimeUtc, StringComparer.OrdinalIgnoreCase) : new(StringComparer.OrdinalIgnoreCase);
+	}
+
+	// a failed step's new files in overwrite would win over the output put back: moved into the run's backup ("unfinished\overwrite")
+	static void MoveNewOverwrite(RunContext a_ctx, Dictionary<string, DateTime> a_before)
+	{
+		try {
+			var ow = a_ctx.Mo2.OverwriteDir;
+			var fresh = OverwriteFiles(a_ctx).Where(f => !a_before.TryGetValue(f.Key, out var t) || t != f.Value).Select(f => f.Key).ToList();
+			foreach (var f in fresh) {
+				var dst = Path.Combine(a_ctx.BackupFolder, "unfinished", "overwrite", Path.GetRelativePath(ow, f));
+				Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+				File.Move(f, dst, true);
+			}
+			if (fresh.Count > 0) {
+				a_ctx.Log.Detail($"{fresh.Count} file(s) the step left in Mod Organizer's overwrite moved to the backup (unfinished\\overwrite)");
+			}
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			a_ctx.Log.Warn("overwrite could not be cleared after the failed step: " + e.Message);
 		}
 	}
 
@@ -544,6 +601,14 @@ public sealed class Commands(Journal a_journal, CancellationTokenSource a_cts) :
 
 	void Poll()
 	{
+		try {
+			PollOnce();
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+		}
+	}
+
+	void PollOnce()
+	{
 		var d = Dir(_j.Folder);
 		if (!Directory.Exists(d)) {
 			return;
@@ -553,8 +618,8 @@ public sealed class Commands(Journal a_journal, CancellationTokenSource a_cts) :
 			_cts.Cancel();
 		}
 		if (File.Exists(Path.Combine(d, "stop after.txt")) && !_j.StopAfterStep) {
+			// no save here: this is a timer thread, and the run's own thread saves the record often
 			_j.StopAfterStep = true;
-			_j.Save();
 		}
 		if (File.Exists(Path.Combine(d, "continue.txt"))) {
 			_continue = true;

@@ -45,6 +45,15 @@ public sealed class ParkRecord
 	public bool PutBack { get; set; }
 }
 
+// a file outside the mods that a step changes for its run (a tool's settings, DynDOLOD's preset, NGIO's flag): its old bytes
+// kept in the run's backup (Backup null = it did not exist), put back by the step - or by Restore after a crash
+public sealed class KeptFile
+{
+	public string Path { get; set; } = "";
+	public string? Backup { get; set; }
+	public bool Done { get; set; }
+}
+
 // The run record on disk: everything needed to put the profile back after a crash, a Stop now or a power cut, and what
 // the window shows. Written atomically after every change. The order files as they were before the run sit beside it in
 // "profile before\", byte for byte.
@@ -58,6 +67,8 @@ public sealed class Journal
 	public string? Mo2Instance { get; set; }
 	public string BackupDir { get; set; } = "";
 	public int Pid { get; set; }
+	// the owner's start time: a PID reused by another program after a crash never passes for the run
+	public DateTime? PidStarted { get; set; }
 	public DateTime Started { get; set; }
 	public DateTime? Ended { get; set; }
 	public RunState State { get; set; }
@@ -69,6 +80,7 @@ public sealed class Journal
 	public List<string> Retire { get; set; } = [];
 	public List<string> Added { get; set; } = [];
 	public List<ParkRecord> Parked { get; set; } = [];
+	public List<KeptFile> Kept { get; set; } = [];
 	public List<string> Notes { get; set; } = [];
 
 	[JsonIgnore]
@@ -127,7 +139,8 @@ public sealed class Journal
 	public bool Unfinished => State == RunState.Running || NeedsRestore;
 
 	// is the program that wrote it still alive? (a run that is still going is never "unfinished")
-	public bool OwnerAlive => Pid != 0 && Procs.Alive(Pid) && IsRunner(Pid);
+	public bool OwnerAlive => Pid != 0 && Procs.Alive(Pid) && IsRunner(Pid) &&
+		(PidStarted == null || Procs.StartTime(Pid) is { } s && Math.Abs((s - PidStarted.Value).TotalSeconds) < 2);
 
 	static bool IsRunner(int a_pid)
 	{

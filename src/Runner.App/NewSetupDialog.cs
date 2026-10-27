@@ -22,6 +22,8 @@ public static class NewSetupDialog
 
 		var exe = new TextBox();
 		var browse = new Button { Content = "Browse ...", Style = (Style)a_owner.FindResource("Ghost"), Margin = new Thickness(8, 0, 0, 0) };
+		// a portable install keeps its instance beside the program; a normal install keeps one or more in %LOCALAPPDATA%\ModOrganizer
+		var instance = new ComboBox { DisplayMemberPath = "Key" };
 		var profile = new ComboBox();
 		var name = new TextBox();
 		var pattern = new TextBox { Text = "{output} - {profile}" };
@@ -40,17 +42,33 @@ public static class NewSetupDialog
 			stack.Children.Add(d);
 		}
 		Row("Mod Organizer's program (ModOrganizer.exe)", exe, browse);
+		Row("Its instance", instance);
 		Row("Profile", profile);
 		Row("Setup name", name);
 		Row("Output mod names ({output} and {profile} are filled in)", pattern);
 		stack.Children.Add(note);
+
+		// the instances this program can open: beside it (portable), and the global ones
+		void FillInstances()
+		{
+			var list = new List<KeyValuePair<string, string?>>();
+			var dir = File.Exists(exe.Text.Trim()) ? Path.GetDirectoryName(Path.GetFullPath(exe.Text.Trim())) : null;
+			if (dir != null && File.Exists(Path.Combine(dir, "ModOrganizer.ini"))) {
+				list.Add(new("Portable (beside Mod Organizer)", null));
+			}
+			list.AddRange(Mo2Instance.GlobalInstances().Select(d => new KeyValuePair<string, string?>(Path.GetFileName(d), d)));
+			instance.ItemsSource = list;
+			instance.SelectedIndex = list.Count > 0 ? 0 : -1;
+		}
+
+		string? InstanceDir() => instance.SelectedItem is KeyValuePair<string, string?> kv ? kv.Value : null;
 
 		void Fill()
 		{
 			profile.ItemsSource = null;
 			note.Text = "";
 			try {
-				var mo2 = Mo2Instance.Load(exe.Text.Trim());
+				var mo2 = Mo2Instance.Load(exe.Text.Trim(), InstanceDir());
 				var list = mo2.Profiles().ToList();
 				profile.ItemsSource = list;
 				profile.SelectedItem = list.Contains(mo2.SelectedProfile) ? mo2.SelectedProfile : list.FirstOrDefault();
@@ -61,11 +79,16 @@ public static class NewSetupDialog
 				note.Foreground = Brushes2.Get("Bad");
 			}
 		}
-		exe.LostFocus += (_, _) => Fill();
+		exe.LostFocus += (_, _) => {
+			FillInstances();
+			Fill();
+		};
+		instance.SelectionChanged += (_, _) => Fill();
 		browse.Click += (_, _) => {
 			var d = new OpenFileDialog { Filter = "Mod Organizer|ModOrganizer.exe", Title = "Mod Organizer's program" };
 			if (d.ShowDialog(w) == true) {
 				exe.Text = d.FileName;
+				FillInstances();
 				Fill();
 			}
 		};
@@ -74,10 +97,13 @@ public static class NewSetupDialog
 				name.Text = p;
 			}
 		};
-		foreach (var guess in new[] { @"C:\Modding\MO2\ModOrganizer.exe", @"D:\Modding\MO2\ModOrganizer.exe",
-			         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mod Organizer 2", "ModOrganizer.exe") }) {
+		// first guess: a Mod Organizer that runs now, else its usual install folder
+		var running = Procs.ByImage("ModOrganizer.exe").Select(p => { using (p) { return Procs.ExePath(p); } }).OfType<string>();
+		foreach (var guess in running.Append(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mod Organizer 2", "ModOrganizer.exe"))
+			         .Append(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Mod Organizer", "ModOrganizer.exe"))) {
 			if (File.Exists(guess)) {
 				exe.Text = guess;
+				FillInstances();
 				Fill();
 				break;
 			}
@@ -86,7 +112,7 @@ public static class NewSetupDialog
 		var create = new Button { Content = "_Make the setup", Style = (Style)a_owner.FindResource("Primary"), Margin = new Thickness(0, 0, 10, 0), IsDefault = true };
 		var import = new Button { Content = "Bring over an MO2 Updater profile ...", Style = (Style)a_owner.FindResource("Ghost"), Margin = new Thickness(0, 0, 10, 0) };
 		var cancel = new Button { Content = "Cancel", Style = (Style)a_owner.FindResource("Ghost"), IsCancel = true };
-		create.Click += (_, _) => {
+		create.Click += async (_, _) => {
 			if (profile.SelectedItem is not string p || name.Text.Trim() == "") {
 				note.Text = "Pick Mod Organizer, a profile and a name.";
 				note.Foreground = Brushes2.Get("Bad");
@@ -96,14 +122,21 @@ public static class NewSetupDialog
 			if (File.Exists(file) && !Ask.Show(w, "Replace that setup?", $"A setup called {name.Text.Trim()} exists. Replace it?", "Replace", "Keep it")) {
 				return;
 			}
+			// it looks through every mod (thousands on a big list): off the window's thread, the window says so
+			var (exeText, inst, setupName, pat) = (exe.Text.Trim(), InstanceDir(), Safe(name.Text.Trim()), pattern.Text.Trim() == "" ? "{output} - {profile}" : pattern.Text.Trim());
+			create.IsEnabled = false;
+			note.Text = "Looking through your mods for the tools ...";
+			note.Foreground = Brushes2.Get("Muted");
 			try {
-				var s = SetupMaker.Make(exe.Text.Trim(), null, p, Safe(name.Text.Trim()), AppPaths.Data, pattern.Text.Trim() == "" ? "{output} - {profile}" : pattern.Text.Trim());
+				var s = await Task.Run(() => SetupMaker.Make(exeText, inst, p, setupName, AppPaths.Data, pat));
 				s.Save(file);
 				made = file;
 				w.Close();
-			} catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException) {
+			} catch (Exception e) {
 				note.Text = "Not made: " + e.Message;
 				note.Foreground = Brushes2.Get("Bad");
+			} finally {
+				create.IsEnabled = true;
 			}
 		};
 		import.Click += (_, _) => {
@@ -120,7 +153,7 @@ public static class NewSetupDialog
 				s.Save(file);
 				made = file;
 				w.Close();
-			} catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException) {
+			} catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException or UnauthorizedAccessException) {
 				note.Text = "Not brought over: " + e.Message;
 				note.Foreground = Brushes2.Get("Bad");
 			}

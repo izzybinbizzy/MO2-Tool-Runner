@@ -68,6 +68,20 @@ public sealed unsafe partial class Tray : IDisposable
 
 	public bool Shown => _added;
 
+	// Explorer restarted (its "TaskbarCreated" message): the icon is gone from the new taskbar - put it back
+	public void Readd()
+	{
+		if (_added) {
+			_added = false;
+			Show(_tip == "" ? "MO2 Tool Runner" : _tip);
+		}
+	}
+
+	[LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)]
+	private static partial uint RegisterWindowMessage(string a_name);
+
+	public static uint TaskbarCreated { get; } = RegisterWindowMessage("TaskbarCreated");
+
 	// the icon itself, with the run's state as its tip (Windows is told only when the tip changed)
 	public void Show(string a_tip)
 	{

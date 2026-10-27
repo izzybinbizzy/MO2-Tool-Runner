@@ -47,11 +47,15 @@ public static class SetupMaker
 
 		// shader caches: every mod of the profile that ships a Community Shaders-type DLL
 		var caches = new JsonArray();
+		var plainTaken = false;
 		foreach (var (mod, flag) in states.Where(s => s.Value != '*')) {
 			var plugins = Path.Combine(mo2.ModDir(mod), "SKSE", "Plugins");
 			if (Directory.Exists(plugins) && Directory.GetFiles(plugins, "*.dll").Any(f => Path.GetFileName(f) is var n &&
 				    (n.Equals("CommunityShaders.dll", StringComparison.OrdinalIgnoreCase) || n.Contains("OpenShaders", StringComparison.OrdinalIgnoreCase) || n.Contains("BottledShaders", StringComparison.OrdinalIgnoreCase)))) {
-				caches.Add(new JsonObject { ["shader_mod"] = mod, ["output_mod"] = flag == '+' ? Out("Shader Cache") : Out("Shader Cache") + " - " + mod });
+				// one cache mod per shader mod: the first ticked one gets the plain name, every other its shader mod's name added
+				var plain = flag == '+' && !plainTaken;
+				plainTaken |= plain;
+				caches.Add(new JsonObject { ["shader_mod"] = mod, ["output_mod"] = plain ? Out("Shader Cache") : Out("Shader Cache") + " - " + mod });
 			}
 		}
 		if (caches.Count > 0) {
@@ -96,7 +100,8 @@ public static class SetupMaker
 			var o = new JsonObject { ["output_mod"] = Out("Grass Cache"), ["deadline_min"] = ngio != null ? 30 : 360, ["launch_executable"] = skse };
 			o["by"] = ngio != null ? "fasterngio" : "game";
 			if (ngio != null) o["fasterngio_exe"] = ngio;
-			Add("grass", true, o);
+			// the game route writes NGIO's flag into the game folder and starts the game up to 40 times: only on a player's choice
+			Add("grass", ngio != null, o);
 		}
 		if (ByBinary(mo2, "TreeLODGen.exe") is { } tl) {
 			Add("treelodgen", true, new JsonObject { ["exe"] = tl.Binary, ["output_mod"] = Out("TreeLODGen Output"),
@@ -122,14 +127,14 @@ public static class SetupMaker
 		var root2 = new JsonObject {
 			["schema"] = Setup.Schema,
 			["name"] = a_name,
-			["mo2"] = new JsonObject { ["exe"] = Path.GetFullPath(a_mo2Exe), ["instance"] = a_instance ?? mo2.BaseDir, ["profile"] = a_profile },
+			["mo2"] = new JsonObject { ["exe"] = Path.GetFullPath(a_mo2Exe), ["instance"] = a_instance ?? Path.GetDirectoryName(mo2.IniPath), ["profile"] = a_profile },
 			["backups"] = Path.Combine(a_dataDir, "Backups"),
 			["scratch"] = Path.Combine(a_dataDir, "Scratch"),
 			["outputPattern"] = a_pattern,
 			["shaderRebuild"] = "whenChanged",
 			["idleMinutes"] = 2,
 			["minFreeGb"] = 20,
-			["gameFolderWrites"] = true,
+			["gameFolderWrites"] = false,
 			["alerts"] = new JsonObject { ["notification"] = true, ["sound"] = true, ["flash"] = false },
 			["lodOutputs"] = lodOff,
 			["placeAfter"] = new JsonObject { ["DynDOLOD.esm"] = "PGPatcher.esp" },

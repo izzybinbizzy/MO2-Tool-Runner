@@ -54,6 +54,9 @@ public static class StepKit
 			dst += " " + DateTime.Now.ToString("HHmmss", InvariantCulture);
 		}
 		Directory.CreateDirectory(dst);
+		// recorded BEFORE the first move: a move that fails half way still has its record, so the put-back finds what moved
+		a_ctx.Journal.Parked.Add(new ParkRecord { Step = a_step, Mod = a_mod, From = d, To = dst });
+		a_ctx.Journal.Save();
 		var n = 0;
 		foreach (var e in Directory.EnumerateFileSystemEntries(d).ToList()) {
 			var name = Path.GetFileName(e);
@@ -67,10 +70,74 @@ public static class StepKit
 			}
 			++n;
 		}
-		a_ctx.Journal.Parked.Add(new ParkRecord { Step = a_step, Mod = a_mod, From = d, To = dst });
-		a_ctx.Journal.Save();
 		a_ctx.Log.Detail($"old {a_mod} moved to the backup ({n} item(s), {Files.CountFiles(dst)} file(s))");
 		return n;
+	}
+
+	// a file a step is about to change (its settings, a preset, a flag): its old bytes into the run's backup and the record saved
+	// FIRST, so a crash after the change is put back by Restore
+	public static void KeepFile(RunContext a_ctx, string a_path)
+	{
+		if (a_ctx.Journal.Kept.Any(k => !k.Done && string.Equals(k.Path, a_path, StringComparison.OrdinalIgnoreCase))) {
+			return;
+		}
+		string? backup = null;
+		if (File.Exists(a_path)) {
+			var dir = Path.Combine(a_ctx.BackupFolder, "files");
+			Directory.CreateDirectory(dir);
+			backup = Path.Combine(dir, $"{a_ctx.Journal.Kept.Count + 1} {Path.GetFileName(a_path)}");
+			File.Copy(a_path, backup, true);
+		}
+		a_ctx.Journal.Kept.Add(new KeptFile { Path = a_path, Backup = backup });
+		a_ctx.Journal.Save();
+	}
+
+	// the kept files back as they were (one, or every one still out when a_path is null); returns those it could not put back
+	public static List<string> PutFilesBack(RunContext a_ctx, string? a_path = null)
+	{
+		var failed = new List<string>();
+		foreach (var k in a_ctx.Journal.Kept.Where(k => !k.Done && (a_path == null || string.Equals(k.Path, a_path, StringComparison.OrdinalIgnoreCase)))) {
+			try {
+				if (k.Backup == null) {
+					if (File.Exists(k.Path)) {
+						File.Delete(k.Path);
+					}
+				} else {
+					Files.WriteAtomic(k.Path, File.ReadAllBytes(k.Backup));
+				}
+				k.Done = true;
+				a_ctx.Log.Detail($"{Path.GetFileName(k.Path)} put back as it was");
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				failed.Add(k.Path);
+				a_ctx.Log.Error($"{k.Path} could NOT be put back ({e.Message}) - its old copy: {k.Backup ?? "(it did not exist)"}");
+			}
+		}
+		a_ctx.Journal.Save();
+		return failed;
+	}
+
+	// an output mod made mid-run (the shader caches' mods): its line is recorded at once, so a Restore after a crash keeps it
+	public static void EnsureOutput(RunContext a_ctx, string a_mod)
+	{
+		a_ctx.Profile.EnsureMod(a_mod, a_ctx.Log);
+		if (!a_ctx.Journal.Added.Contains(a_mod, StringComparer.OrdinalIgnoreCase)) {
+			a_ctx.Journal.Added.Add(a_mod);
+			a_ctx.Journal.Save();
+		}
+	}
+
+	// a tool's output folder may not be one of MO2's own folders or the game's (a mod there would be moved into the backup)
+	public static IEnumerable<Issue> CheckOutputDir(CheckContext a_c, string a_step, string? a_dir)
+	{
+		if (string.IsNullOrWhiteSpace(a_dir)) {
+			yield break;
+		}
+		foreach (var (root, what) in new[] { (a_c.Mo2.ModsDir, "Mod Organizer's mods folder"), (a_c.Mo2.OverwriteDir, "Mod Organizer's overwrite folder"),
+			         (a_c.Mo2.ProfilesDir, "Mod Organizer's profiles folder"), (a_c.Mo2.GameDir, "the game's folder") }) {
+			if (!string.IsNullOrEmpty(root) && (Files.IsUnder(a_dir, root) || Files.IsUnder(root, a_dir))) {
+				yield return new Issue(a_step, true, $"its output folder {a_dir} is in (or holds) {what} - use an empty folder of its own");
+			}
+		}
 	}
 
 	// a mod's new output is complete: its parked old output stays in the backup and is never put back

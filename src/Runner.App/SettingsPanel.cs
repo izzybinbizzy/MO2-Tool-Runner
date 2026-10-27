@@ -54,6 +54,17 @@ public static class SettingsPanel
 
 	static void Changed() => HasChanges = true;
 
+	// settings a step reads that its file may not list yet (shown empty, with the default the step uses)
+	static readonly Dictionary<string, (string Key, JsonValueKind Kind, string Default)[]> Known = new(StringComparer.Ordinal) {
+		["shaders"] = [("quiet_min", JsonValueKind.Number, "5"), ("min_files", JsonValueKind.Number, "50"), ("max_restarts", JsonValueKind.Number, "3")],
+		["grass"] = [("stall_min", JsonValueKind.Number, "10"), ("min_files", JsonValueKind.Number, "100")],
+		["pgpatcher"] = [("pglite_check", JsonValueKind.False, "off")],
+		["dyndolod"] = [("no_terrain_underside", JsonValueKind.False, "off"), ("preset", JsonValueKind.String, "none")],
+		["snowfixer"] = [("min_files", JsonValueKind.Number, "3")],
+		["autoblend"] = [("min_files", JsonValueKind.Number, "3")],
+		["synthesis"] = [("build_min", JsonValueKind.Number, "15")],
+	};
+
 	static string Label(string a_key) => Labels.TryGetValue(a_key, out var l) ? l : char.ToUpperInvariant(a_key[0]) + a_key[1..].Replace('_', ' ');
 
 	public static FrameworkElement Build(MainWindow a_w, MainViewModel a_vm)
@@ -109,6 +120,11 @@ public static class SettingsPanel
 				}
 				Field(stepHost, stepApply, Label(key), o, key, val?.GetValueKind() ?? JsonValueKind.String);
 			}
+			var stepKey = Setup.Str(steps[pick.SelectedIndex], "step") ?? "";
+			foreach (var (key, kind, def) in Known.GetValueOrDefault(stepKey, []).Append((Key: "deadline_min", Kind: JsonValueKind.Number, Default: "the step's own"))
+				         .Where(k => !o.ContainsKey(k.Key))) {
+				Field(stepHost, stepApply, $"{Label(key)} (default {def})", o, key, kind);
+			}
 		};
 		stack.Children.Add(pick);
 		stack.Children.Add(stepHost);
@@ -131,8 +147,11 @@ public static class SettingsPanel
 				errors.Text = "Not saved: " + string.Join("; ", p);
 				return;
 			}
+			foreach (var k in a_vm.Setup.Root.Select(x => x.Key).ToList()) {
+				a_vm.Setup.Root.Remove(k);
+			}
 			foreach (var k in work.Select(x => x.Key).ToList()) {
-				a_vm.Setup.Root[k] = work[k]!.DeepClone();
+				a_vm.Setup.Root[k] = work[k]?.DeepClone();
 			}
 			a_vm.SaveSetup();
 			a_vm.LoadSteps();
@@ -186,8 +205,11 @@ public static class SettingsPanel
 					a_obj.Remove(a_key);
 					return null;
 				}
-				if (!double.TryParse(t.Text, System.Globalization.NumberStyles.Float, InvariantCulture, out var d) || d < 0) {
+				if (!double.TryParse(t.Text.Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, InvariantCulture, out var d) || d < 0) {
 					return $"{a_label}: needs a number, 0 or more";
+				}
+				if (d < 1 && a_key.EndsWith("_min", StringComparison.Ordinal)) {
+					return $"{a_label}: needs 1 minute or more";
 				}
 				a_obj[a_key] = d == Math.Floor(d) ? JsonValue.Create((long)d) : JsonValue.Create(d);
 				return null;

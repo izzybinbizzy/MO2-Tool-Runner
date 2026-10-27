@@ -25,15 +25,22 @@ public sealed class RunContext
 
 	public void SetAfter(params string[] a_mods) => PendingEnable.AddRange(a_mods);
 
+	// what a step does now, for the window: saved at most once a second (a command-line tool prints thousands of lines); a
+	// "WAITING FOR YOU" text always at once. Only the run's own thread calls it.
 	public void Activity(string a_step, string a_text, double? a_progress = null)
 	{
 		var s = Journal.Step(a_step);
 		if (s != null && (s.Activity != a_text || s.Progress != a_progress)) {
 			s.Activity = a_text;
 			s.Progress = a_progress;
-			Journal.Save();
+			if (DateTime.UtcNow - _lastActivitySave > TimeSpan.FromSeconds(1) || a_text.StartsWith("WAITING", StringComparison.Ordinal)) {
+				_lastActivitySave = DateTime.UtcNow;
+				Journal.Save();
+			}
 		}
 	}
+
+	DateTime _lastActivitySave = DateTime.MinValue;
 
 	public void Note(string a_text)
 	{
@@ -100,22 +107,29 @@ public sealed class Toggle : IDisposable
 	readonly Dictionary<string, byte[]> _snap;
 	readonly string _label;
 
-	public Toggle(RunContext a_ctx, IEnumerable<string> a_enable, IEnumerable<string> a_disable, string a_label)
+	// a_ct: a Stop while it waits to close MO2 (a download, the player's own program) ends the wait
+	public Toggle(RunContext a_ctx, IEnumerable<string> a_enable, IEnumerable<string> a_disable, string a_label, CancellationToken a_ct = default)
 	{
 		_ctx = a_ctx;
 		_label = a_label;
 		var st = a_ctx.Profile.States();
-		var en = a_enable.Where(m => st.ContainsKey(m)).Distinct().ToList();
-		var dis = a_disable.Where(m => st.ContainsKey(m) && !en.Contains(m)).Distinct().ToList();
+		var en = a_enable.Where(m => st.ContainsKey(m)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var dis = a_disable.Where(m => st.ContainsKey(m) && !en.Contains(m, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 		foreach (var m in a_enable.Concat(a_disable).Where(m => !st.ContainsKey(m)).Distinct()) {
 			a_ctx.Log.Detail($"(not in this profile, skipped: {m})");
 		}
-		a_ctx.Control.Close();
+		a_ctx.Control.Close(null, a_ct);
 		_snap = a_ctx.Profile.Snapshot();
 		if (en.Count > 0 || dis.Count > 0) {
 			a_ctx.Log.Detail($"mods for {a_label}:");
-			a_ctx.Profile.SetMods(en, dis, a_ctx.Log);
-			a_ctx.Profile.ActivatePlugins(en, a_ctx.Setup.PlaceAfter);
+			try {
+				a_ctx.Profile.SetMods(en, dis, a_ctx.Log);
+				a_ctx.Profile.ActivatePlugins(en, a_ctx.Setup.PlaceAfter);
+			} catch {
+				// half switched: the order files back byte for byte at once, as the put-back promises
+				a_ctx.Profile.Restore(_snap);
+				throw;
+			}
 		}
 	}
 

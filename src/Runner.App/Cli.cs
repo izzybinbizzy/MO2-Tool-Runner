@@ -31,6 +31,11 @@ public static class Cli
 		} catch (Exception e) when (e is ArgumentException or IOException or InvalidDataException) {
 			Console.WriteLine("MO2 Tool Runner: " + e.Message);
 			return 3;
+		} catch (Exception e) {
+			// never Windows' crash box (a window on the player's screen): said, logged, exit 1
+			Console.WriteLine("MO2 Tool Runner: something went wrong - " + e.GetType().Name + ": " + e.Message);
+			App.LogCrash(e);
+			return 1;
 		}
 	}
 
@@ -49,6 +54,14 @@ public static class Cli
 		var req = new RunRequest(setup, AppPaths.Data, Opt(a_args, "--only"), Opt(a_args, "--from"), Opt(a_args, "--until"));
 		var outcome = Runner.Run(req);
 		Console.WriteLine(outcome.Verdict);
+		if (outcome.Folder == null) {
+			// refused before anything changed: the window reads the reason here
+			try {
+				Directory.CreateDirectory(AppPaths.Runs);
+				Files.WriteAtomic(Engine.RefusalFile, outcome.Verdict);
+			} catch (IOException) {
+			}
+		}
 		return outcome.State switch {
 			RunState.Finished => 0,
 			RunState.Stopped => 2,
@@ -76,7 +89,7 @@ public static class Cli
 			Console.WriteLine("nothing to put back: no run was interrupted");
 			return 0;
 		}
-		var r = Runner.Restore(j, AppPaths.Data);
+		var r = Runner.Restore(j);
 		Console.WriteLine(r.Verdict);
 		return r.State == RunState.Restored ? 0 : 1;
 	}
@@ -86,7 +99,12 @@ public static class Cli
 	{
 		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <profile file> is needed");
 		var s = Setup.Load(Path.GetFullPath(file));
+		// the name becomes a file name in the Setups folder: no folder parts, no characters Windows refuses
 		var name = Opt(a_args, "--name") ?? s.Name;
+		name = string.Concat(Path.GetFileName(name).Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c)).Trim();
+		if (name is "" or "." or "..") {
+			throw new ArgumentException("--name needs a plain name");
+		}
 		s.Root["name"] = name;
 		var dst = Path.Combine(AppPaths.Setups, name + ".json");
 		if (File.Exists(dst)) {

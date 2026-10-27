@@ -213,7 +213,7 @@ public partial class MainWindow : Window
 			if (list.SelectedItem is HistoryRow r) {
 				var p = Path.Combine(r.Folder, "log.txt");
 				try {
-					log.Text = File.Exists(p) ? Files.ReadSharedText(p) : "(no log)";
+					log.Text = File.Exists(p) ? Tail(p, 150_000) : "(no log)";
 					log.ScrollToEnd();
 				} catch (IOException e) {
 					log.Text = e.Message;
@@ -238,6 +238,18 @@ public partial class MainWindow : Window
 			list.SelectedIndex = 0;
 		}
 		return grid;
+	}
+
+	// a log's last part (a whole long log in one box freezes the window)
+	static string Tail(string a_path, int a_bytes)
+	{
+		using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+		var start = Math.Max(0, fs.Length - a_bytes);
+		fs.Seek(start, SeekOrigin.Begin);
+		var bytes = new byte[fs.Length - start];
+		fs.ReadExactly(bytes);
+		var text = System.Text.Encoding.UTF8.GetString(bytes);
+		return start == 0 ? text : "(the start of this log is in its folder)\n" + text[(text.IndexOf('\n') + 1)..];
 	}
 
 	static void AutomationPropertiesName(DependencyObject a_o, string a_name) => System.Windows.Automation.AutomationProperties.SetName(a_o, a_name);
@@ -266,7 +278,14 @@ public partial class MainWindow : Window
 	protected override void OnSourceInitialized(EventArgs a_e)
 	{
 		base.OnSourceInitialized(a_e);
-		_tray = new Tray(new WindowInteropHelper(this).Handle);
+		var helper = new WindowInteropHelper(this);
+		_tray = new Tray(helper.Handle);
+		HwndSource.FromHwnd(helper.Handle)?.AddHook((nint _, int a_msg, nint _, nint _, ref bool _) => {
+			if ((uint)a_msg == Tray.TaskbarCreated) {
+				_tray?.Readd();
+			}
+			return 0;
+		});
 	}
 
 	protected override void OnClosed(EventArgs a_e)

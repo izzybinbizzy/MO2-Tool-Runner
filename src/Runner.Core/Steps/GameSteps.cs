@@ -74,43 +74,53 @@ public sealed class GrassStep : IStep
 		if (Directory.Exists(ow) && Directory.EnumerateFileSystemEntries(ow).Any()) {
 			StepKit.ParkDir(a_ctx, ow, "overwrite grass (before)");
 		}
-		// no space and no quote in the wrapper's path: MO2 passes it through cmd /c
-		var work = Path.Combine(Path.GetTempPath(), "mo2toolrunnerfasterngio");
+		// no space and no quote in the wrapper's path: MO2 passes it through cmd /c (the user's temp folder holds the user name,
+		// which often has a space - ProgramData does not)
+		var work = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "MO2ToolRunner", "fasterngio");
+		if (work.IndexOfAny([' ', '"', '&', '^']) >= 0) {
+			throw new StepFailedException("FasterNGIO's wrapper needs a folder path without spaces - this PC's ProgramData has one: " + work);
+		}
 		Directory.CreateDirectory(work);
 		var outFile = Path.Combine(work, "output.txt");
 		Files.TryDelete(outFile);
 		var cmd = Path.Combine(work, "run.cmd");
-		var args = a_s.Str("fasterngio_args") ?? "--world all";
-		Files.WriteAtomic(cmd, $"@echo off\r\necho started %DATE% %TIME% > \"{outFile}\"\r\n\"{exe}\" {args} >> \"{outFile}\" 2>&1\r\necho exit code %ERRORLEVEL% >> \"{outFile}\"\r\n",
+		var args = (a_s.Str("fasterngio_args") ?? "--world all").Replace("%", "%%", StringComparison.Ordinal);
+		Files.WriteAtomic(cmd, $"@echo off\r\necho started %DATE% %TIME% > \"{outFile}\"\r\n\"{exe.Replace("%", "%%", StringComparison.Ordinal)}\" {args} >> \"{outFile}\" 2>&1\r\necho exit code %ERRORLEVEL% >> \"{outFile}\"\r\n",
 			System.Text.Encoding.ASCII);
-		using (new Toggle(a_ctx, [], [mod], "the grass cache")) {
-			a_ctx.Control.RunInside(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c " + cmd, a_ctx.Cancel);
+		var image = Path.GetFileName(exe);
+		using (new Toggle(a_ctx, [], [mod], "the grass cache", a_ctx.Cancel)) {
+			a_ctx.Control.RunInside(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c " + cmd, image, a_ctx.Cancel);
 			a_ctx.Activity(Key, "FasterNGIO is building the grass cache");
 			var sw = Stopwatch.StartNew();
 			var last = Stopwatch.StartNew();
 			var size = -1L;
 			string body;
-			while (true) {
-				a_ctx.Cancel.ThrowIfCancellationRequested();
-				Thread.Sleep(2000);
-				body = File.Exists(outFile) ? Files.ReadSharedText(outFile) : "";
-				if (body.Contains("exit code", StringComparison.Ordinal)) {
-					break;
-				}
-				if (body.Length != size) {
-					size = body.Length;
-					last.Restart();
-					var lastLine = body.TrimEnd().Split('\n').LastOrDefault()?.Trim() ?? "";
-					if (lastLine != "") {
-						a_ctx.Activity(Key, lastLine.Length > 140 ? lastLine[..140] : lastLine);
+			try {
+				while (true) {
+					a_ctx.Cancel.ThrowIfCancellationRequested();
+					Thread.Sleep(2000);
+					body = File.Exists(outFile) ? Files.ReadSharedText(outFile) : "";
+					if (body.Contains("exit code", StringComparison.Ordinal)) {
+						break;
+					}
+					if (body.Length != size) {
+						size = body.Length;
+						last.Restart();
+						var lastLine = body.TrimEnd().Split('\n').LastOrDefault()?.Trim() ?? "";
+						if (lastLine != "") {
+							a_ctx.Activity(Key, lastLine.Length > 140 ? lastLine[..140] : lastLine);
+						}
+					}
+					if (last.Elapsed > TimeSpan.FromMinutes(Math.Max(a_ctx.Setup.IdleMinutes, a_s.Int("stall_min", 10)))) {
+						throw new StepFailedException($"FasterNGIO wrote nothing for {last.Elapsed.TotalMinutes:0} minutes");
+					}
+					if (sw.Elapsed > a_s.Deadline(30)) {
+						throw new StepFailedException($"FasterNGIO passed its {a_s.Deadline(30).TotalMinutes:0} minute limit");
 					}
 				}
-				if (last.Elapsed > TimeSpan.FromMinutes(Math.Max(a_ctx.Setup.IdleMinutes, a_s.Int("stall_min", 10)))) {
-					throw new StepFailedException($"FasterNGIO wrote nothing for {last.Elapsed.TotalMinutes:0} minutes");
-				}
-				if (sw.Elapsed > a_s.Deadline(30)) {
-					throw new StepFailedException($"FasterNGIO passed its {a_s.Deadline(30).TotalMinutes:0} minute limit");
-				}
+			} finally {
+				// a stop or a stall: the run's own FasterNGIO ended by its PID
+				StepKit.CloseTool(a_ctx, image);
 			}
 			var lines = body.TrimEnd().Split('\n');
 			foreach (var ln in lines.Where(l => l.Contains("warning", StringComparison.OrdinalIgnoreCase) || l.Contains("error", StringComparison.OrdinalIgnoreCase)).Take(8).Concat(lines.TakeLast(3))) {
@@ -144,7 +154,9 @@ public sealed class GrassStep : IStep
 		if (Directory.Exists(ow) && Directory.EnumerateFileSystemEntries(ow).Any()) {
 			StepKit.ParkDir(a_ctx, ow, "overwrite grass (before)");
 		}
-		using (new Toggle(a_ctx, [], off, "the grass cache")) {
+		using (new Toggle(a_ctx, [], off, "the grass cache", a_ctx.Cancel)) {
+			// the flag in the game folder is in the run record first: a crash leaves no game that precaches at every start
+			StepKit.KeepFile(a_ctx, flag);
 			File.WriteAllText(flag, "");
 			var launches = 0;
 			var idle = 0;
@@ -156,16 +168,9 @@ public sealed class GrassStep : IStep
 					}
 					var have = Files.CountFiles(ow);
 					a_ctx.Activity(Key, $"the game builds the grass cache - start {launches} ({have} files so far)");
-					a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.GamePid, a_ctx.Cancel);
+					InGame.NoGameRunning(a_ctx);
 					var sw = Stopwatch.StartNew();
-					Process? g = null;
-					while (g == null && sw.Elapsed < TimeSpan.FromMinutes(5)) {
-						g = InGame.Game();
-						Thread.Sleep(2000);
-					}
-					if (g == null) {
-						throw new StepFailedException("the game did not start");
-					}
+					using var g = Process.GetProcessById(a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.FreshGamePid(), a_ctx.Cancel));
 					var lastN = -1;
 					var still = Stopwatch.StartNew();
 					while (!g.HasExited) {
@@ -201,7 +206,7 @@ public sealed class GrassStep : IStep
 					Thread.Sleep(5000);
 				}
 			} finally {
-				Files.TryDelete(flag);
+				StepKit.PutFilesBack(a_ctx, flag);
 				InGame.CloseGame(a_ctx);
 			}
 			var total = Files.CountFiles(ow);
@@ -289,7 +294,9 @@ public sealed class ShaderStep : IStep
 			return false;
 		}
 		try {
-			return (JsonNode.Parse(Files.ReadSharedText(stamp)) as JsonObject)?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c);
+			var o = JsonNode.Parse(Files.ReadSharedText(stamp)) as JsonObject;
+			// a cache that ended by quiet (the log never said it was done) is built again
+			return o?["verified"]?.GetValue<bool>() != false && o?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c);
 		} catch (System.Text.Json.JsonException) {
 			return false;
 		}
@@ -314,9 +321,9 @@ public sealed class ShaderStep : IStep
 				a_ctx.Log.Detail($"the {c.ShaderMod} cache is current (nothing it depends on changed) - not rebuilt");
 				continue;
 			}
-			a_ctx.Profile.EnsureMod(c.OutputMod, a_ctx.Log);
+			StepKit.EnsureOutput(a_ctx, c.OutputMod);
 			if (c.SettingsMod != null) {
-				a_ctx.Profile.EnsureMod(c.SettingsMod, a_ctx.Log);
+				StepKit.EnsureOutput(a_ctx, c.SettingsMod);
 			}
 			var others = have.Where(o => o != c).ToList();
 			var on = new List<string> { c.ShaderMod };
@@ -345,24 +352,18 @@ public sealed class ShaderStep : IStep
 			Directory.Delete(owCache, true);
 		}
 		var logs = InGame.SkseLogs(a_ctx.Setup, a_ctx.Mo2);
-		using (new Toggle(a_ctx, a_on, a_off, "the shader cache")) {
+		using (new Toggle(a_ctx, a_on, a_off, "the shader cache", a_ctx.Cancel)) {
 			var restarts = 0;
 			var total = Stopwatch.StartNew();
 			string? result = null;
+			var verified = true;
 			Process? g = null;
 			while (result == null) {
-				var started = DateTime.Now;
-				a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.GamePid, a_ctx.Cancel);
+				var started = DateTime.UtcNow;
+				InGame.NoGameRunning(a_ctx);
 				var sw = Stopwatch.StartNew();
-				g = null;
-				while (g == null && sw.Elapsed < TimeSpan.FromMinutes(5)) {
-					a_ctx.Cancel.ThrowIfCancellationRequested();
-					g = InGame.Game();
-					Thread.Sleep(2000);
-				}
-				if (g == null) {
-					throw new StepFailedException("the game did not start");
-				}
+				g?.Dispose();
+				g = Process.GetProcessById(a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.FreshGamePid(), a_ctx.Cancel));
 				a_ctx.Activity("shaders", $"{a_c.ShaderMod}: the game compiles the shader cache at its main menu");
 				var sane = false;
 				var lastN = -1;
@@ -370,7 +371,7 @@ public sealed class ShaderStep : IStep
 				while (!g.HasExited) {
 					a_ctx.Cancel.ThrowIfCancellationRequested();
 					var log = InGame.NewestShaderLog(logs);
-					var logFresh = log != null && File.GetLastWriteTime(log) >= started.AddSeconds(-5);
+					var logFresh = log != null && File.GetLastWriteTimeUtc(log) >= started.AddSeconds(-5);
 					// the shader mod must say it runs within a few minutes (it stands down beside a DLL it refuses - 2026-10-09)
 					if (!sane && sw.Elapsed > TimeSpan.FromSeconds(45)) {
 						var text = logFresh ? Files.ReadSharedText(log!) : "";
@@ -392,11 +393,19 @@ public sealed class ShaderStep : IStep
 						lastChange.Restart();
 						a_ctx.Activity("shaders", $"{a_c.ShaderMod}: {n} shader(s) compiled");
 					}
+					// done = the shader mod says so: Open Shaders' "completed", or the last "remaining=" reads 0. Only a log that
+					// says neither may end on quiet (a long gap is normal mid-compile - 176 s measured), and such a cache is
+					// stamped unverified so the next "when changed" run builds it again
+					var remaining = logFresh ? InGame.LastRemaining(log!) : null;
+					var quiet = TimeSpan.FromMinutes(a_s.Int("quiet_min", 5));
 					if (logFresh && Files.ReadSharedText(log!).Split('\n').FirstOrDefault(l => l.Contains("Shader compilation completed", StringComparison.Ordinal)) is { } done) {
 						result = done.Trim();
-					} else if (n >= a_s.Int("min_files", 50) && lastChange.Elapsed > TimeSpan.FromMinutes(a_s.Int("quiet_min", 2)) &&
-					           (!logFresh || DateTime.Now - File.GetLastWriteTime(log!) > TimeSpan.FromMinutes(a_s.Int("quiet_min", 2)))) {
-						result = $"compile finished: no new shader and no shader log line for {a_s.Int("quiet_min", 2)} minutes ({n} files)";
+					} else if (remaining == 0 && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > TimeSpan.FromSeconds(30)) {
+						result = $"compile finished: remaining=0 ({n} files)";
+					} else if (remaining == null && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > quiet &&
+					           (!logFresh || DateTime.UtcNow - File.GetLastWriteTimeUtc(log!) > quiet)) {
+						result = $"compile finished by quiet: no new shader and no shader log line for {quiet.TotalMinutes:0} minutes ({n} files)";
+						verified = false;
 					}
 					if (result != null) {
 						break;
@@ -427,7 +436,8 @@ public sealed class ShaderStep : IStep
 			Files.MoveContents(owCache, Path.Combine(a_ctx.Mo2.ModDir(a_c.OutputMod), "ShaderCache"));
 			Directory.Delete(owCache, true);
 			StepKit.MarkReplaced(a_ctx, a_c.OutputMod);
-			Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c), ["built"] = DateTime.Now.ToString("O"), ["files"] = count }.ToJsonString());
+			Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
+				["verified"] = verified }.ToJsonString());
 			a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 		}
 	}

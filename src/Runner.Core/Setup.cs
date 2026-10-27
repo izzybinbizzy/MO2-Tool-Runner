@@ -62,8 +62,9 @@ public sealed class Setup
 
 	JsonObject Obj(string a_key) => Root[a_key] as JsonObject ?? new JsonObject();
 
+	// an emptied setting counts as not set (its default applies) - "" never runs PGPatcher without --autostart
 	public static string? Str(JsonObject a_o, string a_key) =>
-		a_o[a_key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+		a_o[a_key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 
 	public static int? Int(JsonObject a_o, string a_key) =>
 		a_o[a_key] is JsonValue v ? (v.TryGetValue<int>(out var i) ? i : v.TryGetValue<double>(out var d) ? (int)d : null) : null;
@@ -100,6 +101,13 @@ public sealed class Setup
 		if (Mo2Exe == "") p.Add("Mod Organizer's program is not set");
 		if (Profile == "") p.Add("the MO2 profile is not set");
 		if (BackupDir == "") p.Add("the backup folder is not set");
+		// whole local paths only: a relative one would follow whatever folder the run was started from
+		foreach (var (what, dir) in new[] { ("the backup folder", BackupDir), ("the scratch folder", Str(Root, "scratch") ?? "") }
+			         .Concat(Steps.Select(s => ($"{s.Key}'s output folder", Str(s.Settings, "output_dir") ?? "")))) {
+			if (dir != "" && (!Path.IsPathFullyQualified(dir) || dir.StartsWith(@"\\", StringComparison.Ordinal))) {
+				p.Add($"{what} must be a whole path on this PC (like D:\\Modding\\...): {dir}");
+			}
+		}
 		if (Steps.Count == 0) p.Add("no steps");
 		if (EnabledSteps.Count == 0) p.Add("every step is switched off");
 		var dup = Steps.GroupBy(s => s.Key).Where(g => g.Count() > 1).Select(g => g.Key).ToList();

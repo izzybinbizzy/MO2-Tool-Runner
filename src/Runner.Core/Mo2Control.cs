@@ -22,7 +22,8 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	{
 		using var cls = new ManagementClass(@"root\cimv2", "Win32_Process", null);
 		using var startup = new ManagementClass(@"root\cimv2", "Win32_ProcessStartup", null).CreateInstance();
-		startup["ShowWindow"] = (ushort)1;
+		// SW_SHOWNOACTIVATE: the window shows, but never takes the front from what the player is doing
+		startup["ShowWindow"] = (ushort)4;
 		using var inParams = cls.GetMethodParameters("Create");
 		inParams["CommandLine"] = a_commandLine;
 		inParams["CurrentDirectory"] = a_cwd;
@@ -35,21 +36,72 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		return Convert.ToInt32(outParams["ProcessId"], InvariantCulture);
 	}
 
-	public static string Quote(string a) => a.Length > 0 && a.IndexOfAny([' ', '\t', '"']) < 0 ? a : "\"" + a.Replace("\"", "\\\"") + "\"";
+	// one argument for a Windows command line (the CommandLineToArgvW rules): backslashes before a quote and at the end doubled,
+	// so "D:\LOD\" does not swallow the next argument
+	// a global instance named on every command line (else MO2 opens the instance it used last)
+	string Instance => Mo2.GlobalName is { } n ? " -i " + Quote(n) : "";
+
+	public static string Quote(string a)
+	{
+		if (a.Length > 0 && a.IndexOfAny([' ', '\t', '"']) < 0) {
+			return a;
+		}
+		var sb = new System.Text.StringBuilder("\"");
+		var slashes = 0;
+		foreach (var c in a) {
+			if (c == '\\') {
+				++slashes;
+				continue;
+			}
+			sb.Append('\\', c == '"' ? slashes * 2 + 1 : slashes);
+			slashes = 0;
+			sb.Append(c);
+		}
+		sb.Append('\\', slashes * 2);
+		return sb.Append('"').ToString();
+	}
 
 	// every tool process this run started (a tool is only ever ended by these PIDs and their children - never by its name)
 	public HashSet<int> Started { get; } = [];
 
-	public List<int> Pids()
+	// this setup's Mod Organizer (its exe); one whose path cannot be read (started as administrator) is counted apart
+	public List<int> Pids() => Mo2Processes(false);
+
+	public List<int> Unreadable() => Mo2Processes(true);
+
+	List<int> Mo2Processes(bool a_unreadable)
 	{
 		var want = Path.GetFullPath(Mo2.Exe);
 		var outList = new List<int>();
 		foreach (var p in Procs.ByImage("ModOrganizer.exe")) {
 			var exe = Procs.ExePath(p);
-			if (exe == null || string.Equals(Path.GetFullPath(exe), want, StringComparison.OrdinalIgnoreCase)) {
+			if (a_unreadable ? exe == null : exe != null && string.Equals(Path.GetFullPath(exe), want, StringComparison.OrdinalIgnoreCase)) {
 				outList.Add(p.Id);
 			}
 			p.Dispose();
+		}
+		return outList;
+	}
+
+	// what runs under Mod Organizer that this run did not start (the player's own xEdit, BodySlide, a second tool): MO2 is never
+	// closed under it - MO2 answers "programs are still running" by ending them. a_windowed: only those with a window open
+	public List<(int Pid, string Image)> ForeignChildren(bool a_windowed)
+	{
+		var ours = new HashSet<int>(Started.SelectMany(Procs.Tree));
+		var mo2 = Pids().Concat(Unreadable()).ToHashSet();
+		var outList = new List<(int, string)>();
+		foreach (var pid in mo2.SelectMany(Procs.Tree).Distinct()) {
+			if (mo2.Contains(pid) || ours.Contains(pid)) {
+				continue;
+			}
+			var image = Procs.Image(pid);
+			if (image == "" || image.Equals("ModOrganizer.exe", StringComparison.OrdinalIgnoreCase)) {
+				continue;
+			}
+			if (a_windowed && Native.TopWindowsOf([pid]).Count == 0) {
+				continue;
+			}
+			outList.Add((pid, image));
 		}
 		return outList;
 	}
@@ -82,7 +134,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	{
 		if (!Running) {
 			_log.Detail($"starting Mod Organizer (profile {ProfileName})");
-			Launch($"{Quote(Mo2.Exe)} -p {Quote(ProfileName)}", Path.GetDirectoryName(Mo2.Exe)!);
+			Launch($"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)}", Path.GetDirectoryName(Mo2.Exe)!);
 		}
 		WaitReady(a_ct);
 	}
@@ -170,22 +222,31 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 
 	public Func<bool>? RunningProbe { get; set; }
 
-	bool IsRunning() => RunningProbe?.Invoke() ?? Pids().Count > 0;
+	// a Mod Organizer whose path cannot be read counts as running (no profile file is written under it)
+	bool IsRunning() => RunningProbe?.Invoke() ?? (Pids().Count > 0 || Unreadable().Count > 0);
+
+	public Func<List<(int Pid, string Image)>>? ForeignProbe { get; set; }
 
 	public void Close(TimeSpan? a_timeout = null, CancellationToken a_ct = default)
 	{
 		if (!IsRunning()) {
 			return;
 		}
+		if (RunningProbe == null && Unreadable().Count > 0) {
+			throw new Mo2BusyException("a Mod Organizer runs that this program cannot read (started as administrator?) - close it yourself, then start again");
+		}
 		var waited = Stopwatch.StartNew();
 		var told = false;
 		while (true) {
 			var dl = DownloadsInProgress();
 			var game = GameRunning();
-			if (dl.Count == 0 && game.Count == 0) {
+			var theirs = (ForeignProbe ?? (() => ForeignChildren(true)))();
+			if (dl.Count == 0 && game.Count == 0 && theirs.Count == 0) {
 				break;
 			}
-			var why = dl.Count > 0 ? "Mod Organizer is downloading (" + string.Join(", ", dl.Take(3)) + ")" : "the game is running (" + string.Join(", ", game) + ")";
+			var why = dl.Count > 0 ? "Mod Organizer is downloading (" + string.Join(", ", dl.Take(3)) + ")" :
+				game.Count > 0 ? "the game is running (" + string.Join(", ", game) + ")" :
+				"a program you started runs under Mod Organizer (" + string.Join(", ", theirs.Select(t => t.Image).Distinct()) + ")";
 			if (waited.Elapsed > BusyWait) {
 				throw new Mo2BusyException($"{why} for {BusyWait.TotalMinutes:0} minutes - Mod Organizer is never closed under it");
 			}
@@ -218,8 +279,9 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		Thread.Sleep(800);
 	}
 
-	// a box MO2 shows while closing: the downloads question is never answered Yes (Cancel, and closing stops); its Notifications
-	// window and its own Qt error boxes block the close - answered OK / Close
+	// a box MO2 shows while closing: the downloads question is never answered Yes (Cancel, and closing stops); "programs are
+	// still running" gets Yes only when every one of them is this run's (else No - MO2 would end the player's own program); its
+	// Notifications window and its own Qt error boxes block the close - answered OK / Close
 	void AnswerCloseBoxes()
 	{
 		foreach (var box in Uia.Boxes(Pids())) {
@@ -229,6 +291,12 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 					Uia.Press(cancel);
 				}
 				throw new Mo2BusyException("Mod Organizer asked about downloads in progress - answered Cancel, left open: " + Trim(box.Text));
+			}
+			if (box.Text.Contains("running", StringComparison.OrdinalIgnoreCase) && ForeignChildren(false) is { Count: > 0 } theirs) {
+				if (Uia.Button(box.Element, "No", "Cancel") is { } no) {
+					Uia.Press(no);
+				}
+				throw new Mo2BusyException($"Mod Organizer asked to end programs that are still running, among them yours ({string.Join(", ", theirs.Select(t => t.Image).Distinct())}) - answered No, left open: {Trim(box.Text)}");
 			}
 			var ok = Uia.Button(box.Element, "Yes", "OK", "Close", "Exit");
 			if (ok != null) {
@@ -258,7 +326,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 			throw new StepFailedException($"{a_image} is already running (process {string.Join(", ", old)}) - close it first");
 		}
 		_log.Detail($"running {a_title} through Mod Organizer{(string.IsNullOrEmpty(a_args) ? "" : " with " + a_args)}");
-		var cmd = $"{Quote(Mo2.Exe)} -p {Quote(ProfileName)} run -e {Quote(a_title)}" + (string.IsNullOrEmpty(a_args) ? "" : $" -a {Quote(a_args)}");
+		var cmd = $"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)} run -e {Quote(a_title)}" + (string.IsNullOrEmpty(a_args) ? "" : $" -a {Quote(a_args)}");
 		var pid = LaunchTool(cmd, () => FreshPid(a_image, old), a_startTimeout ?? TimeSpan.FromMinutes(3), a_ct) ?? throw new StepFailedException(
 			$"{a_image} did not start within {(a_startTimeout ?? TimeSpan.FromMinutes(3)).TotalMinutes:0} minutes - is MO2's executable \"{a_title}\" right?");
 		_log.Detail($"{a_image} started (process {pid})");
@@ -304,15 +372,24 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	{
 		Start(a_ct);
 		_log.Detail($"starting the game through Mod Organizer ({a_title})");
-		return LaunchTool($"{Quote(Mo2.Exe)} -p {Quote(ProfileName)} run -e {Quote(a_title)}", a_gamePid, TimeSpan.FromMinutes(5), a_ct) ??
+		var pid = LaunchTool($"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)} run -e {Quote(a_title)}", a_gamePid, TimeSpan.FromMinutes(5), a_ct) ??
 			throw new StepFailedException($"the game did not start within 5 minutes - is MO2's executable \"{a_title}\" right?");
+		// the run's own game: the only one it may close (a game the player starts is never touched)
+		Started.Add(pid);
+		return pid;
 	}
 
-	// run an arbitrary program inside MO2's virtual folder (MO2 cannot start some tools straight - FasterNGIO ends at once)
-	public void RunInside(string a_program, string a_args, CancellationToken a_ct)
+	// run an arbitrary program inside MO2's virtual folder (MO2 cannot start some tools straight - FasterNGIO ends at once); its
+	// process (by its image, once it appears) is the run's own, so a stop ends it by PID
+	public int? RunInside(string a_program, string a_args, string a_image, CancellationToken a_ct)
 	{
 		Start(a_ct);
-		var cmd = $"{Quote(Mo2.Exe)} -p {Quote(ProfileName)} run {Quote(a_program)} -a {Quote(a_args)}";
-		Launch(cmd, Path.GetDirectoryName(Mo2.Exe)!);
+		var old = Procs.ByImage(a_image).Select(p => p.Id).ToHashSet();
+		var cmd = $"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)} run {Quote(a_program)} -a {Quote(a_args)}";
+		var pid = LaunchTool(cmd, () => FreshPid(a_image, old), TimeSpan.FromMinutes(1), a_ct);
+		if (pid is { } p) {
+			Started.Add(p);
+		}
+		return pid;
 	}
 }

@@ -17,7 +17,7 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	public string LoadOrderTxt => Path.Combine(Dir, "loadorder.txt");
 
 	// mod folders this run created (an output mod that did not exist); a restore keeps their lines
-	public HashSet<string> Added { get; } = new(StringComparer.Ordinal);
+	public HashSet<string> Added { get; } = new(StringComparer.OrdinalIgnoreCase);
 
 	public bool Exists => File.Exists(ModList);
 
@@ -35,9 +35,10 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 		return (text.Split(nl).ToList(), nl);
 	}
 
+	// mod names as Windows sees folders: "PG patch" and "PG Patch" are one mod (the list's own spelling is kept when written)
 	public Dictionary<string, char> States()
 	{
-		var st = new Dictionary<string, char>(StringComparer.Ordinal);
+		var st = new Dictionary<string, char>(StringComparer.OrdinalIgnoreCase);
 		foreach (var ln in ReadLines(ModList).Lines) {
 			if (ln.Length > 1 && ln[0] is '+' or '-' or '*') {
 				st[ln[1..]] = ln[0];
@@ -51,8 +52,8 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	// tick / untick; returns the mods whose state really changed (name -> old flag)
 	public Dictionary<string, char> SetMods(IEnumerable<string> a_enable, IEnumerable<string> a_disable, RunLog? a_log = null)
 	{
-		var en = new HashSet<string>(a_enable, StringComparer.Ordinal);
-		var dis = new HashSet<string>(a_disable, StringComparer.Ordinal);
+		var en = new HashSet<string>(a_enable, StringComparer.OrdinalIgnoreCase);
+		var dis = new HashSet<string>(a_disable, StringComparer.OrdinalIgnoreCase);
 		if (en.Count == 0 && dis.Count == 0) {
 			return [];
 		}
@@ -62,8 +63,8 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 		}
 		MustBeClosed("the mod list");
 		var (lines, nl) = ReadLines(ModList);
-		var seen = new HashSet<string>(StringComparer.Ordinal);
-		var changed = new Dictionary<string, char>(StringComparer.Ordinal);
+		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		var changed = new Dictionary<string, char>(StringComparer.OrdinalIgnoreCase);
 		for (int i = 0; i < lines.Count; ++i) {
 			var ln = lines[i];
 			if (ln.Length < 2 || ln[0] is not ('+' or '-')) {
@@ -148,7 +149,7 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 		var text = Files.DecodeText(a_modlist);
 		var nl = text.Contains("\r\n") ? "\r\n" : "\n";
 		var lines = text.Split(nl).ToList();
-		var have = lines.Where(l => l.Length > 1 && l[0] is '+' or '-' or '*').Select(l => l[1..]).ToHashSet(StringComparer.Ordinal);
+		var have = lines.Where(l => l.Length > 1 && l[0] is '+' or '-' or '*').Select(l => l[1..]).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		var at = lines.FindIndex(l => l.Length > 1 && l[0] is '+' or '-' or '*');
 		if (at < 0) {
 			at = lines.Count;
@@ -339,10 +340,10 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	public Dictionary<string, string> Dependents(IEnumerable<string> a_turningOff)
 	{
 		var st = States();
-		var off = new HashSet<string>(a_turningOff, StringComparer.Ordinal);
+		var off = new HashSet<string>(a_turningOff, StringComparer.OrdinalIgnoreCase);
 		var owner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		// each mod folder listed once (the loop below repeats until nothing more goes off)
-		var inModCache = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+		var inModCache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 		List<string> InMod(string a_mod) => inModCache.TryGetValue(a_mod, out var l) ? l : inModCache[a_mod] = Plugins.InMod(Mo2.ModDir(a_mod));
 		foreach (var (name, flag) in st) {
 			if (flag == '+') {
@@ -351,7 +352,7 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 				}
 			}
 		}
-		var extra = new Dictionary<string, string>(StringComparer.Ordinal);
+		var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var mastersCache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 		bool changed = true;
 		while (changed) {

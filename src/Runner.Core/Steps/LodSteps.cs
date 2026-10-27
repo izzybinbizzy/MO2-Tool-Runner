@@ -13,6 +13,7 @@ public sealed class XLodGenStep : IStep
 	{
 		foreach (var i in StepKit.CheckExecutable(a_c, Key, a_s.Str("executable"))) yield return i;
 		if (a_s.Str("output_dir") is not { Length: > 0 }) yield return new Issue(Key, true, "no output folder is set");
+		foreach (var i in StepKit.CheckOutputDir(a_c, Key, a_s.Str("output_dir"))) yield return i;
 		foreach (var i in StepKit.CheckModsExist(a_c, Key, a_s.List("enable_during"))) yield return i;
 	}
 
@@ -22,7 +23,7 @@ public sealed class XLodGenStep : IStep
 		var image = a_s.Str("image") ?? "xLODGenx64.exe";
 		StepKit.ParkDir(a_ctx, outDir, "xLODGen output");
 		var deadline = a_s.Deadline(120);
-		using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "xLODGen")) {
+		using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "xLODGen", a_ctx.Cancel)) {
 			try {
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args"), a_ctx.Cancel);
 				var main = StepKit.WaitWindow(a_ctx, image, t => t.Contains("LODGen", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "xLODGen's window");
@@ -30,7 +31,7 @@ public sealed class XLodGenStep : IStep
 				var opts = Find(a_ctx, main, e => Uia.Name(e) == "LODGen Options" && Uia.Type(e) == ControlType.Window, TimeSpan.FromMinutes(15), "xLODGen's options");
 				var list = Find(a_ctx, opts, e => Uia.Type(e) == ControlType.List, TimeSpan.FromSeconds(30), "the worldspace list");
 				var want = a_s.List("worldspaces");
-				CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all") || want.Contains(n.Split(' ')[0]));
+				CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));
 				Uia.Press(Uia.Button(opts, "Generate") ?? throw new StepFailedException("xLODGen's options have no Generate button"));
 				a_ctx.Activity(Key, "generating terrain LOD");
 				var memo = Find(a_ctx, main, e => Uia.ClassName(e) == "TMemo", TimeSpan.FromSeconds(30), "xLODGen's log box");
@@ -113,7 +114,8 @@ public sealed class AcmosStep : IStep
 		var toolDir = Path.GetDirectoryName(exe)!;
 		var logs = Path.Combine(toolDir, "logs");
 		var before = Directory.Exists(logs) ? Directory.GetDirectories(logs).Select(Path.GetFileName).ToHashSet() : [];
-		var reads = a_s.Req("reads");
+		// a trailing backslash inside -l:"..." would escape its closing quote
+		var reads = a_s.Req("reads").TrimEnd('\\');
 		var roadsOut = reads.TrimEnd('\\') + " roads";
 		StepKit.ParkDir(a_ctx, roadsOut, "ACMOS roads");
 		var roads = a_s.Str("roads") ?? AcmosRoads(toolDir) ?? "Paths Only";
@@ -187,7 +189,7 @@ public sealed class TreeLodGenStep : IStep
 		}
 		args.AddRange(a_s.List("extra_args"));
 		var t0 = DateTime.UtcNow;
-		using (new Toggle(a_ctx, a_s.List("enable_during"), [mod, .. a_s.List("disable_during")], "TreeLODGen")) {
+		using (new Toggle(a_ctx, a_s.List("enable_during"), [mod, .. a_s.List("disable_during")], "TreeLODGen", a_ctx.Cancel)) {
 			StepKit.ParkMod(a_ctx, Key, mod);
 			var (code, text) = Cli.Run(a_ctx, Key, a_s.Req("exe"), args, a_s.Deadline(60), Path.Combine(a_ctx.Journal.Folder, "TreeLODGen output.txt"));
 			if (code != 0 || !text.Contains("Done in", StringComparison.Ordinal)) {
@@ -216,6 +218,8 @@ public static class Cli
 		using var p = Process.Start(psi) ?? throw new StepFailedException("could not start " + a_exe);
 		p.StandardInput.Close();
 		var sb = new System.Text.StringBuilder();
+		string? latest = null;
+		// the output arrives on other threads: kept here, shown by the run's own thread (the run record is not thread-safe)
 		void Add(string? a_line)
 		{
 			if (a_line == null) {
@@ -223,15 +227,29 @@ public static class Cli
 			}
 			lock (sb) {
 				sb.AppendLine(a_line);
+				latest = a_line;
 			}
-			a_ctx.Activity(a_step, a_line.Length > 160 ? a_line[..160] : a_line);
 		}
 		p.OutputDataReceived += (_, e) => Add(e.Data);
 		p.ErrorDataReceived += (_, e) => Add(e.Data);
 		p.BeginOutputReadLine();
 		p.BeginErrorReadLine();
 		try {
-			Waits.Exit(a_ctx, a_step, p, a_deadline);
+			Waits.Tool(a_ctx, a_step, p, a_deadline, () => {
+				string? line;
+				lock (sb) {
+					line = latest;
+					latest = null;
+				}
+				if (line != null) {
+					a_ctx.Activity(a_step, line.Length > 160 ? line[..160] : line);
+				}
+				try {
+					return p.HasExited ? Waits.Poll.Done : Waits.Poll.Wait;
+				} catch (InvalidOperationException) {
+					return Waits.Poll.Done;
+				}
+			});
 		} catch {
 			Procs.KillTree(p.Id);
 			throw;
@@ -242,7 +260,8 @@ public static class Cli
 			}
 			Files.WriteAtomic(a_outFile, text);
 		}
-		p.WaitForExit();
+		// the last output lines, but never forever: a child process that kept the output pipe open would hold it
+		p.WaitForExit(TimeSpan.FromSeconds(30));
 		string all;
 		lock (sb) {
 			all = sb.ToString();
@@ -268,6 +287,7 @@ public abstract class DynDolodFamily : IStep
 		foreach (var i in StepKit.CheckExecutable(a_c, Key, a_s.Str("executable"))) yield return i;
 		if (a_s.Str("output_dir") is not { Length: > 0 }) yield return new Issue(Key, true, "no output folder is set");
 		if (a_s.OutputMod == null) yield return new Issue(Key, true, "no output mod is set");
+		foreach (var i in StepKit.CheckOutputDir(a_c, Key, a_s.Str("output_dir"))) yield return i;
 		var exe = a_c.Mo2.Executable(a_s.Str("executable") ?? "")?.Binary;
 		if (exe != null && File.Exists(exe)) {
 			var root = Path.GetDirectoryName(exe)!;
@@ -292,10 +312,10 @@ public abstract class DynDolodFamily : IStep
 		var outDir = a_s.Req("output_dir");
 		var image = a_s.Str("image") ?? (Tool + "x64.exe");
 		StepKit.ParkDir(a_ctx, outDir, Tool + " output");
-		using (new Toggle(a_ctx, a_s.List("enable_during"), [.. ExtraOff(a_s), .. a_s.List("disable_during")], Tool)) {
+		using (new Toggle(a_ctx, a_s.List("enable_during"), [.. ExtraOff(a_s), .. a_s.List("disable_during")], Tool, a_ctx.Cancel)) {
 			try {
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args"), a_ctx.Cancel);
-				var main = StepKit.WaitWindow(a_ctx, image, t => t.StartsWith(Tool + " 3", StringComparison.Ordinal), TimeSpan.FromMinutes(5), Tool + "'s window");
+				var main = StepKit.WaitWindow(a_ctx, image, t => Regex.IsMatch(t, "^" + Tool + @" \d"), TimeSpan.FromMinutes(5), Tool + "'s window");
 				a_ctx.Activity(Key, Tool + " is reading the load order");
 				var startedRun = false;
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(120), () => {
@@ -303,7 +323,16 @@ public abstract class DynDolodFamily : IStep
 						if (Regex.IsMatch(box.Text, @"Installation Error|\bError\b") && !box.Text.Contains("PBR textures detected", StringComparison.Ordinal)) {
 							throw new StepFailedException($"{Tool}: {box.Text}");
 						}
-						if (Uia.Button(box.Element, "OK", "Yes") is { } b) {
+						if (Uia.Button(box.Element, "No") != null) {
+							// questions: the known ones answered, an unknown one is never guessed (a "delete the output?" would get Yes)
+							var answer = box.Text.Contains("PBR textures detected", StringComparison.Ordinal) ? "Yes" :
+								Regex.IsMatch(box.Text, "new version|update available|download", RegexOptions.IgnoreCase) ? "No" : null;
+							if (answer == null) {
+								throw new StepFailedException($"{Tool} asks a question this step does not answer: {box.Text}");
+							}
+							a_ctx.Log.Detail($"{Tool} asks: {box.Text} - {answer}");
+							Uia.Press(Uia.Button(box.Element, answer)!);
+						} else if (Uia.Button(box.Element, "OK", "Close") is { } b) {
 							a_ctx.Log.Detail($"{Tool} notice: {box.Text}");
 							Uia.Press(b);
 						}
@@ -408,13 +437,15 @@ public sealed class DynDolodStep : DynDolodFamily
 	{
 		// a setup rule (his, 2026-10-10): no terrain underside - written into the preset the options window loads, read back
 		if (a_s.Bool("no_terrain_underside", false) && a_s.Str("preset") is { } preset) {
-			var raw = Files.ReadSharedText(preset);
-			var fixedText = Regex.Replace(raw, @"(?mi)^(DoTerrainUnderside)=\s*1\s*$", "$1=0");
+			// read as single bytes (an ANSI preset keeps every accented letter); [ \t]* keeps the line's own \r
+			var raw = System.Text.Encoding.Latin1.GetString(Files.ReadShared(preset));
+			var fixedText = Regex.Replace(raw, @"(?mi)^(DoTerrainUnderside)=[ \t]*1[ \t]*(?=\r?$)", "$1=0");
 			if (fixedText != raw) {
-				Files.WriteAtomic(preset, fixedText, new System.Text.UTF8Encoding(false));
-				a_ctx.Log.Detail("DynDOLOD preset: terrain underside switched off (setup rule)");
+				StepKit.KeepFile(a_ctx, preset);
+				Files.WriteAtomic(preset, System.Text.Encoding.Latin1.GetBytes(fixedText));
+				a_ctx.Log.Detail("DynDOLOD preset: terrain underside switched off (setup rule) - the old one is in the run's backup");
 			}
-			if (!Regex.IsMatch(Files.ReadSharedText(preset), @"(?mi)^DoTerrainUnderside=0\s*$")) {
+			if (!Regex.IsMatch(Files.ReadSharedText(preset), @"(?mi)^DoTerrainUnderside=[ \t]*0[ \t]*\r?$")) {
 				throw new StepFailedException("DynDOLOD's preset still makes a terrain underside");
 			}
 		}
@@ -427,7 +458,7 @@ public sealed class DynDolodStep : DynDolodFamily
 		var list = Uia.All(a_opts, ControlType.List).FirstOrDefault();
 		if (list != null) {
 			var want = a_s.List("worldspaces");
-			CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all") || want.Contains(n.Split(' ')[0]));
+			CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));
 		}
 		base.DriveOptions(a_ctx, a_opts, a_s);
 	}
@@ -453,7 +484,7 @@ public sealed class AnvilLodStep : IStep
 			"--preset", a_s.Str("preset") ?? "high", "--skse-dll", a_s.Str("skse_dll") ?? "1170", "--output", a_ctx.Mo2.ModDir(mod),
 			"--report", Path.Combine(a_ctx.Journal.Folder, "AnvilLOD report.json") };
 		args.AddRange(a_s.List("extra_args"));
-		using (new Toggle(a_ctx, a_s.List("enable_during"), [.. a_s.List("replaces"), .. a_s.List("disable_during")], "AnvilLOD")) {
+		using (new Toggle(a_ctx, a_s.List("enable_during"), [.. a_s.List("replaces"), .. a_s.List("disable_during")], "AnvilLOD", a_ctx.Cancel)) {
 			StepKit.ParkMod(a_ctx, Key, mod);
 			var (code, _) = Cli.Run(a_ctx, Key, a_s.Req("exe"), args, a_s.Deadline(60), Path.Combine(a_ctx.Journal.Folder, "AnvilLOD output.txt"));
 			if (code != 0) {

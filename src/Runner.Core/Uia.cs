@@ -90,7 +90,9 @@ public static class Uia
 	{
 		var buttons = All(a_root, ControlType.Button).Where(b => !InTitleBar(b)).ToList();
 		foreach (var n in a_names) {
-			var hit = buttons.FirstOrDefault(b => string.Equals(Name(b).Trim(), n, StringComparison.OrdinalIgnoreCase));
+			var hit = buttons.FirstOrDefault(b => string.Equals(Name(b).Trim(), n, StringComparison.OrdinalIgnoreCase)) ??
+				// a Windows message box in another language ("Ja", "Nein"): its standard buttons by their control id
+				(StandardIds.TryGetValue(n, out var id) ? buttons.FirstOrDefault(b => AutomationId(b) == id) : null);
 			if (hit != null) {
 				return hit;
 			}
@@ -98,13 +100,26 @@ public static class Uia
 		return null;
 	}
 
+	static readonly Dictionary<string, string> StandardIds = new(StringComparer.OrdinalIgnoreCase) {
+		["OK"] = "1", ["Cancel"] = "2", ["Abort"] = "3", ["Retry"] = "4", ["Ignore"] = "5", ["Yes"] = "6", ["No"] = "7", ["Close"] = "8",
+	};
+
 	public static List<AutomationElement> RealButtons(AutomationElement a_root) =>
 		All(a_root, ControlType.Button).Where(b => !InTitleBar(b) && Name(b).Trim() != "").ToList();
 
-	// Invoke, else a click message to its own window handle; never the real mouse. On a hidden desktop Invoke is refused
-	// (measured 2026-10-27) while BM_CLICK to the button's window works - so a refused Invoke falls back to it
+	// a Win32 button gets a posted click message (Invoke can wait inside a click handler that runs a modal loop, and is refused
+	// on a hidden desktop - measured 2026-10-27); any other button Invoke, else the message. Never the real mouse.
 	public static bool Press(AutomationElement a_e)
 	{
+		try {
+			var h = a_e.Current.NativeWindowHandle;
+			if (h != 0 && Native.ClassName(h).Equals("Button", StringComparison.OrdinalIgnoreCase)) {
+				Native.PostMessage(h, Native.BM_CLICK, 0, 0);
+				return true;
+			}
+		} catch (ElementNotAvailableException) {
+			return false;
+		}
 		try {
 			if (a_e.TryGetCurrentPattern(InvokePattern.Pattern, out var p)) {
 				((InvokePattern)p).Invoke();
@@ -149,7 +164,8 @@ public static class Uia
 				continue;
 			}
 			var candidates = new List<AutomationElement>();
-			if (cls is "#32770" or "QMessageBox" || cls.Contains("MessageBox", StringComparison.OrdinalIgnoreCase)) {
+			// a Qt message box that is its own top window carries a Qt window class - its UI Automation class names it
+			if (cls is "#32770" or "QMessageBox" || cls.Contains("MessageBox", StringComparison.OrdinalIgnoreCase) || ClassName(e) == "QMessageBox") {
 				candidates.Add(e);
 			}
 			candidates.AddRange(Children(e).Where(c => Type(c) == ControlType.Window && ClassName(c) is "#32770" or "QMessageBox"));

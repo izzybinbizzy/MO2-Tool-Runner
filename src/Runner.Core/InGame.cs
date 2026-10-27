@@ -16,7 +16,47 @@ public static partial class InGame
 
 	public static readonly string[] ShaderLogNames = ["CommunityShaders.log", "BottledShaders.log", "OpenShaders.log"];
 
-	public static Process? Game() => Procs.ByImage(GameImage).FirstOrDefault();
+	// is any Skyrim running (the player's or ours)? - only for "close it first"
+	public static bool AnyGame() => Procs.Running(GameImage);
+
+	// the game THIS run started (its PID is in Control.Started), never the player's own
+	public static Process? Game(RunContext a_ctx)
+	{
+		Process? mine = null;
+		foreach (var p in Procs.ByImage(GameImage)) {
+			if (mine == null && a_ctx.Control.Started.Contains(p.Id)) {
+				mine = p;
+			} else {
+				p.Dispose();
+			}
+		}
+		return mine;
+	}
+
+	// no Skyrim may run before the run starts one (a game it just closed gets 30 s to go); the player's own is never closed
+	public static void NoGameRunning(RunContext a_ctx)
+	{
+		var sw = Stopwatch.StartNew();
+		while (AnyGame()) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			if (sw.Elapsed > TimeSpan.FromSeconds(30)) {
+				throw new StepFailedException("Skyrim is already running - close it first");
+			}
+			Thread.Sleep(1000);
+		}
+	}
+
+	// the PID of a Skyrim that did not run when this was asked (the one a launch is about to start)
+	public static Func<int> FreshGamePid()
+	{
+		var old = Procs.ByImage(GameImage).Select(p => p.Id).ToHashSet();
+		return () => {
+			var ps = Procs.ByImage(GameImage);
+			var id = ps.Select(p => p.Id).FirstOrDefault(i => !old.Contains(i));
+			ps.ForEach(p => p.Dispose());
+			return id;
+		};
+	}
 
 	// the SKSE log folder: a setup may name it (a log redirector), else My Games\<game>\SKSE
 	public static string SkseLogs(Setup a_setup, Mo2Instance a_mo2)
@@ -73,6 +113,24 @@ public static partial class InGame
 		return false;
 	}
 
+	// the newest "remaining=N" a shader log holds (null: it has no ShaderTiming lines - Open Shaders, an older Community Shaders)
+	public static int? LastRemaining(string a_log)
+	{
+		string[] tail;
+		try {
+			tail = Files.ReadSharedText(a_log).Split('\n').TakeLast(300).ToArray();
+		} catch (IOException) {
+			return null;
+		}
+		for (int i = tail.Length - 1; i >= 0; --i) {
+			var m = Remaining().Match(tail[i]);
+			if (m.Success) {
+				return int.Parse(m.Groups[1].Value, InvariantCulture);
+			}
+		}
+		return null;
+	}
+
 	public static bool CacheBusy(string a_overwrite, int a_quietSeconds = 120)
 	{
 		var d = Path.Combine(a_overwrite, "ShaderCache");
@@ -88,7 +146,14 @@ public static partial class InGame
 		}
 		var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 		var gog = a_profile.Mo2.GameDir.Contains("GOG", StringComparison.OrdinalIgnoreCase);
-		return Path.Combine(docs, "My Games", gog ? "Skyrim Special Edition GOG" : "Skyrim Special Edition", "Saves");
+		var myGames = Path.Combine(docs, "My Games", gog ? "Skyrim Special Edition GOG" : "Skyrim Special Edition");
+		// the game's INIs: the profile's own when it keeps them (LocalSettings), else My Games'; SkyrimCustom.ini wins
+		var localInis = File.Exists(ini) && Files.ReadSharedText(ini).Split('\n').Any(l => l.Trim().Equals("LocalSettings=true", StringComparison.OrdinalIgnoreCase));
+		var iniDir = localInis ? a_profile.Dir : myGames;
+		var savePath = new[] { "SkyrimCustom.ini", "Skyrim.ini" }.Select(n => Path.Combine(iniDir, n)).Where(File.Exists)
+			.Select(f => Files.ReadSharedText(f).Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("sLocalSavePath=", StringComparison.OrdinalIgnoreCase)))
+			.FirstOrDefault(l => l != null)?["sLocalSavePath=".Length..].Trim();
+		return Path.Combine(myGames, string.IsNullOrEmpty(savePath) ? "Saves" : savePath.TrimEnd('\\'));
 	}
 
 	public static string? NewestSave(Profile a_profile, DateTime? a_after = null)
@@ -104,16 +169,8 @@ public static partial class InGame
 
 	static void LaunchGame(RunContext a_ctx, StepSettings a_s)
 	{
-		if (Game() != null) {
-			throw new StepFailedException("Skyrim is already running - close it first");
-		}
-		a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", GamePid, a_ctx.Cancel);
-	}
-
-	public static int GamePid()
-	{
-		using var g = Game();
-		return g?.Id ?? 0;
+		NoGameRunning(a_ctx);
+		a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", FreshGamePid(), a_ctx.Cancel);
 	}
 
 	// the game up, any compile waited out, `a_save` loaded, frames moving, god mode on (nothing may kill the player while it waits)
@@ -128,7 +185,7 @@ public static partial class InGame
 			if (sw.Elapsed > limit) {
 				throw new StepFailedException($"the game (or DevBench) did not answer within {limit.TotalMinutes:0} minutes");
 			}
-			if (sw.Elapsed > TimeSpan.FromSeconds(30) && Game() == null) {
+			if (sw.Elapsed > TimeSpan.FromSeconds(30) && Game(a_ctx) == null) {
 				throw new StepFailedException("the game closed while it was starting");
 			}
 			Thread.Sleep(2000);
@@ -142,7 +199,7 @@ public static partial class InGame
 			try {
 				a_ctx.DevBench.Call("game", new { action = "load", name = a_save });
 				break;
-			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException) {
+			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException) {
 				if (t.Elapsed > TimeSpan.FromMinutes(3)) {
 					throw new StepFailedException($"the game never accepted the load of \"{a_save}\": {e.Message}");
 				}
@@ -152,7 +209,7 @@ public static partial class InGame
 		t.Restart();
 		while (t.Elapsed < limit) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			if (Game() == null) {
+			if (Game(a_ctx) == null) {
 				throw new StepFailedException($"the game closed while loading \"{a_save}\"");
 			}
 			try {
@@ -184,7 +241,7 @@ public static partial class InGame
 						return;
 					}
 				}
-			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException or FormatException) {
+			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException or FormatException or System.Text.Json.JsonException) {
 			}
 			Thread.Sleep(3000);
 			// a compile that started under the load is never cut off - the load clock waits while one runs
@@ -208,7 +265,7 @@ public static partial class InGame
 		var quietSince = TimeSpan.Zero;
 		while (sw.Elapsed < max) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			if (Game() == null) {
+			if (Game(a_ctx) == null) {
 				throw new StepFailedException("the game closed while its shaders compiled");
 			}
 			if (Compiling(logs, a_ctx.Mo2.OverwriteDir, a_since)) {
@@ -250,19 +307,32 @@ public static partial class InGame
 			}
 			Thread.Sleep(1500);
 		}
-		a_ctx.Log.Detail($"saved \"{a_name}\" ({new FileInfo(path).Length / 1024} KB)");
+		var cosave = Path.ChangeExtension(path, ".skse");
+		var cw = Stopwatch.StartNew();
+		while (cw.Elapsed < TimeSpan.FromSeconds(20)) {
+			if (File.Exists(cosave) && File.GetLastWriteTimeUtc(cosave) >= t0) {
+				var c1 = new FileInfo(cosave).Length;
+				Thread.Sleep(2000);
+				if (new FileInfo(cosave).Length == c1) {
+					break;
+				}
+			} else {
+				Thread.Sleep(1000);
+			}
+		}
+		a_ctx.Log.Detail($"saved \"{a_name}\" ({new FileInfo(path).Length / 1024} KB{(File.Exists(cosave) ? ", its SKSE co-save too" : "")})");
 		CloseGame(a_ctx);
 	}
 
 	public static void CloseGame(RunContext a_ctx)
 	{
-		var g = Game();
+		using var g = Game(a_ctx);
 		if (g == null) {
 			return;
 		}
 		Procs.KillTree(g.Id);
 		var sw = Stopwatch.StartNew();
-		while (Game() != null && sw.Elapsed < TimeSpan.FromSeconds(30)) {
+		while (Game(a_ctx) != null && sw.Elapsed < TimeSpan.FromSeconds(30)) {
 			Thread.Sleep(500);
 		}
 		a_ctx.Log.Detail("the game is closed");
@@ -275,7 +345,7 @@ public static partial class InGame
 		LaunchGame(a_ctx, a_s);
 		a_ctx.Guide.Ask(a_step, a_what + " Then quit the game and press Done.", a_ctx.Cancel);
 		var sw = Stopwatch.StartNew();
-		while (Game() != null) {
+		while (Game(a_ctx) != null) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			if (sw.Elapsed > TimeSpan.FromMinutes(2)) {
 				throw new StepFailedException("the game is still running - quit it, then start the step again");
@@ -350,7 +420,7 @@ public static partial class InGame
 		foreach (var (m, why) in a_ctx.CleanSaveExtraOff) {
 			a_ctx.Log.Detail($"also off for the clean save: {m} ({why})");
 		}
-		using var _ = new Toggle(a_ctx, [], a_ctx.CleanSaveExtraOff.Keys, "the clean save");
+		using var _ = new Toggle(a_ctx, [], a_ctx.CleanSaveExtraOff.Keys, "the clean save", a_ctx.Cancel);
 		if (!Auto(a_ctx)) {
 			GuidedSave(a_ctx, "cleansave", a_s, $"In the game: load the save \"{from}\", wait half a minute, and save.");
 			var second = GuidedSave(a_ctx, "cleansave", a_s, "In the game: load the save you just made, wait half a minute, and save again.");

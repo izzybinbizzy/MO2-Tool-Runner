@@ -61,10 +61,18 @@ public sealed partial class HiddenDesktop : IDisposable
 			throw new StepFailedException($"could not start {a_commandLine} (error {Marshal.GetLastWin32Error()})");
 		}
 		CloseHandle(pi.hThread);
-		CloseHandle(pi.hProcess);
 		var root = pi.dwProcessId;
+		Process p;
+		try {
+			// taken while Windows' own handle still holds the process (a PID could be reused once both are closed)
+			p = Process.GetProcessById(root);
+		} catch (ArgumentException) {
+			throw new StepFailedException($"{a_commandLine} ended as soon as it started");
+		} finally {
+			CloseHandle(pi.hProcess);
+		}
 		Watch(root);
-		return Process.GetProcessById(root);
+		return p;
 	}
 
 	// THE LEAK GUARD: a tool started here must never show on the player's screen (his catch 2026-10-27: a probe's box sat on

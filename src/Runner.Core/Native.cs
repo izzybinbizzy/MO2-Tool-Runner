@@ -268,6 +268,31 @@ public static class Procs
 		}
 	}
 
+	// when a process started (null = gone or not readable) - a PID alone can be reused by a new process after a crash
+	public static DateTime? StartTime(int a_pid)
+	{
+		try {
+			using var p = Process.GetProcessById(a_pid);
+			return p.HasExited ? null : p.StartTime.ToUniversalTime();
+		} catch (ArgumentException) {
+		} catch (InvalidOperationException) {
+		} catch (Win32Exception) {
+		}
+		return null;
+	}
+
+	// the process's image name with .exe ("" when gone)
+	public static string Image(int a_pid)
+	{
+		try {
+			using var p = Process.GetProcessById(a_pid);
+			return p.ProcessName + ".exe";
+		} catch (ArgumentException) {
+		} catch (InvalidOperationException) {
+		}
+		return "";
+	}
+
 	public static bool Alive(int a_pid)
 	{
 		try {

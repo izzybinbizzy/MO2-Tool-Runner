@@ -162,6 +162,7 @@ public sealed partial class MainViewModel : Observable
 		Mo2Open = Procs.Running("ModOrganizer.exe");
 		GameRunning = Mo2Control.GameImages.Any(Procs.Running);
 		var runs = Engine.Runs();
+		FollowStart(runs);
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
 		_run = active ?? (_run is { } r && Directory.Exists(r.Folder) ? Fresh(runs, r) : Engine.Latest(SelectedSetup?.File, runs));
@@ -285,9 +286,34 @@ public sealed partial class MainViewModel : Observable
 			return;
 		}
 		var (ok, text) = Engine.StartRun(SelectedSetup.File, a_only, a_from, a_until);
-		Say(ok ? "Started." : "Could not start: " + text, ok ? "good" : "bad");
+		if (!ok) {
+			Say("Could not start: " + text, "bad");
+			return;
+		}
+		// the engine checks everything first and may refuse: the next looks read its run record or its refusal
+		Say("Starting - checking every tool and setting ...", "");
+		_startAsked = DateTime.Now;
 		_run = null;
-		_lastState = RunState.Running;
+	}
+
+	DateTime? _startAsked;
+
+	// after Start: the run's own record appears (it started), or the engine's refusal (shown with its reason), or nothing
+	void FollowStart(List<Journal> a_runs)
+	{
+		if (_startAsked is not { } asked) {
+			return;
+		}
+		if (a_runs.FirstOrDefault(j => j.Started >= asked.AddSeconds(-5)) is { } fresh) {
+			Say(fresh.Unfinished ? "Started." : fresh.Verdict, fresh.State is RunState.Failed ? "bad" : "good");
+			_startAsked = null;
+		} else if (Engine.LastRefusal(asked) is { } why) {
+			Say("Not started: " + why, "bad");
+			_startAsked = null;
+		} else if (DateTime.Now - asked > TimeSpan.FromSeconds(90)) {
+			Say("The run did not start and gave no reason - nothing was changed. Press Check (F5) to see what is wrong.", "bad");
+			_startAsked = null;
+		}
 	}
 
 	void StopAfter()
@@ -314,19 +340,24 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
+	public bool Restoring { get; private set => Set(ref field, value); }
+
 	async Task Restore()
 	{
 		var j = Engine.Interrupted();
-		if (j == null) {
+		if (j == null || Restoring) {
 			return;
 		}
+		Restoring = true;
 		Say("Putting your profile back ...", "warn");
 		// its own copy: the records the window reads are shared with the next look
 		try {
-			var r = await Task.Run(() => Runner.Restore(Journal.Load(j.Folder), AppPaths.Data));
+			var r = await Task.Run(() => Runner.Restore(Journal.Load(j.Folder)));
 			Say(r.Verdict, r.State == RunState.Restored ? "good" : "bad");
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException) {
+		} catch (Exception e) {
 			Say("Could not finish putting it back: " + e.Message + " - press the button again once the file is free.", "bad");
+		} finally {
+			Restoring = false;
 		}
 		Poll();
 		LoadHistory();
@@ -343,8 +374,8 @@ public sealed partial class MainViewModel : Observable
 		List<ToolRunner.Steps.Issue> found;
 		try {
 			found = await Task.Run(() => Preflight.Run(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), setup.EnabledSteps.Select(s => s.Key).ToList()));
-		} catch (Exception e) when (e is IOException or InvalidOperationException) {
-			Say(e.Message, "bad");
+		} catch (Exception e) {
+			Say("The check could not finish: " + e.Message, "bad");
 			return;
 		}
 		foreach (var i in found) {
@@ -355,9 +386,16 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	// a step switched on / off for the setup (saved at once)
+	public bool SetupInUse => Setup != null && Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase);
+
 	public void SetOn(StepRow a_row, bool a_on)
 	{
 		if (Setup?.Root["steps"] is not JsonArray arr) {
+			return;
+		}
+		if (SetupInUse) {
+			a_row.On = !a_on;
+			Say("Not changed: a run is using this setup right now.", "bad");
 			return;
 		}
 		foreach (var o in arr.OfType<JsonObject>().Where(o => Setup.Str(o, "step") == a_row.Key)) {
@@ -385,6 +423,10 @@ public sealed partial class MainViewModel : Observable
 	public void Move(StepRow a_row, int a_delta)
 	{
 		if (Setup?.Root["steps"] is not JsonArray arr) {
+			return;
+		}
+		if (SetupInUse) {
+			Say("Not moved: a run is using this setup right now.", "bad");
 			return;
 		}
 		var i = Steps.IndexOf(a_row);
@@ -421,7 +463,8 @@ public sealed partial class MainViewModel : Observable
 			Directory.CreateDirectory(backup);
 			if (File.Exists(Setup.File)) {
 				File.Copy(Setup.File, Path.Combine(backup, Path.GetFileNameWithoutExtension(Setup.File) + " " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss", InvariantCulture) + ".json"), true);
-				foreach (var old in new DirectoryInfo(backup).GetFiles(Path.GetFileNameWithoutExtension(Setup.File) + " *.json").OrderByDescending(f => f.Name).Skip(20)) {
+				var own = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(Path.GetFileNameWithoutExtension(Setup.File)) + @" \d{4}-\d\d-\d\d \d\d-\d\d-\d\d\.json$");
+				foreach (var old in new DirectoryInfo(backup).GetFiles("*.json").Where(f => own.IsMatch(f.Name)).OrderByDescending(f => f.Name).Skip(20)) {
 					old.Delete();
 				}
 			}

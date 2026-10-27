@@ -17,6 +17,11 @@ public abstract class LauncherStep : IStep
 	{
 		foreach (var i in StepKit.CheckExecutable(a_c, Key, a_s.Str("executable"))) yield return i;
 		if (a_s.OutputMod == null) yield return new Issue(Key, true, "no output mod is set");
+		// its own write folder is emptied before the run: never the mod the tool itself is installed in
+		if (a_s.Str("tool_writes") is { Length: > 0 } tw && Directory.Exists(a_c.Mo2.ModDir(tw)) &&
+		    Directory.EnumerateFiles(a_c.Mo2.ModDir(tw), "*.exe", SearchOption.AllDirectories).Any()) {
+			yield return new Issue(Key, true, $"\"{tw}\" (the folder it writes into) holds a program - it must be the tool's output folder, not the tool itself");
+		}
 	}
 
 	public void Run(RunContext a_ctx, StepSettings a_s)
@@ -24,12 +29,15 @@ public abstract class LauncherStep : IStep
 		var mod = a_s.OutputMod!;
 		var image = a_s.Str("image") ?? a_s.Req("executable") + ".exe";
 		StepKit.ParkMod(a_ctx, Key, mod);
-		var toolDir = a_s.Str("tool_writes") is { Length: > 0 } tw ? a_ctx.Mo2.ModDir(tw) : null;
+		var tw = a_s.Str("tool_writes");
+		var toolDir = tw is { Length: > 0 } ? a_ctx.Mo2.ModDir(tw) : null;
 		if (toolDir != null && Directory.Exists(toolDir)) {
-			StepKit.ParkDir(a_ctx, toolDir, a_s.Str("tool_writes") + " (its own folder)");
+			// its files to the backup (recorded, put back if the step does not finish); the folder and its meta.ini stay
+			StepKit.ParkMod(a_ctx, Key, tw!);
 		}
 		var logPath = Path.Combine(toolDir ?? a_ctx.Mo2.ModDir(mod), LogName);
-		using (new Toggle(a_ctx, [mod, .. a_s.List("enable_during")], a_s.List("disable_during"), StepCatalog.Name(Key))) {
+		var t0 = DateTime.UtcNow;
+		using (new Toggle(a_ctx, [mod, .. a_s.List("enable_during")], a_s.List("disable_during"), StepCatalog.Name(Key), a_ctx.Cancel)) {
 			try {
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args"), a_ctx.Cancel);
 				var w = StepKit.WaitWindow(a_ctx, image, t => Regex.IsMatch(t, TitleRx), TimeSpan.FromMinutes(3), StepCatalog.Name(Key) + "'s window");
@@ -55,22 +63,19 @@ public abstract class LauncherStep : IStep
 							Uia.Press(ok);
 						}
 					}
-					if (finished || (File.Exists(logPath) && DateTime.Now - File.GetLastWriteTime(logPath) > TimeSpan.FromSeconds(20) && File.GetLastWriteTime(logPath) > a_ctx.Journal.Started)) {
-						return Waits.Poll.Done;
-					}
-					if (proc.HasExited) {
-						return Waits.Poll.Done;
-					}
-					return Waits.Poll.Wait;
-				});
+					// done = its "complete" box, or it exited; a quiet log counts only once the tool also used no CPU for the
+					// idle minutes (a quiet phase mid-run is normal)
+					return finished || proc.HasExited ? Waits.Poll.Done : Waits.Poll.Wait;
+				}, a_onIdle: () => finished = File.Exists(logPath) && File.GetLastWriteTimeUtc(logPath) > t0);
 			} finally {
 				StepKit.CloseTool(a_ctx, image);
 			}
 		}
 		if (toolDir != null && Directory.Exists(toolDir)) {
+			// its files into the output mod; its own folder stays (empty, its meta.ini kept) - nothing in a mod folder is erased
 			Files.MoveContents(toolDir, a_ctx.Mo2.ModDir(mod), n => n.Equals("meta.ini", StringComparison.OrdinalIgnoreCase));
-			Directory.Delete(toolDir, true);
-			a_ctx.Log.Detail($"its files moved into {mod}, its own folder removed");
+			StepKit.MarkReplaced(a_ctx, tw!);
+			a_ctx.Log.Detail($"its files moved into {mod}");
 		}
 		var n = Files.CountFiles(a_ctx.Mo2.ModDir(mod));
 		a_ctx.Log.Detail($"{mod} holds {n} file(s)");
@@ -135,12 +140,14 @@ public sealed class PgPatcherStep : IStep
 		var image = a_s.Str("image") ?? "PGPatcher.exe";
 		var t0 = DateTime.UtcNow;
 		var live = LiveSettings(a_ctx.Mo2, a_s);
-		byte[]? keep = File.Exists(live) ? Files.ReadShared(live) : null;
 		var set = SettingsSet(a_ctx.Setup, a_s);
 		// its output pointed at the output mod for the run: a stored settings set (ENB / PBR ...) or PGPatcher's own file
-		var source = set ?? (keep != null ? live : null);
+		var source = set ?? (File.Exists(live) ? live : null);
+		// the old output to the backup first (PGPatcher stopped half way would leave a half output and nothing to put back)
+		StepKit.ParkMod(a_ctx, Key, mod);
 		try {
 			if (source != null) {
+				StepKit.KeepFile(a_ctx, live);
 				var conf = JsonNode.Parse(Files.ReadSharedText(source)) as JsonObject ?? throw new StepFailedException("PGPatcher's settings do not read");
 				if (conf["params"]?["output"] is not JsonObject output) {
 					throw new StepFailedException("PGPatcher's settings have no output section - run PGPatcher once by hand to make them");
@@ -149,7 +156,7 @@ public sealed class PgPatcherStep : IStep
 				Files.WriteAtomic(live, conf.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 				a_ctx.Log.Detail($"PGPatcher settings: {a_s.Str("settings") ?? "its own"} (output {mod})");
 			}
-			using (new Toggle(a_ctx, [], [mod, .. a_s.List("disable_during")], "PGPatcher")) {
+			using (new Toggle(a_ctx, [], [mod, .. a_s.List("disable_during")], "PGPatcher", a_ctx.Cancel)) {
 				try {
 					var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args") ?? "--autostart", a_ctx.Cancel);
 					var esp = Path.Combine(a_ctx.Mo2.ModDir(mod), "PGPatcher.esp");
@@ -168,7 +175,11 @@ public sealed class PgPatcherStep : IStep
 							} else if (Regex.IsMatch(box.Text.Split("collapsiblePane")[0], "error|failed|exception", RegexOptions.IgnoreCase)) {
 								throw new StepFailedException("PGPatcher: " + box.Text);
 							}
-							if (Uia.Button(box.Element, "OK", "Yes") is { } ok) {
+							// a notice gets OK; a question it does not know (Yes / No) stops the step with its text
+							if (Uia.Button(box.Element, "No") != null && !Regex.IsMatch(box.Text, "has completed generating output")) {
+								throw new StepFailedException("PGPatcher asks a question this step does not answer: " + box.Text.Split("collapsiblePane")[0].Trim());
+							}
+							if (Uia.Button(box.Element, "OK", "Close") is { } ok) {
 								Uia.Press(ok);
 							}
 						}
@@ -182,19 +193,13 @@ public sealed class PgPatcherStep : IStep
 			}
 		} finally {
 			if (source != null) {
-				if (keep != null) {
-					Files.WriteAtomic(live, keep);
-				} else {
-					Files.TryDelete(live);
-				}
-				a_ctx.Log.Detail("PGPatcher's settings put back as they were");
+				StepKit.PutFilesBack(a_ctx, live);
 			}
 		}
 		var outEsp = Path.Combine(a_ctx.Mo2.ModDir(mod), "PGPatcher.esp");
 		if (!File.Exists(outEsp) || File.GetLastWriteTimeUtc(outEsp) < t0) {
 			throw new StepFailedException($"PGPatcher did not write a new PGPatcher.esp into {mod}");
 		}
-		// PGPatcher writes straight into its output mod - what was there before was moved aside by PGPatcher itself
 		a_ctx.SetAfter(mod);
 	}
 }
@@ -220,7 +225,7 @@ public sealed class SynthesisStep : IStep
 		var espOw = Path.Combine(a_ctx.Mo2.OverwriteDir, "Synthesis.esp");
 		var t0 = DateTime.UtcNow;
 		Build(a_ctx, a_s, image, exePath);
-		using (new Toggle(a_ctx, [], a_s.List("disable_during"), "Synthesis")) {
+		using (new Toggle(a_ctx, [], a_s.List("disable_during"), "Synthesis", a_ctx.Cancel)) {
 			try {
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, null, a_ctx.Cancel);
 				var w = StepKit.WaitWindow(a_ctx, image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "Synthesis's window");
@@ -259,7 +264,8 @@ public sealed class SynthesisStep : IStep
 		StepKit.CloseTool(a_ctx, a_image);
 		a_ctx.Log.Detail("Synthesis: building its patchers outside Mod Organizer first");
 		a_ctx.Activity("synthesis", "building Synthesis's patchers");
-		Mo2Control.StartDetached(Mo2Control.Quote(a_exe), Path.GetDirectoryName(a_exe)!);
+		// the build copy is the run's own: closed by its PID after the build (else the run inside MO2 finds Synthesis running)
+		a_ctx.Control.Started.Add(Mo2Control.StartDetached(Mo2Control.Quote(a_exe), Path.GetDirectoryName(a_exe)!));
 		var w = StepKit.WaitWindow(a_ctx, a_image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(5), "Synthesis's window");
 		var sw = System.Diagnostics.Stopwatch.StartNew();
 		try {
@@ -353,6 +359,7 @@ public sealed class PandoraStep : IStep
 		foreach (var i in StepKit.CheckExecutable(a_c, Key, a_s.Str("executable"))) yield return i;
 		if (a_s.OutputMod == null) yield return new Issue(Key, true, "no output mod is set");
 		if (a_s.Str("output_dir") is not { Length: > 0 }) yield return new Issue(Key, true, "no output folder is set");
+		foreach (var i in StepKit.CheckOutputDir(a_c, Key, a_s.Str("output_dir"))) yield return i;
 	}
 
 	public void Run(RunContext a_ctx, StepSettings a_s)
@@ -374,9 +381,10 @@ public sealed class PandoraStep : IStep
 		game["gameDataPath"] ??= Path.Combine(a_ctx.Mo2.GameDir, "Data");
 		game["outputPath"] = Path.GetFullPath(outDir);
 		var stray = Path.Combine(a_ctx.Mo2.OverwriteDir, "Engine.log");
+		StepKit.KeepFile(a_ctx, settings);
 		try {
 			Files.WriteAtomic(settings, conf.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-			using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "Pandora")) {
+			using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "Pandora", a_ctx.Cancel)) {
 				try {
 					var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args") ?? "--auto_run --auto_close", a_ctx.Cancel);
 					a_ctx.Activity(Key, "Pandora is building behaviour files");
@@ -397,11 +405,7 @@ public sealed class PandoraStep : IStep
 				}
 			}
 		} finally {
-			if (before == null) {
-				Files.TryDelete(settings);
-			} else {
-				Files.WriteAtomic(settings, before);
-			}
+			StepKit.PutFilesBack(a_ctx, settings);
 		}
 		if (File.Exists(stray) && File.GetLastWriteTimeUtc(stray) >= t0) {
 			throw new StepFailedException("Pandora wrote into Mod Organizer's overwrite folder instead of its output folder - its settings' output path was not used; its files there are this run's");

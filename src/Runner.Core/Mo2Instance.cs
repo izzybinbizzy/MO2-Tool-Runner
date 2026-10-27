@@ -18,6 +18,8 @@ public sealed partial class Mo2Instance
 	public string GameDir { get; }
 	public string GameName { get; }
 	public string SelectedProfile { get; }
+	// a global instance's name (its folder under %LOCALAPPDATA%\ModOrganizer) - passed to MO2 as -i; null for a portable one
+	public string? GlobalName { get; }
 	public IReadOnlyList<Mo2Executable> Executables { get; }
 
 	Mo2Instance(string a_exe, string a_ini, Dictionary<string, Dictionary<string, string>> a_sections)
@@ -27,6 +29,8 @@ public sealed partial class Mo2Instance
 		string Get(string a_section, string a_key) =>
 			a_sections.TryGetValue(a_section, out var s) && s.TryGetValue(a_key, out var v) ? v : "";
 		var iniDir = Path.GetDirectoryName(a_ini)!;
+		var globalRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModOrganizer");
+		GlobalName = string.Equals(Path.GetDirectoryName(Path.GetFullPath(iniDir)), globalRoot, StringComparison.OrdinalIgnoreCase) ? Path.GetFileName(iniDir) : null;
 		var baseDir = Get("Settings", "base_directory");
 		BaseDir = Full(baseDir == "" ? iniDir : baseDir, iniDir);
 		string Dir(string a_key, string a_default)

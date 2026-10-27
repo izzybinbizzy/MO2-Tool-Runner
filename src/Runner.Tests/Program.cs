@@ -563,11 +563,178 @@ public static class Program
 		Check(!File.Exists(Path.Combine(f.Mods, "Output A", "OutA.esp")), "(the crash left the output parked)");
 		var refused = Runner.Run(new RunRequest(f.SetupFile, f.Data));
 		Check(refused.Verdict.Contains("did not finish", StringComparison.Ordinal), "a new run is refused until it is put back: " + refused.Verdict);
-		var r = Runner.Restore(j!, f.Data);
+		var r = Runner.Restore(j!);
 		Equal(RunState.Restored, r.State, "restored: " + r.Verdict);
 		Check(File.Exists(Path.Combine(f.Mods, "Output A", "OutA.esp")), "the parked output is back");
 		var p = ProfileOf(f);
 		Check(p.IsOn("Output A") && p.IsOn("Output B") && p.IsOn("Needs B"), "the profile as it was");
+	}
+
+	// a file a step changed (a tool's settings): put back by the step's failure, and after a crash by Restore
+	static void T_KeptFilesComeBackAfterAFailureAndACrash()
+	{
+		using var f = new FakeMo2();
+		var settings = Path.Combine(f.Root, "tool settings.json");
+		var flag = Path.Combine(f.Root, "flag.txt");
+		File.WriteAllText(settings, "his own");
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			StepKit.KeepFile(ctx, settings);
+			StepKit.KeepFile(ctx, flag);
+			File.WriteAllText(settings, "pointed at the output");
+			File.WriteAllText(flag, "");
+			throw new StepFailedException("the tool crashed");
+		}));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Failed, r.State, "failed");
+		Equal("his own", File.ReadAllText(settings), "the changed file is back");
+		Check(!File.Exists(flag), "the file it made is gone again");
+
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			StepKit.KeepFile(ctx, settings);
+			File.WriteAllText(settings, "pointed at the output");
+			ctx.Journal.Pid = 999999;
+			ctx.Journal.Save();
+			throw new CrashForTest();
+		}));
+		try {
+			RunUntilCrash(f);
+		} catch (CrashForTest) {
+		}
+		Equal("pointed at the output", File.ReadAllText(settings), "(the crash left it changed)");
+		Equal(RunState.Restored, Runner.Restore(Journal.Interrupted(Runner.RunsDir(f.Data))!).State, "restored");
+		Equal("his own", File.ReadAllText(settings), "Restore put the file back");
+	}
+
+	// what a failed step left in MO2's overwrite would win over the output put back: moved into the run's backup
+	static void T_FailedStepsOverwriteFilesGoToTheBackup()
+	{
+		using var f = new FakeMo2();
+		Directory.CreateDirectory(f.Overwrite);
+		File.WriteAllText(Path.Combine(f.Overwrite, "was there.ini"), "old");
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			Directory.CreateDirectory(Path.Combine(f.Overwrite, "meshes"));
+			File.WriteAllText(Path.Combine(f.Overwrite, "meshes", "half.nif"), "half");
+			throw new StepFailedException("the tool crashed");
+		}));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Check(!File.Exists(Path.Combine(f.Overwrite, "meshes", "half.nif")), "the step's new file left overwrite");
+		Check(File.Exists(Path.Combine(f.Overwrite, "was there.ini")), "what was there before stays");
+		Check(Directory.EnumerateFiles(f.Backups, "half.nif", SearchOption.AllDirectories).Any(), "it is in the run's backup");
+	}
+
+	// a setup that spells a mod differently from the list ("output a" / "Output A") switches the same mod
+	static void T_ModNamesIgnoreCase()
+	{
+		using var f = new FakeMo2();
+		var p = ProfileOf(f);
+		var changed = p.SetMods([], ["output a"]);
+		Check(changed.ContainsKey("output a") && !p.IsOn("Output A"), "unticked through the other spelling");
+		Check(f.Text("modlist.txt").Contains("-Output A", StringComparison.Ordinal), "the list keeps its own spelling");
+		p.EnsureMod("OUTPUT A");
+		Equal(1, f.Text("modlist.txt").Split('\n').Count(l => l.TrimEnd().Equals("-Output A", StringComparison.OrdinalIgnoreCase)), "no second line for the same folder");
+	}
+
+	// MO2 is never closed under a program the player started from it (MO2 would end it)
+	static void T_CloseWaitsForThePlayersOwnProgram()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		var keep = Mo2Control.BusyWait;
+		Mo2Control.BusyWait = TimeSpan.FromSeconds(1);
+		try {
+			var c = new Mo2Control(mo2, "Test", RunLog.Null) { RunningProbe = () => true, ForeignProbe = () => [(4242, "SSEEdit.exe")] };
+			try {
+				c.Close();
+				Check(false, "MO2 was closed under the player's xEdit");
+			} catch (Mo2BusyException e) {
+				Check(e.Message.Contains("SSEEdit.exe", StringComparison.Ordinal), "the program is named: " + e.Message);
+			}
+		} finally {
+			Mo2Control.BusyWait = keep;
+		}
+	}
+
+	// a run record whose PID now belongs to another program (after a crash and a restart) is not "alive"
+	static void T_ReusedPidIsNotTheRun()
+	{
+		var me = Environment.ProcessId;
+		var j = new Journal { Pid = me, PidStarted = Process.GetCurrentProcess().StartTime.ToUniversalTime() };
+		Check(j.OwnerAlive, "the real owner is alive");
+		j.PidStarted = j.PidStarted.GetValueOrDefault().AddMinutes(-5);
+		Check(!j.OwnerAlive, "the same PID with another start time is not the run");
+	}
+
+	// one argument on a Windows command line, read back the way Windows splits it
+	static void T_QuoteRoundTripsThroughWindows()
+	{
+		foreach (var a in new[] { @"D:\LOD\", @"C:\Program Files\x", "say \"hi\"", @"a\\""b", @"ends\\", "plain", "" }) {
+			var line = "x.exe " + Mo2Control.Quote(a) + " next";
+			var got = Argv(line);
+			Equal(3, got.Length, "three arguments for " + a);
+			Equal(a, got[1], "the argument comes back");
+			Equal("next", got[2], "the next argument is not swallowed");
+		}
+	}
+
+	[System.Runtime.InteropServices.DllImport("shell32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+	static extern nint CommandLineToArgvW(string a_line, out int a_count);
+
+	[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+	static extern nint LocalFree(nint a_mem);
+
+	static string[] Argv(string a_line)
+	{
+		var p = CommandLineToArgvW(a_line, out var n);
+		try {
+			return Enumerable.Range(0, n).Select(i => System.Runtime.InteropServices.Marshal.PtrToStringUni(System.Runtime.InteropServices.Marshal.ReadIntPtr(p, i * nint.Size))!).ToArray();
+		} finally {
+			LocalFree(p);
+		}
+	}
+
+	// the shader cache is done when its log says remaining=0 - the last "remaining=" line is what counts
+	static void T_ShaderLogRemainingIsRead()
+	{
+		using var f = new FakeMo2();
+		var log = Path.Combine(f.Root, "BottledShaders.log");
+		File.WriteAllText(log, "[2026-10-26 17:50:34.017] [info] [ShaderTiming] x remaining=2707\n[17:51:00.000] [info] [ShaderTiming] y remaining=0\n");
+		Equal(0, InGame.LastRemaining(log), "the last line wins");
+		File.WriteAllText(log, "[info] Shader compilation started\n");
+		Equal(null, InGame.LastRemaining(log), "no ShaderTiming lines = unknown (only then may quiet end it)");
+	}
+
+	// an emptied setting is not set (its default applies); a relative folder is refused (it would follow the starting folder)
+	static void T_EmptySettingsAndRelativePaths()
+	{
+		var o = new JsonObject { ["args"] = "", ["image"] = "  ", ["executable"] = "X" };
+		Equal(null, Setup.Str(o, "args"), "an emptied setting counts as not set");
+		Equal(null, new StepSettings(o).Str("image"), "spaces only, too");
+		Equal("X", Setup.Str(o, "executable"), "a real value stays");
+		using var f = new FakeMo2();
+		f.WriteSetup(("pandora", new JsonObject { ["output_mod"] = "Output A", ["output_dir"] = @"scratch\Pandora" }));
+		var s = Setup.Load(f.SetupFile);
+		Check(s.Problems().Any(p => p.Contains("whole path", StringComparison.Ordinal)), "a relative output folder is a problem: " + string.Join("; ", s.Problems()));
+	}
+
+	// the profile's own save folder (sLocalSavePath in its Skyrim.ini when it keeps its own INIs)
+	static void T_SavesFollowTheProfilesSavePath()
+	{
+		using var f = new FakeMo2();
+		var p = ProfileOf(f);
+		File.WriteAllText(Path.Combine(p.Dir, "settings.ini"), "[General]\r\nLocalSettings=true\r\n");
+		File.WriteAllText(Path.Combine(p.Dir, "Skyrim.ini"), "[General]\r\nsLocalSavePath=Saves\\MO2 Test\\\r\n");
+		Check(InGame.SavesDir(p).EndsWith(@"Skyrim Special Edition\Saves\MO2 Test", StringComparison.OrdinalIgnoreCase), "the profile's own save path: " + InGame.SavesDir(p));
+		File.WriteAllText(Path.Combine(p.Dir, "Skyrim.ini"), "[General]\r\n");
+		Check(InGame.SavesDir(p).EndsWith(@"Skyrim Special Edition\Saves", StringComparison.OrdinalIgnoreCase), "none set: the game's own Saves");
+	}
+
+	// a global instance (%LOCALAPPDATA%\ModOrganizer\<name>) is named on MO2's command line; a portable one is not
+	static void T_GlobalInstanceIsNamed()
+	{
+		using var f = new FakeMo2();
+		Equal(null, Mo2Instance.Load(f.Exe, f.Instance).GlobalName, "portable: no -i");
 	}
 
 	sealed class CrashForTest : Exception;
@@ -865,7 +1032,7 @@ public static class Program
 			var j = Journal.Interrupted(Runner.RunsDir(f.Data));
 			Check(j is { NeedsRestore: true }, "the run is offered for Restore");
 			File.SetAttributes(plugins, FileAttributes.Normal);
-			Equal(RunState.Restored, Runner.Restore(j!, f.Data).State, "Restore works once the file is free");
+			Equal(RunState.Restored, Runner.Restore(j!).State, "Restore works once the file is free");
 			Check(!f.Text("plugins.txt").Contains("Stray.esp", StringComparison.Ordinal), "plugins.txt as before");
 			Check(Journal.Interrupted(Runner.RunsDir(f.Data)) == null, "nothing left to restore");
 		} finally {
