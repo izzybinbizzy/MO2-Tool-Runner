@@ -246,7 +246,7 @@ public sealed class SynthesisStep : IStep
 						throw new StepFailedException($"Synthesis: {why} - it wrote no Synthesis.esp (its log: {runLog})");
 					}
 					return Waits.Poll.Wait;
-				}, a_progress: () => Uia.TextOf(w, 4000));
+				}, a_progress: () => Uia.TextOf(w, int.MaxValue));
 			} finally {
 				StepKit.CloseTool(a_ctx, image);
 			}

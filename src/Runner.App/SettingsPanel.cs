@@ -186,12 +186,17 @@ public static class SettingsPanel
 				try {
 					Theme.EnsureFolder();
 				} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) {
-					err = e.Message;
+					err = "The Themes folder could not be made: " + e.Message;
 				}
-				return (Theme.List(), err);
+				// an unreadable folder still shows the built-in look, with why (the fourth review, L8)
+				try {
+					return (Theme.List(), err);
+				} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) {
+					return (new List<(string Name, string? File)> { (Theme.Default, null) }, "The Themes folder could not be read: " + e.Message);
+				}
 			});
 			if (error != null) {
-				themeNote.Text = "The Themes folder could not be made: " + error;
+				themeNote.Text = error;
 			}
 			filling = true;
 			themes.ItemsSource = list.Select(t => t.Name).ToList();
@@ -277,11 +282,12 @@ public static class SettingsPanel
 		async Task ShowSchedule()
 		{
 			try {
-				var when = await Task.Run(() => Schedule.Read(current));
-				schedState.Text = when == null ? "No run is scheduled for this setup." :
+				var (when, gone) = await Task.Run(() => (Schedule.Read(current), Schedule.RemoveOrphans()));
+				schedState.Text = (when == null ? "No run is scheduled for this setup." :
 					when.Daily ? $"Scheduled: every day at {when.At.ToString("HH:mm", InvariantCulture)}." :
 					when.At > DateTime.Now ? $"Scheduled: once, {when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}." :
-					$"Its one run time ({when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}) has passed.";
+					$"Its one run time ({when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}) has passed.") +
+					(gone.Count > 0 ? $" Removed {gone.Count} scheduled run(s) whose setup file was moved or deleted." : "");
 				if (when != null) {
 					schedTime.Text = when.At.ToString("HH:mm", InvariantCulture);
 					schedDaily.IsChecked = when.Daily;

@@ -457,6 +457,69 @@ public static class Program
 		Equal(changed, ShaderStep.Fingerprint(mo2, c, p), "a rebuilt plugin or mesh leaves it as it was");
 	}
 
+	// the fourth review, M1: his Bottled profile keeps a cache for each of two shader mods - switching the tick between them, or
+	// updating one, must leave the other's cache current
+	static void T_TwoShaderCachesStayApart()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		foreach (var m in new[] { "Shader A", "Shader B" }) {
+			var hlsl = Path.Combine(f.Mods, m, "Shaders", "Common.hlsl");
+			Directory.CreateDirectory(Path.GetDirectoryName(hlsl)!);
+			File.WriteAllText(hlsl, m + " v1");
+		}
+		var ml = Path.Combine(f.ProfileDir, "modlist.txt");
+		var baseList = f.Text("modlist.txt");
+		var a = new ShaderStep.Cache("Shader A", "Cache A", null);
+		var b = new ShaderStep.Cache("Shader B", "Cache B", null);
+		var notA = ShaderStep.OtherCacheMods([a, b], a);
+		var p = ProfileOf(f);
+		File.WriteAllText(ml, "+Shader A\r\n-Shader B\r\n" + baseList);
+		var aTicked = ShaderStep.Fingerprint(mo2, a, p, notA);
+		File.WriteAllText(ml, "-Shader A\r\n+Shader B\r\n" + baseList);
+		Equal(aTicked, ShaderStep.Fingerprint(mo2, a, p, notA), "the tick moved to the other shader mod: A's cache is still current");
+		File.WriteAllText(Path.Combine(f.Mods, "Shader B", "Shaders", "Common.hlsl"), "Shader B v2");
+		Equal(aTicked, ShaderStep.Fingerprint(mo2, a, p, notA), "the other shader mod updated: A's cache is still current");
+		File.WriteAllText(Path.Combine(f.Mods, "Shader A", "Shaders", "Common.hlsl"), "Shader A v2");
+		Check(aTicked != ShaderStep.Fingerprint(mo2, a, p, notA), "its own shader files changed (ticked or not): A's cache is stale");
+	}
+
+	// the fourth review, H1: the save to play never starts from an old clean save when the player played after it
+	static void T_SaveToPlayStartsFromTheRightSave()
+	{
+		var mon = new DateTime(2026, 10, 26, 3, 0, 0, DateTimeKind.Utc);
+		var thu = mon.AddDays(3);
+		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom("MO2 Tool Runner - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
+		Equal("Named", InGame.PlaySaveFrom(null, "Named", mon, "Save9", thu).Save, "then the one the setup names");
+		Equal("Save9", InGame.PlaySaveFrom(null, null, mon, "Save9", thu).Save, "an old clean save loses to newer progress of the player's");
+		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
+		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
+		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
+	}
+
+	// the fourth review, M2: a patcher's CPU counts per child process - one that ends never makes it fall, a new one counts whole
+	static void T_ChildCpuGain()
+	{
+		var before = new Dictionary<int, TimeSpan> { [1] = TimeSpan.FromSeconds(5), [2] = TimeSpan.FromSeconds(9) };
+		var now = new Dictionary<int, TimeSpan> { [1] = TimeSpan.FromSeconds(5.1), [3] = TimeSpan.FromSeconds(2) };
+		Equal(TimeSpan.FromSeconds(2.1), Procs.CpuGain(before, now), "child 2 ended (not a loss), child 3 is new (whole), child 1 +0.1 s");
+		Equal(TimeSpan.Zero, Procs.CpuGain(now, now), "nothing used: no gain");
+	}
+
+	// the fourth review, L5 / M4 / L6: a form id read either way, a setup read from bytes, a task's own setup file
+	static void T_SmallReadsFromTheReview()
+	{
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create("0x3B")), "0x is hex");
+		Equal("0xFF000801", DevBench.FormKey(JsonValue.Create("FF000801")), "an 8-digit id is hex");
+		Equal("0x0000007B", DevBench.FormKey(JsonValue.Create("123")), "a plain number is decimal");
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
+		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
+		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
+		var xml = Schedule.TaskXml(@"C:\R\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
+		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
+		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
+	}
+
 	static void T_CheckBoxPixels()
 	{
 		var px = new int[20 * 3];
@@ -1329,6 +1392,16 @@ public static class Program
 			Schedule.RemoveTask(name);
 		}
 		Equal(null, Schedule.ReadTask(name), "and it is gone again");
+		// a task whose setup file is gone is found and removed; a cmd task of ours with no setup is left alone
+		const string orphan = "MO2 Tool Runner - zz offline orphan";
+		var missing = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner missing " + Guid.NewGuid().ToString("N") + ".json");
+		try {
+			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
+			Check(Schedule.RemoveOrphans().Contains(orphan), "an orphaned task is removed");
+			Equal(null, Schedule.ReadTask(orphan), "and Windows no longer has it");
+		} finally {
+			Schedule.RemoveTask(orphan);
+		}
 	}
 
 	// his lesson 2026-10-27 (checklist 271): the mods a LOD step builds from are found off their plugins' record groups, each with

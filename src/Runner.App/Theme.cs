@@ -85,7 +85,8 @@ public static class Theme
 		return outList;
 	}
 
-	// at start: the theme picked last time (gone or broken = the built-in one)
+	// at start: the theme picked last time (gone or broken = the built-in one). It runs before the window is made, so nothing a
+	// theme does may escape here - one that did left the program with no window, every start (the fourth review, H2)
 	public static void ApplySaved()
 	{
 		try {
@@ -93,7 +94,7 @@ public static class Theme
 			if (name != Default) {
 				Apply(name, false);
 			}
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) {
+		} catch (Exception e) when (e is not OutOfMemoryException) {
 			Reset();
 		}
 	}
@@ -286,7 +287,10 @@ public static class Theme
 					if (Application.Current.MainWindow != null) {
 						Application.Current.MainWindow.Icon = img;
 					}
-				} catch (Exception e) when (e is IOException or UriFormatException or NotSupportedException or ArgumentException) {
+				} catch (Exception e) when (e is IOException or FormatException or NotSupportedException or ArgumentException or
+				                            InvalidOperationException or System.Runtime.InteropServices.ExternalException) {
+					// a damaged picture throws FileFormatException (a FormatException) or a COM error from Windows' decoder - it is only
+					// an icon, so it never stops the theme (the fourth review, H2)
 					a_problems.Add($"icon: \"{icon}\" does not open ({e.Message})");
 				}
 			}

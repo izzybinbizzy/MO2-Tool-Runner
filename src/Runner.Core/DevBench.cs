@@ -61,7 +61,13 @@ public sealed class DevBench(string a_baseUrl = "http://127.0.0.1:8920/api/tool/
 			return $"0x{n:X8}";
 		}
 		var s = v?.ToString().Trim();
-		return s != null && long.TryParse(s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s, System.Globalization.NumberStyles.HexNumber, InvariantCulture, out var h)
+		if (string.IsNullOrEmpty(s)) {
+			return null;
+		}
+		// "0x..." and an 8-digit padded id are hex; a plain number with no hex letter is decimal (the fourth review, L5)
+		var hex = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Length == 8 || s.Any(char.IsAsciiLetter);
+		var digits = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s;
+		return long.TryParse(digits, hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.None, InvariantCulture, out var h)
 			? $"0x{h:X8}" : null;
 	}
 

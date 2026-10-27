@@ -15,9 +15,11 @@ public static class LodGuide
 		["GRAS"] = "grass", ["TREE"] = "trees", ["LTEX"] = "landscape textures", ["LAND"] = "landscape",
 	};
 
-	// the kinds each LOD step builds from
+	// the kinds each LOD step builds from: where grass grows is a landscape texture's own grass list (LTEX), so a mod that only
+	// edits those changes the grass too (the fourth review, L4). A cell's landscape (LAND) is left out of the grass steps: nearly
+	// every worldspace mod has one, and listing them all would hide the grass mods
 	static readonly Dictionary<string, string[]> ForStep = new(StringComparer.Ordinal) {
-		["grass"] = ["GRAS"], ["texgen"] = ["GRAS", "TREE"], ["dyndolod"] = ["GRAS", "TREE"], ["anvillod"] = ["GRAS", "TREE"],
+		["grass"] = ["GRAS", "LTEX"], ["texgen"] = ["GRAS", "TREE"], ["dyndolod"] = ["GRAS", "LTEX", "TREE"], ["anvillod"] = ["GRAS", "LTEX", "TREE"],
 		["treelodgen"] = ["TREE"], ["xlodgen"] = ["LTEX", "LAND"],
 	};
 

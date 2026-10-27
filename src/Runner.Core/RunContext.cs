@@ -158,8 +158,9 @@ public static class Waits
 	// the offline tests only: a short idle limit
 	public static TimeSpan? IdleForTests { get; set; }
 
-	// a_progress: for a tool driven through its window - what its window says; a change counts as work and its CPU does not
-	// (a window drawing itself uses CPU while the tool does nothing - Synthesis sat 4 min on its main screen, 2026-10-27)
+	// a_progress: for a tool driven through its window - what its window says; a change counts as work, and so does CPU its CHILD
+	// processes use (a long patcher shows nothing new for minutes - the fourth review, M2), never the window process's own (a
+	// window drawing itself uses CPU while the tool does nothing - Synthesis sat 4 min on its main screen, 2026-10-27)
 	public static void Tool(RunContext a_ctx, string a_step, Process a_proc, TimeSpan a_deadline, Func<Poll> a_poll,
 		Func<bool>? a_onIdle = null, TimeSpan? a_every = null, Func<string>? a_progress = null)
 	{
@@ -168,6 +169,7 @@ public static class Waits
 		var sw = Stopwatch.StartNew();
 		var idleLimit = IdleForTests ?? TimeSpan.FromMinutes(Math.Max(1, a_ctx.Setup.IdleMinutes));
 		var lastCpu = TimeSpan.Zero;
+		IReadOnlyDictionary<int, TimeSpan> lastChildren = new Dictionary<int, TimeSpan>();
 		var lastBusy = sw.Elapsed;
 		var lastSample = TimeSpan.FromSeconds(-10);
 		while (true) {
@@ -194,6 +196,11 @@ public static class Waits
 							lastSeen = seen;
 							lastBusy = sw.Elapsed;
 						}
+						var children = Procs.ChildCpu(a_proc.Id);
+						if (Procs.CpuGain(lastChildren, children) > TimeSpan.FromMilliseconds(300)) {
+							lastBusy = sw.Elapsed;
+						}
+						lastChildren = children;
 					} else {
 						var cpu = Procs.TreeCpu(a_proc.Id);
 						if (cpu - lastCpu > TimeSpan.FromMilliseconds(300)) {

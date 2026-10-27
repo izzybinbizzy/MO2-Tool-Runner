@@ -260,6 +260,14 @@ public static class Procs
 		return total;
 	}
 
+	// each CHILD process's CPU (the root left out: a tool's window drawing itself is not work) - read per process, so a child
+	// that ends never makes the total fall
+	public static Dictionary<int, TimeSpan> ChildCpu(int a_root) => Tree(a_root).Where(p => p != a_root).ToDictionary(p => p, Cpu);
+
+	// how much CPU the children used since the last reading (a new child counts whole)
+	public static TimeSpan CpuGain(IReadOnlyDictionary<int, TimeSpan> a_before, IReadOnlyDictionary<int, TimeSpan> a_now) =>
+		a_now.Aggregate(TimeSpan.Zero, (sum, kv) => sum + (kv.Value - a_before.GetValueOrDefault(kv.Key) is { Ticks: > 0 } d ? d : TimeSpan.Zero));
+
 	public static void KillTree(int a_root)
 	{
 		try {

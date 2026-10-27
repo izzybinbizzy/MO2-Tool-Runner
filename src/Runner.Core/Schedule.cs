@@ -114,12 +114,62 @@ public static partial class Schedule
 		}
 	}
 
+	// the setup file a task of ours runs (its "run --setup "<file>"" arguments), null when it is not one of ours
+	public static string? SetupOf(string a_xml)
+	{
+		var doc = XDocument.Parse(Declaration().Replace(a_xml, ""));
+		var args = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value;
+		var m = args == null ? null : SetupArg().Match(args);
+		return m is { Success: true } ? m.Groups["f"].Value : null;
+	}
+
+	[GeneratedRegex("^run --setup \"(?<f>[^\"]+)\"$")]
+	private static partial Regex SetupArg();
+
+	// tasks of ours whose setup file is gone (moved, renamed or deleted - their task names came from the old path, so the window
+	// could no longer find them, and Windows would start a run on a missing file): removed, their names returned (the fourth
+	// review, L6)
+	public static List<string> RemoveOrphans()
+	{
+		var removed = new List<string>();
+		var (code, csv) = Schtasks("/Query", "/FO", "CSV", "/NH");
+		if (code != 0) {
+			return removed;
+		}
+		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith("\"\\MO2 Tool Runner - ", StringComparison.Ordinal))
+			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().ToList();
+		foreach (var n in names) {
+			try {
+				var (c, xml) = Schtasks("/Query", "/TN", n, "/XML");
+				// a whole path only: a relative one says nothing about whether the file is there
+				if (c == 0 && SetupOf(xml) is { } file && Path.IsPathFullyQualified(file) && !File.Exists(file)) {
+					RemoveTask(n);
+					removed.Add(n);
+				}
+			} catch (Exception e) when (e is System.Xml.XmlException or InvalidOperationException or ArgumentException) {
+				// a task that does not read is left alone
+			}
+		}
+		return removed;
+	}
+
+	// schtasks writes in the console's code page, not UTF-8 (a localized Windows' messages came out garbled - the fourth review, L6)
+	static Encoding ConsoleText()
+	{
+		try {
+			Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+			return Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+		} catch (Exception e) when (e is ArgumentException or NotSupportedException) {
+			return Encoding.UTF8;
+		}
+	}
+
 	// Windows' own schtasks, no window, answered within 30 s
 	static (int Code, string Text) Schtasks(params string[] a_args)
 	{
 		var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe")) {
 			UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-			StandardOutputEncoding = Encoding.UTF8,
+			StandardOutputEncoding = ConsoleText(), StandardErrorEncoding = ConsoleText(),
 		};
 		foreach (var a in a_args) {
 			psi.ArgumentList.Add(a);

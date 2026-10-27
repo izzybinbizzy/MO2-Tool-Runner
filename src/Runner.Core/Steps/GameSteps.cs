@@ -259,7 +259,9 @@ public sealed class ShaderStep : IStep
 	// 2026-10-27, "can you confirm rebuilding another tool wont cause shaders to need to be rebuilt")
 	public static readonly string[] ShaderFileKinds = [".hlsl", ".hlsli", ".ini", ".json", ".fx", ".fxh", ".csh", ".vsh", ".psh"];
 
-	public static string Fingerprint(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null)
+	// a_otherCaches: the mods of the setup's OTHER caches (shader, output and settings mod) - left out, so switching the tick
+	// between two shader mods or updating one never makes the other's cache stale (the fourth review, M1)
+	public static string Fingerprint(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null, IReadOnlyCollection<string>? a_otherCaches = null)
 	{
 		using var sha = SHA256.Create();
 		void Add(string a_file)
@@ -271,6 +273,20 @@ public sealed class ShaderStep : IStep
 			sha.TransformBlock(name, 0, name.Length, null, 0);
 			var data = File.ReadAllBytes(a_file);
 			sha.TransformBlock(data, 0, data.Length, null, 0);
+		}
+		void AddShaders(string a_mod)
+		{
+			var shaders = Path.Combine(a_mo2.ModDir(a_mod), "Shaders");
+			if (!Directory.Exists(shaders)) {
+				return;
+			}
+			foreach (var f in Directory.EnumerateFiles(shaders, "*", SearchOption.AllDirectories)
+				         .Where(f => ShaderFileKinds.Contains(Path.GetExtension(f).ToLowerInvariant())).Order(StringComparer.OrdinalIgnoreCase)) {
+				var rel = System.Text.Encoding.UTF8.GetBytes(a_mod + "|" + Path.GetRelativePath(shaders, f).ToLowerInvariant());
+				sha.TransformBlock(rel, 0, rel.Length, null, 0);
+				var data = File.ReadAllBytes(f);
+				sha.TransformBlock(data, 0, data.Length, null, 0);
+			}
 		}
 		var dir = a_mo2.ModDir(a_c.ShaderMod);
 		if (Directory.Exists(dir)) {
@@ -288,19 +304,15 @@ public sealed class ShaderStep : IStep
 			}
 		}
 		if (a_profile != null) {
-			foreach (var mod in a_profile.States().Where(kv => kv.Value == '+' && !string.Equals(kv.Key, a_c.OutputMod, StringComparison.OrdinalIgnoreCase))
+			// the cache's own shader mod counts ticked or not: the compile ticks it, whatever the player has ticked today
+			AddShaders(a_c.ShaderMod);
+			var skip = new HashSet<string>(a_otherCaches ?? [], StringComparer.OrdinalIgnoreCase) { a_c.ShaderMod, a_c.OutputMod };
+			if (a_c.SettingsMod != null) {
+				skip.Add(a_c.SettingsMod);
+			}
+			foreach (var mod in a_profile.States().Where(kv => kv.Value == '+' && !skip.Contains(kv.Key))
 				         .Select(kv => kv.Key).Order(StringComparer.OrdinalIgnoreCase)) {
-				var shaders = Path.Combine(a_mo2.ModDir(mod), "Shaders");
-				if (!Directory.Exists(shaders)) {
-					continue;
-				}
-				foreach (var f in Directory.EnumerateFiles(shaders, "*", SearchOption.AllDirectories)
-					         .Where(f => ShaderFileKinds.Contains(Path.GetExtension(f).ToLowerInvariant())).Order(StringComparer.OrdinalIgnoreCase)) {
-					var rel = System.Text.Encoding.UTF8.GetBytes(mod + "|" + Path.GetRelativePath(shaders, f).ToLowerInvariant());
-					sha.TransformBlock(rel, 0, rel.Length, null, 0);
-					var data = File.ReadAllBytes(f);
-					sha.TransformBlock(data, 0, data.Length, null, 0);
-				}
+				AddShaders(mod);
 			}
 			var exe = Path.Combine(a_mo2.GameDir, "SkyrimSE.exe");
 			if (File.Exists(exe)) {
@@ -314,7 +326,7 @@ public sealed class ShaderStep : IStep
 
 	static string StampFile(Mo2Instance a_mo2, Cache a_c) => Path.Combine(a_mo2.ModDir(a_c.OutputMod), "MO2 Tool Runner cache.json");
 
-	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null)
+	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null, IReadOnlyCollection<string>? a_otherCaches = null)
 	{
 		var stamp = StampFile(a_mo2, a_c);
 		if (!File.Exists(stamp) || Files.CountFiles(Path.Combine(a_mo2.ModDir(a_c.OutputMod), "ShaderCache")) < 50) {
@@ -323,7 +335,7 @@ public sealed class ShaderStep : IStep
 		try {
 			var o = JsonNode.Parse(Files.ReadSharedText(stamp)) as JsonObject;
 			// a cache that ended by quiet (the log never said it was done) is built again
-			return o?["verified"]?.GetValue<bool>() != false && o?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c, a_profile);
+			return o?["verified"]?.GetValue<bool>() != false && o?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c, a_profile, a_otherCaches);
 		} catch (System.Text.Json.JsonException) {
 			return false;
 		}
@@ -344,7 +356,8 @@ public sealed class ShaderStep : IStep
 				a_ctx.Log.Detail($"the {c.ShaderMod} cache: not rebuilt (setup: never)");
 				continue;
 			}
-			if (mode == ShaderRebuild.WhenChanged && UpToDate(a_ctx.Mo2, c, a_ctx.Profile)) {
+			var theirs = OtherCacheMods(Caches(a_s), c);
+			if (mode == ShaderRebuild.WhenChanged && UpToDate(a_ctx.Mo2, c, a_ctx.Profile, theirs)) {
 				a_ctx.Log.Detail($"the {c.ShaderMod} cache is current (nothing it depends on changed) - not rebuilt");
 				continue;
 			}
@@ -360,7 +373,7 @@ public sealed class ShaderStep : IStep
 			var offList = others.Select(o => o.ShaderMod).Concat(others.Select(o => o.OutputMod)).Concat(others.Where(o => o.SettingsMod != null).Select(o => o.SettingsMod!))
 				.Append(c.OutputMod).Concat(a_s.List("disable_during")).ToList();
 			a_ctx.Log.Detail($"the {c.ShaderMod} cache -> {c.OutputMod}");
-			Compile(a_ctx, a_s, c, on.Concat(a_s.List("enable_during")).ToList(), offList);
+			Compile(a_ctx, a_s, c, on.Concat(a_s.List("enable_during")).ToList(), offList, theirs);
 			if (running.Contains(c.ShaderMod)) {
 				a_ctx.SetAfter(c.OutputMod);
 			}
@@ -371,7 +384,10 @@ public sealed class ShaderStep : IStep
 		}
 	}
 
-	static void Compile(RunContext a_ctx, StepSettings a_s, Cache a_c, List<string> a_on, List<string> a_off)
+	public static List<string> OtherCacheMods(IEnumerable<Cache> a_all, Cache a_c) => a_all.Where(o => o != a_c)
+		.SelectMany(o => new[] { o.ShaderMod, o.OutputMod, o.SettingsMod }).OfType<string>().ToList();
+
+	static void Compile(RunContext a_ctx, StepSettings a_s, Cache a_c, List<string> a_on, List<string> a_off, List<string> a_otherCaches)
 	{
 		var owCache = Path.Combine(a_ctx.Mo2.OverwriteDir, "ShaderCache");
 		if (Directory.Exists(owCache) && Directory.EnumerateFileSystemEntries(owCache).Any()) {
@@ -474,7 +490,7 @@ public sealed class ShaderStep : IStep
 			StepKit.MarkReplaced(a_ctx, a_c.OutputMod);
 		}
 		// stamped against the profile as it is put back, the state the next freshness check reads - never the compile's own switches
-		Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c, a_ctx.Profile), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
+		Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c, a_ctx.Profile, a_otherCaches), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
 			["verified"] = verified }.ToJsonString());
 		a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 	}
