@@ -47,6 +47,27 @@ public static class Plugins
 		return outList;
 	}
 
+	// the record types a plugin holds: the labels of its top-level groups, read off their headers only (the file is not parsed)
+	public static HashSet<string> TopGroups(string a_path)
+	{
+		var outSet = new HashSet<string>(StringComparer.Ordinal);
+		using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+		var head = new byte[24];
+		if (fs.Read(head, 0, 24) < 24 || Encoding.ASCII.GetString(head, 0, 4) != "TES4") {
+			return outSet;
+		}
+		fs.Seek(BitConverter.ToUInt32(head, 4), SeekOrigin.Current);
+		while (fs.Position + 24 <= fs.Length && fs.Read(head, 0, 24) == 24) {
+			var size = BitConverter.ToUInt32(head, 4);
+			if (Encoding.ASCII.GetString(head, 0, 4) != "GRUP" || size < 24) {
+				break;
+			}
+			outSet.Add(Encoding.ASCII.GetString(head, 8, 4));
+			fs.Seek(size - 24, SeekOrigin.Current);
+		}
+		return outSet;
+	}
+
 	// ESM-flagged (TES4 record flag bit 0) or an .esm file
 	public static bool IsMaster(string a_path)
 	{

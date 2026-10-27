@@ -65,6 +65,56 @@ public static class SettingsPanel
 		["synthesis"] = [("build_min", JsonValueKind.Number, "15")],
 	};
 
+	// the mods a LOD step builds from and the LOD tool's own help, each a page to open (the runner never guesses their values)
+	static void LodBlock(MainWindow a_w, Setup a_setup, string a_step, Panel a_host)
+	{
+		a_host.Children.Add(new TextBlock { Text = "Before you set it up: LOD can come out too bright, too dark or missing when its settings do not match the mods it is " +
+			"built from. Each of those mods' own pages (and the LOD tool's help) says what it needs - the runner never guesses another author's values.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 6) });
+		static Button Link(MainWindow a_win, string a_text, string a_url)
+		{
+			var b = new Button { Content = a_text, Style = (Style)a_win.FindResource("Ghost"), Margin = new Thickness(10, 0, 0, 0), ToolTip = a_url };
+			b.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(a_url) { UseShellExecute = true });
+			return b;
+		}
+		var docs = new WrapPanel { Margin = new Thickness(-10, 0, 0, 6) };
+		foreach (var (title, url) in LodGuide.Docs.GetValueOrDefault(a_step, [])) {
+			docs.Children.Add(Link(a_w, title, url));
+		}
+		a_host.Children.Add(docs);
+		var rows = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+		var find = new Button { Content = "Find the mods it is built from", Style = (Style)a_w.FindResource("Ghost"), HorizontalAlignment = HorizontalAlignment.Left };
+		find.Click += async (_, _) => {
+			find.IsEnabled = false;
+			rows.Children.Clear();
+			rows.Children.Add(new TextBlock { Text = "Reading the profile's plugins ...", Style = (Style)a_w.FindResource("MutedText") });
+			try {
+				var hits = await Task.Run(() => LodGuide.Find(a_setup, Mo2Instance.Load(a_setup.Mo2Exe, a_setup.Mo2Instance), a_step));
+				rows.Children.Clear();
+				rows.Children.Add(new TextBlock { Text = hits.Count == 0 ? "No ticked mod changes what it builds from." :
+					$"{hits.Count} ticked mod(s) change what it builds from - check each one's page for its LOD settings:", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 4) });
+				foreach (var h in hits) {
+					var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+					if (h.Page != null) {
+						var open = Link(a_w, "Open its page", h.Page);
+						DockPanel.SetDock(open, Dock.Right);
+						row.Children.Add(open);
+					}
+					row.Children.Add(new TextBlock { Text = $"{h.Mod} ({h.What}){(h.Page == null ? " - no Nexus page recorded" : "")}", TextWrapping = TextWrapping.Wrap,
+						VerticalAlignment = VerticalAlignment.Center });
+					rows.Children.Add(row);
+				}
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) {
+				rows.Children.Clear();
+				rows.Children.Add(new TextBlock { Text = "Could not read the profile: " + e.Message, TextWrapping = TextWrapping.Wrap });
+			} finally {
+				find.IsEnabled = true;
+			}
+		};
+		a_host.Children.Add(find);
+		a_host.Children.Add(rows);
+	}
+
 	static string Label(string a_key) => Labels.TryGetValue(a_key, out var l) ? l : char.ToUpperInvariant(a_key[0]) + a_key[1..].Replace('_', ' ');
 
 	public static FrameworkElement Build(MainWindow a_w, MainViewModel a_vm)
@@ -96,6 +146,11 @@ public static class SettingsPanel
 		Field(stack, apply, "Alert: Windows notification", alerts, "notification", JsonValueKind.True);
 		Field(stack, apply, "Alert: sound", alerts, "sound", JsonValueKind.True);
 		Field(stack, apply, "Alert: flash the taskbar button", alerts, "flash", JsonValueKind.True);
+		// his checklist 270 ("all 3."): the preview before a run, and only the last few runs' backups kept
+		work["previewBeforeRun"] ??= true;
+		work["keepBackups"] ??= 5;
+		Field(stack, apply, "Show what a run will do before it starts", work, "previewBeforeRun", JsonValueKind.True);
+		Field(stack, apply, "Backups kept: the last runs' (0 = all; older are deleted)", work, "keepBackups", JsonValueKind.Number);
 		Field(stack, apply, "Commands before a run (one per line, each must succeed)", work, "beforeRun", JsonValueKind.Array);
 		Field(stack, apply, "Commands after a run (one per line)", work, "afterRun", JsonValueKind.Array);
 
@@ -138,6 +193,68 @@ public static class SettingsPanel
 		stack.Children.Add(updNote);
 		stack.Children.Add(updCheck);
 		stack.Children.Add(updRows);
+
+		// his checklist 270: a run at a set time, nothing to click (a Windows scheduled task of the player's own)
+		Head("A RUN AT A SET TIME");
+		stack.Children.Add(new TextBlock { Text = "Windows starts this setup's run at the time below - only while you are signed in, your PC on. " +
+			"Nothing is changed if the game or another run is going then (the reason shows here next time). Mod Organizer is closed for the run.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+		var schedState = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+		var schedRow = new StackPanel { Orientation = Orientation.Horizontal };
+		var schedTime = new TextBox { Text = "03:00", Width = 70, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+		System.Windows.Automation.AutomationProperties.SetName(schedTime, "Run time (hours:minutes)");
+		var schedDaily = new CheckBox { Content = "every day", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+		var schedSet = new Button { Content = "Schedule it", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };
+		var schedOff = new Button { Content = "Remove it", Style = (Style)a_w.FindResource("Ghost") };
+		schedRow.Children.Add(schedTime);
+		schedRow.Children.Add(schedDaily);
+		schedRow.Children.Add(schedSet);
+		schedRow.Children.Add(schedOff);
+		stack.Children.Add(schedState);
+		stack.Children.Add(schedRow);
+		var current = a_vm.Setup!;
+		async Task ShowSchedule()
+		{
+			try {
+				var when = await Task.Run(() => Schedule.Read(current));
+				schedState.Text = when == null ? "No run is scheduled for this setup." :
+					when.Daily ? $"Scheduled: every day at {when.At.ToString("HH:mm", InvariantCulture)}." :
+					when.At > DateTime.Now ? $"Scheduled: once, {when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}." :
+					$"Its one run time ({when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}) has passed.";
+				if (when != null) {
+					schedTime.Text = when.At.ToString("HH:mm", InvariantCulture);
+					schedDaily.IsChecked = when.Daily;
+				}
+			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception or System.Xml.XmlException) {
+				schedState.Text = "Could not read the scheduled run: " + e.Message;
+			}
+		}
+		_ = ShowSchedule();
+		schedSet.Click += async (_, _) => {
+			if (!TimeSpan.TryParseExact(schedTime.Text.Trim(), [@"h\:mm", @"hh\:mm"], InvariantCulture, out var t) || t >= TimeSpan.FromDays(1)) {
+				schedState.Text = "Write the time as hours:minutes, e.g. 03:00 or 22:30.";
+				return;
+			}
+			var exe = Environment.ProcessPath ?? "";
+			var daily = schedDaily.IsChecked == true;
+			schedSet.IsEnabled = false;
+			try {
+				await Task.Run(() => Schedule.Set(current, exe, new Schedule.RunTime(Schedule.Next(t, DateTime.Now), daily)));
+				await ShowSchedule();
+			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException) {
+				schedState.Text = "Not scheduled: " + e.Message;
+			} finally {
+				schedSet.IsEnabled = true;
+			}
+		};
+		schedOff.Click += async (_, _) => {
+			try {
+				await Task.Run(() => Schedule.Remove(current));
+				await ShowSchedule();
+			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception) {
+				schedState.Text = "Not removed: " + e.Message;
+			}
+		};
 
 		Head("A STEP");
 		var steps = (work["steps"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
@@ -200,6 +317,10 @@ public static class SettingsPanel
 				};
 				stepHost.Children.Add(status);
 				stepHost.Children.Add(learn);
+			}
+			// his lesson 2026-10-27 (checklist 271): LOD settings depend on the mods it is built from - their own pages say which
+			if (LodGuide.Applies(stepKey)) {
+				LodBlock(a_w, a_vm.Setup!, stepKey, stepHost);
 			}
 			foreach (var (key, kind, def) in Known.GetValueOrDefault(stepKey, []).Append((Key: "deadline_min", Kind: JsonValueKind.Number, Default: "the step's own"))
 				         .Where(k => !o.ContainsKey(k.Key))) {

@@ -24,6 +24,7 @@ public partial class MainWindow : Window
 		InitializeComponent();
 		DataContext = _vm;
 		_vm.Alert += Notify;
+		_vm.ConfirmRun = a_text => Ask.Show(this, "What this run will do", a_text, "Start the run", "Not now");
 		_vm.LogChanged += OnLog;
 		_timer.Tick += async (_, _) => {
 			await _vm.PollAsync();
@@ -102,7 +103,7 @@ public partial class MainWindow : Window
 			_vm.Say($"{a_row.Name} is switched off in this setup - tick it first.", "bad");
 			return;
 		}
-		_vm.StartWith(a_how == "only" ? a_row.Key : null, a_how == "from" ? a_row.Key : null, a_how == "until" ? a_row.Key : null);
+		_ = _vm.StartWith(a_how == "only" ? a_row.Key : null, a_how == "from" ? a_row.Key : null, a_how == "until" ? a_row.Key : null);
 	}
 
 	void Up_Click(object a_s, RoutedEventArgs a_e) => Move(RowOf(a_s), -1);
@@ -160,6 +161,22 @@ public partial class MainWindow : Window
 	void Shade_MouseDown(object a_s, MouseButtonEventArgs a_e) => CloseDrawer();
 
 	public void CloseDrawerNow() => CloseDrawer();
+
+	// the off-screen pictures only: the open drawer scrolled to a_y
+	public void ScrollDrawer(double a_y)
+	{
+		static ScrollViewer? Find(DependencyObject a_d)
+		{
+			for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(a_d); ++i) {
+				var c = System.Windows.Media.VisualTreeHelper.GetChild(a_d, i);
+				if ((c as ScrollViewer ?? Find(c)) is { } s) {
+					return s;
+				}
+			}
+			return null;
+		}
+		Find(DrawerBody)?.ScrollToVerticalOffset(a_y);
+	}
 
 	void CloseDrawer()
 	{
@@ -305,15 +322,23 @@ public static class Ask
 {
 	public static bool Show(Window a_owner, string a_title, string a_text, string a_yes, string a_no)
 	{
+		var result = false;
+		var w = Make(a_owner, a_title, a_text, a_yes, a_no, a_yesPressed => result = a_yesPressed);
+		w.ShowDialog();
+		return result;
+	}
+
+	// the box itself (the off-screen pictures draw it without waiting on it)
+	public static Window Make(Window a_owner, string a_title, string a_text, string a_yes, string a_no, Action<bool> a_done)
+	{
 		var w = new Window {
 			Owner = a_owner, Title = a_title, Width = 560, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
 			Background = Brushes2.Get("Panel"), Foreground = Brushes2.Get("Text"), ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
 		};
 		var yes = new Button { Content = a_yes, Style = (Style)a_owner.FindResource("Primary"), Margin = new Thickness(0, 0, 10, 0) };
 		var no = new Button { Content = a_no, Style = (Style)a_owner.FindResource("Ghost"), IsCancel = true, IsDefault = true };
-		var result = false;
 		yes.Click += (_, _) => {
-			result = true;
+			a_done(true);
 			w.Close();
 		};
 		no.Click += (_, _) => w.Close();
@@ -322,11 +347,12 @@ public static class Ask
 		buttons.Children.Add(no);
 		var body = new StackPanel { Margin = new Thickness(22) };
 		body.Children.Add(new TextBlock { Text = a_title, Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 12), FontSize = 18 });
-		body.Children.Add(new TextBlock { Text = a_text, TextWrapping = TextWrapping.Wrap });
+		// a long text (a run's preview) scrolls inside the box instead of growing past the screen
+		body.Children.Add(new ScrollViewer { MaxHeight = 460, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+			Content = new TextBlock { Text = a_text, TextWrapping = TextWrapping.Wrap } });
 		body.Children.Add(buttons);
-		w.Content = body;
+		w.Content = new Border { Background = Brushes2.Get("Panel"), Child = body };
 		w.Loaded += (_, _) => no.Focus();
-		w.ShowDialog();
-		return result;
+		return w;
 	}
 }

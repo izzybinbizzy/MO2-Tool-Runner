@@ -62,10 +62,11 @@ public partial class App : Application
 		var w = new MainWindow { ShowActivated = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -30000, Top = -30000 };
 		w.Show();
 		Pump(w, 2500);
-		void Save(string a_name)
+		void Save(string a_name, Window? a_of = null)
 		{
-			w.UpdateLayout();
-			var root = (FrameworkElement)w.Content;
+			var win = a_of ?? w;
+			win.UpdateLayout();
+			var root = (FrameworkElement)win.Content;
 			var bmp = new RenderTargetBitmap((int)root.ActualWidth, (int)root.ActualHeight, 96, 96, PixelFormats.Pbgra32);
 			bmp.Render(root);
 			var png = new PngBitmapEncoder();
@@ -79,7 +80,30 @@ public partial class App : Application
 			Pump(w, 600);
 			Save(name);
 		}
+		// the settings further down: the run options, tool updates, a run at a set time
+		foreach (var (y, name) in new[] { (420.0, "3b settings, run options"), (900.0, "3c settings, set time") }) {
+			w.ScrollDrawer(y);
+			Pump(w, 400);
+			Save(name);
+		}
 		w.CloseDrawerNow();
+		// the preview before a run (his checklist 270), for a made-up run
+		var demo = new RunPreview();
+		demo.Steps.AddRange([new("synthesis", "Synthesis", "Synthesis Output", false), new("xlodgen", "xLODGen", "xLODGen Output", false),
+			new("dyndolod", "DynDOLOD", "DynDOLOD Output", false), new("playsave", "Save to play", null, false)]);
+		demo.OffForTheRun.AddRange([("Synthesis Output", "made by Synthesis"), ("xLODGen Output", "made by xLODGen"), ("DynDOLOD Output", "made by DynDOLOD"),
+			("Some Patch", "SomePatch.esp needs Synthesis.esp from Synthesis Output")]);
+		demo.StartsTheGame.Add("Save to play");
+		var box = Ask.Make(w, "What this run will do", string.Join("\n", demo.Lines(k => k == "dyndolod" ? TimeSpan.FromMinutes(24) : k == "synthesis" ? TimeSpan.FromMinutes(2) : null)),
+			"Start the run", "Not now", _ => { });
+		box.ShowActivated = false;
+		box.WindowStartupLocation = WindowStartupLocation.Manual;
+		box.Left = -30000;
+		box.Top = -30000;
+		box.Show();
+		Pump(box, 600);
+		Save("7 preview before a run", box);
+		box.Close();
 		// the smallest window the program allows: nothing may be cut off there
 		w.Width = w.MinWidth;
 		w.Height = w.MinHeight;

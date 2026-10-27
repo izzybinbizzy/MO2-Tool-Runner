@@ -182,6 +182,7 @@ public static class Runner
 				Hook(log, cmd, "after the run");
 			}
 			ReportOverwrite(ctx);
+			PruneBackups(ctx);
 			ToolVersions.Remember(setup, mo2, journal.Steps.Where(r => r.State == StepState.Done).Select(r => r.Key));
 			journal.Verdict = $"finished: {todo.Count} step(s) in {total.Elapsed.TotalMinutes:0} min";
 			journal.Ended = DateTime.Now;
@@ -249,12 +250,7 @@ public static class Runner
 	// mod a step replaces and the setup's LOD outputs
 	static void OutputsOff(RunContext a_ctx)
 	{
-		var st = a_ctx.Profile.States();
-		var all = a_ctx.Setup.EnabledSteps.Where(s => s.Key != "shaders").Select(s => new StepSettings(s.Settings)).ToList();
-		var off = all.Select(s => s.OutputMod).OfType<string>()
-			.Concat(all.SelectMany(s => s.List("replaces")))
-			.Concat(a_ctx.Setup.LodOutputs)
-			.Where(m => st.TryGetValue(m, out var f) && f == '+').Distinct().ToList();
+		var off = OutputsToTurnOff(a_ctx.Setup, a_ctx.Profile.States()).Select(o => o.Mod).ToList();
 		// a ticked mod whose plugin needs one of those as a master goes off with them (a tool refuses a plugin with a missing master)
 		var deps = a_ctx.Profile.Dependents(off);
 		a_ctx.Log.Say("every output OFF before the first tool:");
@@ -263,6 +259,61 @@ public static class Runner
 		}
 		a_ctx.Control.Close(null, a_ctx.Cancel);
 		a_ctx.Profile.SetMods([], off.Concat(deps.Keys), a_ctx.Log);
+	}
+
+	// the ticked mods a run switches off before its first tool, each with why (the run itself and its preview use this one list)
+	public static List<(string Mod, string Why)> OutputsToTurnOff(Setup a_setup, IReadOnlyDictionary<string, char> a_states)
+	{
+		var outList = new List<(string Mod, string Why)>();
+		void Add(string a_mod, string a_why)
+		{
+			if (a_states.TryGetValue(a_mod, out var f) && f == '+' && !outList.Any(o => string.Equals(o.Mod, a_mod, StringComparison.OrdinalIgnoreCase))) {
+				outList.Add((a_mod, a_why));
+			}
+		}
+		var all = a_setup.EnabledSteps.Where(s => s.Key != "shaders").Select(s => (Name: StepCatalog.Name(s.Key), S: new StepSettings(s.Settings))).ToList();
+		foreach (var (name, s) in all) {
+			if (s.OutputMod is { } om) {
+				Add(om, "made by " + name);
+			}
+		}
+		foreach (var (name, s) in all) {
+			foreach (var m in s.List("replaces")) {
+				Add(m, "replaced by " + name);
+			}
+		}
+		foreach (var m in a_setup.LodOutputs) {
+			Add(m, "a LOD output of this setup");
+		}
+		return outList;
+	}
+
+	// his checklist 270 ("all 3."): only the last few runs' backups are kept - the setup's "keepBackups" (default 5, 0 = keep
+	// all). Only THIS setup's run folders go, oldest first, never the running one or one an unfinished run still needs.
+	public static void PruneBackups(RunContext a_ctx)
+	{
+		var keep = Setup.Int(a_ctx.Setup.Root, "keepBackups") ?? 5;
+		var root = a_ctx.Setup.BackupDir;
+		if (keep <= 0 || root == "" || !Directory.Exists(root)) {
+			return;
+		}
+		var runs = Path.GetDirectoryName(a_ctx.Journal.Folder)!;
+		var needed = Journal.All(runs).Where(j => j.Unfinished).Select(j => Path.GetFullPath(j.BackupDir)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		needed.Add(Path.GetFullPath(a_ctx.BackupFolder));
+		var own = new System.Text.RegularExpressions.Regex(@"^\d{4}-\d\d-\d\d \d\d-\d\d-\d\d " + System.Text.RegularExpressions.Regex.Escape(a_ctx.Setup.Name) + "$");
+		var old = new DirectoryInfo(root).GetDirectories().Where(d => own.IsMatch(d.Name)).OrderByDescending(d => d.Name, StringComparer.Ordinal).Skip(keep)
+			.Where(d => !needed.Contains(d.FullName)).ToList();
+		foreach (var d in old) {
+			try {
+				foreach (var f in d.EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
+					f.IsReadOnly = false;
+				}
+				d.Delete(true);
+				a_ctx.Log.Detail("an old run's backup removed (only the last " + keep + " are kept): " + d.Name);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				a_ctx.Log.Warn($"an old run's backup could not be removed ({e.Message}): {d.FullName}");
+			}
+		}
 	}
 
 	// one step: run, put its parked output back if it did not finish, its built output switched on, the plugins placed
