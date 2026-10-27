@@ -1,0 +1,30 @@
+# CodeRabbit settings for this repository (https://docs.coderabbit.ai/reference/configuration)
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  poem: false
+  request_changes_workflow: false
+  review_status: true
+  auto_review:
+    enabled: true
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    base_branches:
+      - main
+  path_instructions:
+    - path: "src/Runner.Core/**"
+      instructions: >-
+        The engine of a Windows program that runs Mod Organizer 2's tools unattended and must leave the player's MO2
+        profile exactly as it was. Check that every profile write is atomic and put back on every failure path (exception,
+        cancel, a crash between two writes), that a process is only ever ended by a PID this program started, that no window
+        is ever brought to the front, and that file and process handles are disposed.
+    - path: "src/Runner.App/**"
+      instructions: >-
+        WPF window (.NET 10, Fluent theme). Check that nothing slow runs on the UI thread, that bindings name existing
+        properties, and that every control has an accessible name.
+    - path: "src/Runner.Tests/**"
+      instructions: >-
+        Offline tests against a fake MO2 folder. Check that a test cleans up its scratch folder and cannot touch a real MO2.
+chat:
+  auto_reply: true

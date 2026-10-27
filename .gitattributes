@@ -1,0 +1,3 @@
+# the sources keep the line endings they were written with
+* -text
+*.sh text eol=lf
