@@ -15,7 +15,7 @@ public sealed partial class StepRow : Observable
 	public string Elapsed { get; set => Set(ref field, value); } = "";
 	public bool IsCurrent { get; set => Set(ref field, value); }
 	public string Note { get; set => Set(ref field, value); } = "";
-	public int Number { get; set; }
+	public int Number { get; set => Set(ref field, value); }
 
 	public string Glyph => State switch {
 		StepState.Running => "▶",
@@ -157,11 +157,32 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	// ---------------------------------------------------------------- the live view, once a second
-	public void Poll()
+	bool _polling;
+
+	// the timer's poll: the process list and the run records are read off the window's thread, one poll at a time
+	public async Task PollAsync()
 	{
-		Mo2Open = Procs.Running("ModOrganizer.exe");
-		GameRunning = Mo2Control.GameImages.Any(Procs.Running);
-		var runs = Engine.Runs();
+		if (_polling) {
+			return;
+		}
+		_polling = true;
+		try {
+			var (mo2, game, runs) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs()));
+			Poll(mo2, game, runs);
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException) {
+			// a file or process that changed mid-read: the next tick reads it again
+		} finally {
+			_polling = false;
+		}
+	}
+
+	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs());
+
+	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs)
+	{
+		Mo2Open = a_mo2;
+		GameRunning = a_game;
+		var runs = a_runs;
 		FollowStart(runs);
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
@@ -449,14 +470,14 @@ public sealed partial class MainViewModel : Observable
 		SelectedStep = a_row;
 	}
 
-	public void SaveSetup()
+	public bool SaveSetup()
 	{
 		if (Setup == null) {
-			return;
+			return false;
 		}
 		if (Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase)) {
 			Say("Not saved: a run is using this setup right now.", "bad");
-			return;
+			return false;
 		}
 		try {
 			var backup = Path.Combine(AppPaths.Data, "Setup backups");
@@ -470,8 +491,10 @@ public sealed partial class MainViewModel : Observable
 			}
 			Setup.Save();
 			Say("Saved.", "good");
+			return true;
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 			Say("Not saved: " + e.Message, "bad");
+			return false;
 		}
 	}
 

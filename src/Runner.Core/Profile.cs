@@ -131,6 +131,12 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	public void Restore(IReadOnlyDictionary<string, byte[]> a_snap)
 	{
 		MustBeClosed("the order files");
+		// an order file that did not exist then (MO2 made it during the run) goes again - only for a real snapshot (its mod list)
+		if (a_snap.ContainsKey("modlist.txt")) {
+			foreach (var f in OrderFiles.Where(f => !a_snap.ContainsKey(f))) {
+				Files.TryDelete(Path.Combine(Dir, f));
+			}
+		}
 		foreach (var (f, data) in a_snap) {
 			var bytes = data;
 			if (f.Equals("modlist.txt", StringComparison.OrdinalIgnoreCase) && Added.Count > 0) {

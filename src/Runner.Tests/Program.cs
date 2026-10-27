@@ -357,7 +357,7 @@ public static class Program
 		var old = new[] { "cleansave", "xlodgen", "acmos", "grass", "snowfixer", "autoblend", "pgpatcher", "treelodgen", "texgen", "dyndolod", "synthesis", "pandora", "shaders" };
 		var w = StepCatalog.OrderWarnings(old);
 		Check(w.Any(x => x.StartsWith("Synthesis runs after DynDOLOD", StringComparison.Ordinal)), "Synthesis after DynDOLOD is warned");
-		Check(w.Any(x => x.StartsWith("PGPatcher runs after xLODGen", StringComparison.Ordinal)) || w.Count >= 1, "a warning is given");
+		Equal(1, w.Count, "that one warning and no other: " + string.Join(" | ", w));
 		Equal(0, StepCatalog.OrderWarnings(StepCatalog.DefaultOrder.ToList()).Count, "the default order is safe");
 	}
 
@@ -420,7 +420,8 @@ public static class Program
 		Directory.CreateDirectory(cache);
 		File.WriteAllText(Path.Combine(cache, "a.bin"), "x");
 		Check(InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(-1)), "a fresh cache file = compiling, whatever the log says");
-		Check(!InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(10)) || InGame.CacheBusy(f.Overwrite), "a log older than the start does not count");
+		Directory.Delete(cache, true);
+		Check(!InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(10)), "a log older than the start does not count");
 	}
 
 	static void T_ShaderFingerprintChangesWithTheMod()

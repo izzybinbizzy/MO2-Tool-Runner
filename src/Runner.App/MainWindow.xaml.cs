@@ -25,8 +25,8 @@ public partial class MainWindow : Window
 		DataContext = _vm;
 		_vm.Alert += Notify;
 		_vm.LogChanged += OnLog;
-		_timer.Tick += (_, _) => {
-			_vm.Poll();
+		_timer.Tick += async (_, _) => {
+			await _vm.PollAsync();
 			// the notification-area icon (there once a run started or a notification was shown) says what runs
 			if (_vm.IsRunning || _tray?.Shown == true) {
 				_tray?.Show("MO2 Tool Runner - " + _vm.NowTitle);
@@ -53,7 +53,7 @@ public partial class MainWindow : Window
 		} else if (ctrl && a_e.Key == Key.OemComma) {
 			ShowPanel("settings");
 			a_e.Handled = true;
-		} else if (ctrl && a_e.Key == Key.N) {
+		} else if (ctrl && a_e.Key == Key.N && Drawer.Visibility != Visibility.Visible) {
 			NewSetup_Click(this, new RoutedEventArgs());
 			a_e.Handled = true;
 		}
@@ -182,8 +182,12 @@ public partial class MainWindow : Window
 		_vm.Demo(a_waiting);
 	}
 
-	public void ShowPanel(string a_which)
+	// a_fresh: rebuild an open drawer (Save, Undo changes); otherwise pressing Settings again keeps what is typed
+	public void ShowPanel(string a_which, bool a_fresh = false)
 	{
+		if (a_which == _panel && Drawer.Visibility == Visibility.Visible && !a_fresh) {
+			return;
+		}
 		if (a_which != _panel && !LeaveSettings()) {
 			return;
 		}

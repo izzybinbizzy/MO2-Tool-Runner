@@ -36,7 +36,7 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-          <Image Source="Icon.ico" Width="30" Height="30" Margin="0,0,12,0"/>
+          <Image Source="Icon.ico" Width="30" Height="30" Margin="0,0,12,0" AutomationProperties.Name="MO2 Tool Runner"/>
           <TextBlock Text="MO2 TOOL RUNNER" Style="{StaticResource H1}" VerticalAlignment="Center"/>
         </StackPanel>
         <DockPanel Grid.Column="1" VerticalAlignment="Center" Margin="28,0,16,0">
@@ -162,7 +162,7 @@
                 <TextBlock Text="{Binding NowActivity}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource Text}"/>
               </StackPanel>
             </DockPanel>
-            <ProgressBar Height="8" Margin="0,14,0,0" Maximum="1" Value="{Binding Progress}" Foreground="{StaticResource GoldBar}"
+            <ProgressBar Height="8" Margin="0,14,0,0" Maximum="1" Value="{Binding Progress}" Foreground="{StaticResource GoldBar}" AutomationProperties.Name="Run progress"
                          IsIndeterminate="{Binding ProgressKnown, Converter={StaticResource Not}}"
                          Visibility="{Binding ShowProgress, Converter={StaticResource Vis}}"/>
             <!-- a guided in-game step waits for the player -->
@@ -231,7 +231,7 @@
     </Border>
 
     <!-- side panels over the right part: history, settings -->
-    <Border x:Name="Shade" Grid.Row="1" Grid.RowSpan="3" Background="#99000000" Visibility="Collapsed" MouseDown="Shade_MouseDown"/>
+    <Border x:Name="Shade" Grid.Row="0" Grid.RowSpan="4" Background="#99000000" Visibility="Collapsed" MouseDown="Shade_MouseDown"/>
     <Border x:Name="Drawer" Grid.Row="1" Grid.RowSpan="3" HorizontalAlignment="Right" Width="640" Background="{StaticResource Panel}"
             BorderBrush="{StaticResource GoldDim}" BorderThickness="1,0,0,0" Visibility="Collapsed">
       <DockPanel Margin="20">

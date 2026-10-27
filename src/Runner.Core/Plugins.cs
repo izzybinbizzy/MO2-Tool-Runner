@@ -50,7 +50,8 @@ public static class Plugins
 	// ESM-flagged (TES4 record flag bit 0) or an .esm file
 	public static bool IsMaster(string a_path)
 	{
-		if (a_path.EndsWith(".esm", StringComparison.OrdinalIgnoreCase)) {
+		// the game loads every .esl in the master block too, flagged or not
+		if (a_path.EndsWith(".esm", StringComparison.OrdinalIgnoreCase) || a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase)) {
 			return true;
 		}
 		try {

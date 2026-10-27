@@ -11,11 +11,12 @@ public static class Files
 		var dir = Path.GetDirectoryName(Path.GetFullPath(a_path)) ?? throw new ArgumentException("no folder: " + a_path);
 		Directory.CreateDirectory(dir);
 		var tmp = Path.Combine(dir, "." + Path.GetFileName(a_path) + "." + Environment.ProcessId + ".tmp");
-		using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
-			fs.Write(a_bytes);
-			fs.Flush(true);
-		}
+		// a failed write (a full disk) leaves no temp file behind in the player's folder either
 		try {
+			using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
+				fs.Write(a_bytes);
+				fs.Flush(true);
+			}
 			File.Move(tmp, a_path, true);
 		} catch {
 			TryDelete(tmp);

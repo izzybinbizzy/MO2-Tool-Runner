@@ -185,8 +185,17 @@ public sealed class Journal
 public sealed class JournalCache(string a_runsDir)
 {
 	readonly Dictionary<string, (DateTime Stamp, long Size, Journal Run)> _seen = new(StringComparer.OrdinalIgnoreCase);
+	readonly Lock _lock = new();
 
+	// the window reads it from its poll thread and from its own thread
 	public List<Journal> Read()
+	{
+		lock (_lock) {
+			return ReadLocked();
+		}
+	}
+
+	List<Journal> ReadLocked()
 	{
 		var list = new List<Journal>();
 		if (!Directory.Exists(a_runsDir)) {

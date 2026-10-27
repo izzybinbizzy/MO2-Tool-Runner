@@ -214,14 +214,18 @@ public static class Procs
 		}
 	}
 
-	// child processes through a snapshot of every process's parent (CIM is slow; the toolhelp snapshot is not)
+	// child processes through a snapshot of every process's parent (CIM is slow; the toolhelp snapshot is not). A child counts
+	// only when it started after its parent: Windows keeps a dead parent's PID in its children, and a new process can reuse it
 	public static List<int> Tree(int a_root)
 	{
 		var parents = Snapshot();
 		var outList = new List<int> { a_root };
+		var started = new Dictionary<int, DateTime?>();
+		DateTime? Start(int a_pid) => started.TryGetValue(a_pid, out var t) ? t : started[a_pid] = StartTime(a_pid);
 		for (int i = 0; i < outList.Count; ++i) {
 			foreach (var (pid, ppid) in parents) {
-				if (ppid == outList[i] && pid != a_root && !outList.Contains(pid)) {
+				if (ppid == outList[i] && pid != a_root && !outList.Contains(pid) &&
+				    !(Start(pid) is { } c && Start(ppid) is { } p && c < p)) {
 					outList.Add(pid);
 				}
 			}

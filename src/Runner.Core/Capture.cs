@@ -67,21 +67,32 @@ public static partial class Capture
 			return null;
 		}
 		var screen = GetDC(0);
-		var dc = CreateCompatibleDC(screen);
-		var bmp = CreateCompatibleBitmap(screen, r.Width, r.Height);
-		var old = SelectObject(dc, bmp);
+		var dc = screen == 0 ? 0 : CreateCompatibleDC(screen);
+		var bmp = dc == 0 ? 0 : CreateCompatibleBitmap(screen, r.Width, r.Height);
+		var old = bmp == 0 ? 0 : SelectObject(dc, bmp);
 		try {
-			if (!Native.PrintWindow(a_hwnd, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT)) {
+			if (bmp == 0 || !Native.PrintWindow(a_hwnd, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT)) {
 				return null;
 			}
 			SelectObject(dc, old);
+			old = 0;
 			var info = new BITMAPINFOHEADER { Size = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(), Width = r.Width, Height = -r.Height, Planes = 1, BitCount = 32 };
 			var px = new int[r.Width * r.Height];
 			return GetDIBits(dc, bmp, 0, (uint)r.Height, px, ref info, 0) == r.Height ? new Picture(r.Width, r.Height, px) : null;
 		} finally {
-			DeleteObject(bmp);
-			DeleteDC(dc);
-			_ = ReleaseDC(0, screen);
+			// a bitmap still selected into its DC cannot be deleted: deselected first (else each failed capture leaks one)
+			if (old != 0) {
+				SelectObject(dc, old);
+			}
+			if (bmp != 0) {
+				DeleteObject(bmp);
+			}
+			if (dc != 0) {
+				DeleteDC(dc);
+			}
+			if (screen != 0) {
+				_ = ReleaseDC(0, screen);
+			}
 		}
 	}
 }

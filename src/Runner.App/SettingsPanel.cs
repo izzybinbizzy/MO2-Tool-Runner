@@ -146,6 +146,8 @@ public static class SettingsPanel
 		var stepHost = new StackPanel();
 		var stepApply = new List<Func<string?>>();
 		pick.SelectionChanged += (_, _) => {
+			var wrong = stepApply.Select(f => f()).OfType<string>().ToList();
+			errors.Text = wrong.Count > 0 ? "Fix before saving:\n" + string.Join("\n", wrong) : errors.Text;
 			stepHost.Children.Clear();
 			stepApply.Clear();
 			if (pick.SelectedIndex < 0) {
@@ -204,6 +206,10 @@ public static class SettingsPanel
 		var undo = new Button { Content = "_Undo changes", Style = (Style)a_w.FindResource("Ghost") };
 		var folders = new Button { Content = "Open the data folder", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(10, 0, 0, 0) };
 		save.Click += (_, _) => {
+			if (a_vm.SetupInUse) {
+				errors.Text = "Not saved: a run is using this setup right now - save when it is done (what you typed stays here).";
+				return;
+			}
 			var problems = apply.Concat(stepApply).Select(f => f()).OfType<string>().ToList();
 			if (problems.Count > 0) {
 				errors.Text = "Not saved:\n" + string.Join("\n", problems);
@@ -221,12 +227,17 @@ public static class SettingsPanel
 			foreach (var k in work.Select(x => x.Key).ToList()) {
 				a_vm.Setup.Root[k] = work[k]?.DeepClone();
 			}
-			a_vm.SaveSetup();
+			if (!a_vm.SaveSetup()) {
+				// memory back to what is on disk; the drawer keeps what was typed for another try
+				a_vm.LoadSteps();
+				errors.Text = "Not saved: " + a_vm.Message;
+				return;
+			}
 			a_vm.LoadSteps();
 			errors.Text = "";
-			a_w.ShowPanel("settings");
+			a_w.ShowPanel("settings", true);
 		};
-		undo.Click += (_, _) => a_w.ShowPanel("settings");
+		undo.Click += (_, _) => a_w.ShowPanel("settings", true);
 		folders.Click += (_, _) => MainViewModel.OpenFolder(AppPaths.Data);
 		var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
 		bar.Children.Add(save);

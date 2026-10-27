@@ -50,7 +50,7 @@ public sealed class GrassStep : IStep
 			if (a_s.Str("fasterngio_exe") is not { Length: > 0 } exe || !File.Exists(exe)) {
 				yield return new Issue(Key, true, "FasterNGIO's program is not found (set \"fasterngio_exe\")");
 			}
-		} else if (!a_c.Setup.Root["gameFolderWrites"]?.GetValue<bool>() ?? false) {
+		} else if (Setup.Bool(a_c.Setup.Root, "gameFolderWrites") != true) {
 			yield return new Issue(Key, true, "the game route needs NGIO's PrecacheGrass.txt in the game folder, and this setup does not allow writing there");
 		}
 	}
@@ -358,72 +358,78 @@ public sealed class ShaderStep : IStep
 			string? result = null;
 			var verified = true;
 			Process? g = null;
-			while (result == null) {
-				var started = DateTime.UtcNow;
-				InGame.NoGameRunning(a_ctx);
-				var sw = Stopwatch.StartNew();
-				g?.Dispose();
-				g = Process.GetProcessById(a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.FreshGamePid(), a_ctx.Cancel));
-				a_ctx.Activity("shaders", $"{a_c.ShaderMod}: the game compiles the shader cache at its main menu");
-				var sane = false;
-				var lastN = -1;
-				var lastChange = Stopwatch.StartNew();
-				while (!g.HasExited) {
-					a_ctx.Cancel.ThrowIfCancellationRequested();
-					var log = InGame.NewestShaderLog(logs);
-					var logFresh = log != null && File.GetLastWriteTimeUtc(log) >= started.AddSeconds(-5);
-					// the shader mod must say it runs within a few minutes (it stands down beside a DLL it refuses - 2026-10-09)
-					if (!sane && sw.Elapsed > TimeSpan.FromSeconds(45)) {
-						var text = logFresh ? Files.ReadSharedText(log!) : "";
-						var bad = Regex.Match(text, @"^.*(Incompatible DLL|Remove it to use|disabled itself|will not run).*$", RegexOptions.Multiline);
-						if (bad.Success) {
-							Procs.KillTree(g.Id);
-							throw new StepFailedException("the shader mod stood down at start - nothing will compile: " + bad.Value.Trim());
+			// any failure or Stop: the game this step started is closed here, inside the Toggle, so MO2 can close for the put-back
+			try {
+				while (result == null) {
+					var started = DateTime.UtcNow;
+					InGame.NoGameRunning(a_ctx);
+					var sw = Stopwatch.StartNew();
+					g?.Dispose();
+					g = Process.GetProcessById(a_ctx.Control.LaunchGame(a_s.Str("launch_executable") ?? "SKSE", InGame.FreshGamePid(), a_ctx.Cancel));
+					a_ctx.Activity("shaders", $"{a_c.ShaderMod}: the game compiles the shader cache at its main menu");
+					var sane = false;
+					var lastN = -1;
+					var lastChange = Stopwatch.StartNew();
+					while (!g.HasExited) {
+						a_ctx.Cancel.ThrowIfCancellationRequested();
+						var log = InGame.NewestShaderLog(logs);
+						var logFresh = log != null && File.GetLastWriteTimeUtc(log) >= started.AddSeconds(-5);
+						// the shader mod must say it runs within a few minutes (it stands down beside a DLL it refuses - 2026-10-09)
+						if (!sane && sw.Elapsed > TimeSpan.FromSeconds(45)) {
+							var text = logFresh ? Files.ReadSharedText(log!) : "";
+							var bad = Regex.Match(text, @"^.*(Incompatible DLL|Remove it to use|disabled itself|will not run).*$", RegexOptions.Multiline);
+							if (bad.Success) {
+								Procs.KillTree(g.Id);
+								throw new StepFailedException("the shader mod stood down at start - nothing will compile: " + bad.Value.Trim());
+							}
+							if (logFresh && Regex.IsMatch(text, "Loading Settings Complete|Loaded theme|Shader compilation started|ShaderTiming")) {
+								sane = true;
+							} else if (sw.Elapsed > TimeSpan.FromMinutes(a_s.Int("sanity_min", 3))) {
+								Procs.KillTree(g.Id);
+								throw new StepFailedException($"the shader mod wrote no log this start in {a_s.Int("sanity_min", 3)} minutes - is it ticked and loading?");
+							}
 						}
-						if (logFresh && Regex.IsMatch(text, "Loading Settings Complete|Loaded theme|Shader compilation started|ShaderTiming")) {
-							sane = true;
-						} else if (sw.Elapsed > TimeSpan.FromMinutes(a_s.Int("sanity_min", 3))) {
-							Procs.KillTree(g.Id);
-							throw new StepFailedException($"the shader mod wrote no log this start in {a_s.Int("sanity_min", 3)} minutes - is it ticked and loading?");
+						var n = Files.CountFiles(owCache);
+						if (n != lastN) {
+							lastN = n;
+							lastChange.Restart();
+							a_ctx.Activity("shaders", $"{a_c.ShaderMod}: {n} shader(s) compiled");
 						}
-					}
-					var n = Files.CountFiles(owCache);
-					if (n != lastN) {
-						lastN = n;
-						lastChange.Restart();
-						a_ctx.Activity("shaders", $"{a_c.ShaderMod}: {n} shader(s) compiled");
-					}
-					// done = the shader mod says so: Open Shaders' "completed", or the last "remaining=" reads 0. Only a log that
-					// says neither may end on quiet (a long gap is normal mid-compile - 176 s measured), and such a cache is
-					// stamped unverified so the next "when changed" run builds it again
-					var remaining = logFresh ? InGame.LastRemaining(log!) : null;
-					var quiet = TimeSpan.FromMinutes(a_s.Int("quiet_min", 5));
-					if (logFresh && Files.ReadSharedText(log!).Split('\n').FirstOrDefault(l => l.Contains("Shader compilation completed", StringComparison.Ordinal)) is { } done) {
-						result = done.Trim();
-					} else if (remaining == 0 && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > TimeSpan.FromSeconds(30)) {
-						result = $"compile finished: remaining=0 ({n} files)";
-					} else if (remaining == null && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > quiet &&
-					           (!logFresh || DateTime.UtcNow - File.GetLastWriteTimeUtc(log!) > quiet)) {
-						result = $"compile finished by quiet: no new shader and no shader log line for {quiet.TotalMinutes:0} minutes ({n} files)";
-						verified = false;
+						// done = the shader mod says so: Open Shaders' "completed", or the last "remaining=" reads 0. Only a log that
+						// says neither may end on quiet (a long gap is normal mid-compile - 176 s measured), and such a cache is
+						// stamped unverified so the next "when changed" run builds it again
+						var remaining = logFresh ? InGame.LastRemaining(log!) : null;
+						var quiet = TimeSpan.FromMinutes(a_s.Int("quiet_min", 5));
+						if (logFresh && Files.ReadSharedText(log!).Split('\n').FirstOrDefault(l => l.Contains("Shader compilation completed", StringComparison.Ordinal)) is { } done) {
+							result = done.Trim();
+						} else if (remaining == 0 && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > TimeSpan.FromSeconds(30)) {
+							result = $"compile finished: remaining=0 ({n} files)";
+						} else if (remaining == null && n >= a_s.Int("min_files", 50) && lastChange.Elapsed > quiet &&
+						           (!logFresh || DateTime.UtcNow - File.GetLastWriteTimeUtc(log!) > quiet)) {
+							result = $"compile finished by quiet: no new shader and no shader log line for {quiet.TotalMinutes:0} minutes ({n} files)";
+							verified = false;
+						}
+						if (result != null) {
+							break;
+						}
+						if (total.Elapsed > a_s.Deadline(180)) {
+							Procs.KillTree(g.Id);
+							throw new StepFailedException($"the shader cache passed its {a_s.Deadline(180).TotalMinutes:0} minute limit");
+						}
+						Thread.Sleep(10000);
 					}
 					if (result != null) {
 						break;
 					}
-					if (total.Elapsed > a_s.Deadline(180)) {
-						Procs.KillTree(g.Id);
-						throw new StepFailedException($"the shader cache passed its {a_s.Deadline(180).TotalMinutes:0} minute limit");
+					if (++restarts > a_s.Int("max_restarts", 3)) {
+						throw new StepFailedException($"the game stopped {restarts} times while compiling shaders");
 					}
-					Thread.Sleep(10000);
+					a_ctx.Log.Detail($"the game stopped before the compile finished - start {restarts + 1}");
+					Thread.Sleep(5000);
 				}
-				if (result != null) {
-					break;
-				}
-				if (++restarts > a_s.Int("max_restarts", 3)) {
-					throw new StepFailedException($"the game stopped {restarts} times while compiling shaders");
-				}
-				a_ctx.Log.Detail($"the game stopped before the compile finished - start {restarts + 1}");
-				Thread.Sleep(5000);
+			} catch {
+				InGame.CloseGame(a_ctx);
+				throw;
 			}
 			a_ctx.Log.Detail(result);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 30)));

@@ -451,6 +451,26 @@ public static class Runner
 		if (a_j.OwnerAlive) {
 			return new RunOutcome(a_j.State, "that run is still going", a_j.Folder);
 		}
+		// one put-back at a time, never beside a run
+		using var mutex = new Mutex(false, MutexName, out _);
+		bool owned;
+		try {
+			owned = mutex.WaitOne(0);
+		} catch (AbandonedMutexException) {
+			owned = true;
+		}
+		if (!owned) {
+			return new RunOutcome(a_j.State, "a run or another put-back is going - try again when it is done", a_j.Folder);
+		}
+		try {
+			return RestoreLocked(a_j);
+		} finally {
+			mutex.ReleaseMutex();
+		}
+	}
+
+	static RunOutcome RestoreLocked(Journal a_j)
+	{
 		Setup setup;
 		try {
 			setup = Setup.Load(a_j.SetupFile);
@@ -465,14 +485,28 @@ public static class Runner
 			Cancel = CancellationToken.None, BackupFolder = a_j.BackupDir,
 		};
 		log.Say("RESTORE: putting the profile back after the run that did not finish");
+		List<string> notBack;
+		List<string> filesNotBack;
 		try {
 			control.Close();
-			PutBackParked(ctx, null);
-			StepKit.PutFilesBack(ctx);
+			notBack = PutBackParked(ctx, null);
+			filesNotBack = StepKit.PutFilesBack(ctx);
+			foreach (var m in notBack.Where(m => !a_j.Retire.Contains(m, StringComparer.OrdinalIgnoreCase))) {
+				a_j.Retire.Add(m);
+			}
 			PutBack(ctx, a_j.LoadSnapshot());
 		} catch (Exception e) {
 			log.Error("restore failed: " + Plain(e));
 			return new RunOutcome(RunState.Failed, "could not put the profile back: " + Plain(e), a_j.Folder);
+		}
+		if (notBack.Count > 0 || filesNotBack.Count > 0) {
+			// something is still out: Restore stays on offer (the window keeps its button) and says what
+			a_j.NeedsRestore = true;
+			a_j.Verdict = "put back except " + string.Join(", ", notBack.Concat(filesNotBack.Select(Path.GetFileName)).OfType<string>()) +
+				" (kept off / in the backup) - press \"Put my profile back\" again once the files are free";
+			a_j.Save();
+			log.Error(a_j.Verdict);
+			return new RunOutcome(RunState.Failed, a_j.Verdict, a_j.Folder);
 		}
 		foreach (var r in a_j.Steps.Where(r => r.State is StepState.Running or StepState.Pending)) {
 			r.State = r.State == StepState.Running ? StepState.Stopped : StepState.Skipped;

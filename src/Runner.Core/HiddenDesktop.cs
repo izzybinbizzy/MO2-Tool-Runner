@@ -85,6 +85,7 @@ public sealed partial class HiddenDesktop : IDisposable
 	public static TimeSpan GuardPoll { get; set; } = TimeSpan.FromMilliseconds(500);
 
 	readonly CancellationTokenSource _stop = new();
+	Thread? _guard;
 
 	void Watch(int a_root)
 	{
@@ -102,6 +103,7 @@ public sealed partial class HiddenDesktop : IDisposable
 				_stop.Token.WaitHandle.WaitOne(GuardPoll);
 			}
 		}) { IsBackground = true, Name = "hidden desktop leak guard" };
+		_guard = t;
 		t.Start();
 	}
 
@@ -149,9 +151,11 @@ public sealed partial class HiddenDesktop : IDisposable
 		return result!;
 	}
 
+	// the guard thread is waited for before its token and the desktop go (it may be mid-look)
 	public void Dispose()
 	{
 		_stop.Cancel();
+		_guard?.Join(TimeSpan.FromSeconds(10));
 		_stop.Dispose();
 		CloseDesktop(_desk);
 	}
