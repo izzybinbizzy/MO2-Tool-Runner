@@ -737,6 +737,54 @@ public static class Program
 		Equal(null, Mo2Instance.Load(f.Exe, f.Instance).GlobalName, "portable: no -i");
 	}
 
+	// a tool's version on its page against the player's copy, written the many ways tools write them
+	static void T_ToolVersionsCompare()
+	{
+		Check(!ToolUpdates.IsNewer("2.3.1.0", "2.3.1"), "2.3.1.0 = 2.3.1");
+		Check(!ToolUpdates.IsNewer("5.0.0.0b-", "5.0.0-beta"), "5.0.0.0b- = 5.0.0-beta");
+		Check(!ToolUpdates.IsNewer("3.0.0.217", "Alpha-217"), "DynDOLOD's file version 3.0.0.217 = its page's Alpha-217");
+		Check(ToolUpdates.IsNewer("3.0.0.217", "Alpha-218"), "Alpha-218 is newer");
+		Check(ToolUpdates.IsNewer("1.0.4.0", "1.0.6"), "1.0.6 is newer than 1.0.4");
+		Check(!ToolUpdates.IsNewer("0.2.54.0", "0.2.11"), "an older number on the page is not newer");
+		Check(!ToolUpdates.IsNewer("", "1.0"), "no version of ours: never called newer");
+	}
+
+	// the settings a tool's own window wrote: found, kept, put in place for a run and put back after
+	static void T_LearnedSettingsKeepAndApply()
+	{
+		using var f = new FakeMo2();
+		var tool = Path.Combine(f.Root, "Tools", "SomeTool");
+		Directory.CreateDirectory(Path.Combine(tool, "cfg"));
+		Directory.CreateDirectory(Path.Combine(tool, "Logs"));
+		var settings = Path.Combine(tool, "cfg", "settings.json");
+		File.WriteAllText(settings, "{\"a\": 1}");
+		File.WriteAllText(Path.Combine(tool, "untouched.ini"), "x=1");
+		var before = ToolSettings.Scan([tool], []);
+		Thread.Sleep(50);
+		File.WriteAllText(settings, "{\"a\": 2, \"set\": \"by its window\"}");
+		File.WriteAllText(Path.Combine(tool, "new.ini"), "y=2");
+		File.WriteAllText(Path.Combine(tool, "Logs", "run.json"), "{}");
+		File.WriteAllText(Path.Combine(tool, "notes.txt"), "not a settings file");
+		var changed = ToolSettings.Changed(before, ToolSettings.Scan([tool], []));
+		Equal(2, changed.Count, "the two settings files it wrote (not its log, not a text file, not one it left alone): " + string.Join(", ", changed));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A", ["executable"] = "SomeTool" }));
+		var setup = Setup.Load(f.SetupFile);
+		var l = ToolSettings.Keep(setup, "snowfixer", "SomeTool", changed);
+		Equal(2, ToolSettings.Load(setup, "snowfixer")!.Files.Count, "kept with the setup");
+		// the player changes the tool by hand since: a run still uses the learned settings, and puts the player's back after
+		File.WriteAllText(settings, "{\"a\": 3}");
+		var seen = "";
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			seen = File.ReadAllText(settings);
+			WriteOutput(ctx, "snowfixer", "Output A", "OutA.esp");
+		}));
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, r.Verdict);
+		Check(seen.Contains("by its window", StringComparison.Ordinal), "the run used the learned settings: " + seen);
+		Equal("{\"a\": 3}", File.ReadAllText(settings), "the player's own settings are back after the run");
+		Equal(l.Files.Count, 2, "(learned set)");
+	}
+
 	sealed class CrashForTest : Exception;
 
 	// a crash = the runner process dying mid-step: the exception escapes the step, and nothing after it runs

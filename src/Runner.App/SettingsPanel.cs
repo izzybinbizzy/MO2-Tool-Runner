@@ -99,6 +99,46 @@ public static class SettingsPanel
 		Field(stack, apply, "Commands before a run (one per line, each must succeed)", work, "beforeRun", JsonValueKind.Array);
 		Field(stack, apply, "Commands after a run (one per line)", work, "afterRun", JsonValueKind.Array);
 
+		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
+		Head("TOOL UPDATES");
+		var updNote = new TextBlock { Text = "Asks each tool's own page (Nexus, GitHub) for its newest version - only when you press this.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+		var updRows = new StackPanel();
+		var updCheck = new Button { Content = "Check its tools for updates", Style = (Style)a_w.FindResource("Ghost"), HorizontalAlignment = HorizontalAlignment.Left };
+		updCheck.Click += async (_, _) => {
+			updCheck.IsEnabled = false;
+			updRows.Children.Clear();
+			updNote.Text = "Asking the tools' pages ...";
+			try {
+				var setup = a_vm.Setup!;
+				var res = await Task.Run(async () => await ToolUpdates.Check(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), CancellationToken.None));
+				foreach (var r in res) {
+					var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+					if (r.Newer) {
+						var get = new Button { Content = "Open its download page", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(10, 0, 0, 0) };
+						var page = r.Page;
+						get.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(page) { UseShellExecute = true });
+						DockPanel.SetDock(get, Dock.Right);
+						row.Children.Add(get);
+					}
+					var said = r.Problem ?? (r.Newer ? $"a NEWER version is out: {r.Newest} (yours {r.Yours})" : $"up to date ({r.Yours})");
+					row.Children.Add(new TextBlock { Text = $"{r.Tool}: {said}", TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+						Foreground = Brushes2.Get(r.Newer ? "Warn" : r.Problem != null ? "Muted" : "Text") });
+					updRows.Children.Add(row);
+				}
+				var newer = res.Count(r => r.Newer);
+				updNote.Text = newer > 0 ? $"{newer} tool(s) have a newer version - download it from its page (Mod Manager Download), then open the tool once and learn its settings again." :
+					"Every tool is up to date.";
+			} catch (Exception e) {
+				updNote.Text = "Could not check: " + e.Message;
+			} finally {
+				updCheck.IsEnabled = true;
+			}
+		};
+		stack.Children.Add(updNote);
+		stack.Children.Add(updCheck);
+		stack.Children.Add(updRows);
+
 		Head("A STEP");
 		var steps = (work["steps"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
 		var pick = new ComboBox { ItemsSource = steps.Select(s => StepCatalog.Name(Setup.Str(s, "step") ?? "")).ToList(), Margin = new Thickness(0, 0, 0, 8) };
@@ -121,6 +161,34 @@ public static class SettingsPanel
 				Field(stepHost, stepApply, Label(key), o, key, val?.GetValueKind() ?? JsonValueKind.String);
 			}
 			var stepKey = Setup.Str(steps[pick.SelectedIndex], "step") ?? "";
+			// his ask 2026-10-27: the tool's settings from its OWN window, kept for every run (never a copy of its window here)
+			if (ToolSettings.CanLearn(new StepSettings(o)) && a_vm.Setup is { } setupNow) {
+				var learned = ToolSettings.Load(setupNow, stepKey);
+				var name = StepCatalog.Name(stepKey);
+				var status = new TextBlock { TextWrapping = TextWrapping.Wrap, Style = (Style)a_w.FindResource("MutedText"), Margin = new Thickness(0, 4, 0, 6),
+					Text = learned == null ? "Its settings are not learned yet: it runs with whatever its own window last saved." :
+						$"Its settings were learned {learned.At.ToLocalTime().ToString("MMM d HH:mm", InvariantCulture)} ({learned.Files.Count} file(s)) - every run uses them." };
+				var learn = new Button { Content = "Learn its settings (opens its own window)", Style = (Style)a_w.FindResource("Ghost"),
+					HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 12) };
+				learn.Click += async (_, _) => {
+					if (!Ask.Show(a_w, "Learn its settings", $"{name} opens through Mod Organizer (Mod Organizer is closed first if it is open). Set it up the way every run " +
+					        "should use it, save, and close it - its settings are then kept with this setup. To change them later, do this again.", "Open it", "Not now")) {
+						return;
+					}
+					learn.IsEnabled = false;
+					status.Text = $"{name} is open - set it up, save, and close it ...";
+					try {
+						var l = await Task.Run(() => ToolSettings.Learn(setupNow, stepKey, RunLog.Null, CancellationToken.None));
+						status.Text = $"Learned: {l.Files.Count} settings file(s) ({string.Join(", ", l.Files.Select(f => Path.GetFileName(f.Live)))}) - every run uses them.";
+					} catch (Exception e) {
+						status.Text = "Not learned: " + e.Message;
+					} finally {
+						learn.IsEnabled = true;
+					}
+				};
+				stepHost.Children.Add(status);
+				stepHost.Children.Add(learn);
+			}
 			foreach (var (key, kind, def) in Known.GetValueOrDefault(stepKey, []).Append((Key: "deadline_min", Kind: JsonValueKind.Number, Default: "the step's own"))
 				         .Where(k => !o.ContainsKey(k.Key))) {
 				Field(stepHost, stepApply, $"{Label(key)} (default {def})", o, key, kind);

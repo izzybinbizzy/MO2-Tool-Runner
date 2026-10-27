@@ -277,14 +277,19 @@ public static class Runner
 		r.Activity = "starting";
 		a_ctx.Journal.Save();
 		var overwriteBefore = OverwriteFiles(a_ctx);
+		List<string> learned = [];
 		var sw = Stopwatch.StartNew();
 		try {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			if (step == null) {
 				throw new StepFailedException("this step is not available in this version");
 			}
+			learned = ToolSettings.Apply(a_ctx, a_s.Key);
 			step.Run(a_ctx, new StepSettings(a_s.Settings));
 			StepKit.CloseTool(a_ctx, new StepSettings(a_s.Settings).Str("image"));
+			foreach (var live in learned) {
+				StepKit.PutFilesBack(a_ctx, live);
+			}
 		} catch (Exception e) {
 			var stopped = e is OperationCanceledException;
 			r.State = stopped ? StepState.Stopped : StepState.Failed;

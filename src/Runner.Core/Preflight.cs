@@ -63,6 +63,11 @@ public static class Preflight
 				outList.Add(new Issue(key, true, "its check could not read a file: " + e.Message));
 			}
 			outList.AddRange(ToolVersions.Check(a_setup, a_mo2, key, s));
+			// the settings learned from the tool's own window: a tool updated since may have changed what they mean
+			if (ToolSettings.CanLearn(s) && ToolSettings.Load(a_setup, key) is { } l && ToolUpdates.Yours(a_mo2, s).Exe is { } exe &&
+			    File.GetLastWriteTimeUtc(exe) > l.At) {
+				outList.Add(new Issue(key, false, "the tool was updated after its settings were learned - open its window once (Learn its settings) to check them"));
+			}
 		}
 		return outList;
 	}

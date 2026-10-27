@@ -5,10 +5,11 @@ namespace ToolRunner.App;
 //   "MO2 Tool Runner.exe" check --setup <file>                                                  the pre-check, printed
 //   "MO2 Tool Runner.exe" restore [--setup <file>]                                              put back an interrupted run
 //   "MO2 Tool Runner.exe" stop | stop-after                                                     ask the running run to stop
+//   "MO2 Tool Runner.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments
 public static class Cli
 {
-	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "restore" or "stop" or "stop-after" or "import" or "--help" or "-h" or "/?";
+	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "restore" or "stop" or "stop-after" or "import" or "updates" or "--help" or "-h" or "/?";
 
 	static string? Opt(string[] a_args, string a_name)
 	{
@@ -26,6 +27,7 @@ public static class Cli
 				"restore" => RestoreCmd(a_args),
 				"stop" or "stop-after" => Stop(a_args[0]),
 				"import" => Import(a_args),
+				"updates" => Updates(a_args),
 				_ => Help(),
 			};
 		} catch (Exception e) when (e is ArgumentException or IOException or InvalidDataException) {
@@ -79,6 +81,17 @@ public static class Cli
 		}
 		Console.WriteLine(issues.Any(i => i.Blocking) ? "NOT READY" : "READY");
 		return issues.Any(i => i.Blocking) ? 1 : 0;
+	}
+
+	static int Updates(string[] a_args)
+	{
+		var setup = Setup.Load(SetupArg(a_args));
+		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+		var res = Task.Run(() => ToolUpdates.Check(setup, mo2, CancellationToken.None)).GetAwaiter().GetResult();
+		foreach (var r in res) {
+			Console.WriteLine($"{(r.Newer ? "NEWER " : "      ")}  {r.Tool}: yours {r.Yours}, its page {r.Newest}{(r.Problem == null ? "" : " - " + r.Problem)}  {r.Page}");
+		}
+		return res.Any(r => r.Newer) ? 2 : 0;
 	}
 
 	static int RestoreCmd(string[] a_args)
