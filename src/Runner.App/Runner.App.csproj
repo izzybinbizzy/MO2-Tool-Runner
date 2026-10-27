@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <Resource Include="Icon.ico" />
+    <EmbeddedResource Include="Theme template.json" LogicalName="ThemeTemplate.json" />
   </ItemGroup>
 
   <ItemGroup>

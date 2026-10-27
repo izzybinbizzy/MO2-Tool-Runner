@@ -42,6 +42,8 @@ public partial class App : Application
 			Shutdown(Snapshot(args[1]));
 			return;
 		}
+		// the theme picked last time, before the window is drawn
+		Theme.ApplySaved();
 		var w = new MainWindow();
 		MainWindow = w;
 		w.Show();
@@ -117,6 +119,26 @@ public partial class App : Application
 		w.Demo(true);
 		Pump(w, 600);
 		Save("6 a guided step");
+		// a made-up theme over the same run: every themeable value changed, so the picture shows what a theme reaches
+		var demoTheme = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner demo theme.json");
+		File.WriteAllText(demoTheme, """
+			{ "name": { "value": "Demo" }, "windowsMode": { "value": "Light" },
+			  "colors": { "Bg": { "value": "#E9EEF5" }, "Panel": { "value": "#FFFFFF" }, "Panel2": { "value": "#F3F6FA" }, "Line": { "value": "#C9D3E0" },
+			    "Accent": { "value": "#1F6FD1" }, "AccentLight": { "value": "#0E4FA0" }, "AccentDim": { "value": "#8DB3E2" }, "Text": { "value": "#1B2430" },
+			    "Muted": { "value": "#5B6878" }, "Good": { "value": "#1E8A4C" }, "Warn": { "value": "#A86A00" }, "Bad": { "value": "#C2362B" },
+			    "OnAccent": { "value": "#FFFFFF" }, "HoverFill": { "value": "#DCE8F7" }, "BannerBad": { "value": "#FBE3E0" }, "GuidedFill": { "value": "#E3EEFB" },
+			    "Shade": { "value": "#660B1A2E" } },
+			  "gradients": { "PrimaryAndProgress": { "stops": [ { "color": "#1F6FD1", "at": 0 }, { "color": "#3D8BEB", "at": 1 } ] } },
+			  "fonts": { "Ui": { "value": "Segoe UI" }, "Heading": { "value": "Segoe UI Semibold" }, "Mono": { "value": "Consolas" } },
+			  "sizes": { "Heading1": 20, "StepTitle": 24, "Clock": 18 },
+			  "shape": { "CardCorner": 14, "ButtonCorner": 12, "CheckBoxCorner": 9, "GuidedBoxCorner": 12, "ProgressBarHeight": 5 },
+			  "glyphs": { "Running": "→", "Done": "✓" } }
+			""");
+		var themeProblems = Theme.ApplyFileForPicture(demoTheme);
+		Pump(w, 800);
+		Save("8 a theme (demo)" + (themeProblems.Count > 0 ? " - with problems" : ""));
+		Theme.Apply(Theme.Default, false);
+		File.Delete(demoTheme);
 		w.Close();
 		return 0;
 	}

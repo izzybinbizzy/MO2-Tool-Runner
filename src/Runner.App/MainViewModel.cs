@@ -18,11 +18,11 @@ public sealed partial class StepRow : Observable
 	public int Number { get; set => Set(ref field, value); }
 
 	public string Glyph => State switch {
-		StepState.Running => "▶",
-		StepState.Done => "✔",
-		StepState.Failed => "✖",
-		StepState.Stopped => "■",
-		StepState.Skipped => "–",
+		StepState.Running => Theme.Glyph("Running"),
+		StepState.Done => Theme.Glyph("Done"),
+		StepState.Failed => Theme.Glyph("Failed"),
+		StepState.Stopped => Theme.Glyph("Stopped"),
+		StepState.Skipped => Theme.Glyph("Skipped"),
 		_ => "",
 	};
 
@@ -439,7 +439,7 @@ public sealed partial class MainViewModel : Observable
 			return;
 		}
 		foreach (var i in found) {
-			Issues.Add($"{(i.Blocking ? "✖" : "•")}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
+			Issues.Add($"{(i.Blocking ? Theme.Glyph("IssueBlocks") : Theme.Glyph("IssueNote"))}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
 		}
 		var blocks = found.Count(i => i.Blocking);
 		Say(blocks > 0 ? $"{blocks} thing(s) would stop the run." : found.Count > 0 ? "Ready - with notes." : "Ready - everything checks out.", blocks > 0 ? "bad" : "good");

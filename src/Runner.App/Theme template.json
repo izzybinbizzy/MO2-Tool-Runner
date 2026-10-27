@@ -1,0 +1,93 @@
+{
+  "_read_me": [
+    "MO2 Tool Runner - THEME TEMPLATE. Every value below is the current default theme (black and gold).",
+    "A theme is one copy of this file with new values: keep every key, change only the \"value\" fields (and the numbers / glyphs).",
+    "Put the theme file (and its icon, if it has one) in the \"Themes\" folder inside MO2 Tool Runner's data folder; Settings > THE WINDOW'S LOOK picks it.",
+    "A key left out keeps the default; a value that does not read is named in Settings and the default kept.",
+    "Colours are #RRGGBB, or #AARRGGBB where AA is opacity (00 see-through ... FF solid). Fonts are Windows font names, a fallback after a comma.",
+    "Each \"where\" line says where on screen the value shows, so a theme can be judged without running the program.",
+    "Rules a theme must keep: Text and Muted readable on Bg, Panel and Panel2 (contrast 4.5 : 1 or more); Good, Warn and Bad told apart",
+    "without colour alone being the only cue (each also has its own glyph); Accent readable on Panel2 (outlined buttons); the primary button's",
+    "text readable on its gradient. The window layout (where things sit) is not part of a theme - only how they look."
+  ],
+  "name": { "value": "Black and Gold", "where": "the theme's name in Settings" },
+  "author": { "value": "izzydoingit", "where": "shown beside the name" },
+  "description": { "value": "The default: near-black panels, gold accents.", "where": "one line under the name in Settings" },
+  "windowsMode": { "value": "Dark", "where": "Dark or Light - the base Windows draws text boxes, lists, scroll bars and drop-downs with" },
+
+  "colors": {
+    "Bg": { "value": "#0B0B0D", "where": "the window's background behind every panel" },
+    "Panel": { "value": "#141418", "where": "cards (the step list, the 'now running' card, the log), the header bar, the status bar, the Settings / History drawer, dialogs" },
+    "Panel2": { "value": "#1B1B21", "where": "insides: text boxes, the log box, the history list, outlined buttons, unticked check boxes" },
+    "Line": { "value": "#2E2A20", "where": "thin borders around cards, under the header, above the status bar" },
+    "Accent": { "value": "#D4AF37", "where": "section headings (STEPS, LOG, THIS SETUP ...), ticked check boxes, the progress bar's end, the drawer's edge" },
+    "AccentLight": { "value": "#F2D57A", "where": "the big step title, outlined-button text, hover and keyboard-focus outlines" },
+    "AccentDim": { "value": "#7A6420", "where": "outlined-button borders, unticked check-box borders, the drawer's left edge" },
+    "Text": { "value": "#ECE6D6", "where": "all normal text: step names, the activity line, settings, the log" },
+    "Muted": { "value": "#9A9384", "where": "secondary text: step notes, usual times, hints, the footer's shortcuts, field explanations" },
+    "Good": { "value": "#6FCF8E", "where": "a finished step's tick, 'finished' verdicts, 'Ready', MO2 / Skyrim status dot when fine" },
+    "Warn": { "value": "#E8C06A", "where": "stopped runs, notes from the pre-check, 'a newer version is out'" },
+    "Bad": { "value": "#E8776A", "where": "failed steps, refusals, errors, the Stop now button's text, the interrupted-run banner's edge" },
+    "OnAccent": { "value": "#0B0B0D", "where": "text and the tick drawn ON accent: the START / primary button text, the tick inside a ticked check box" },
+    "HoverFill": { "value": "#241F12", "where": "an outlined button's background while the mouse is over it" },
+    "BannerBad": { "value": "#3A1B17", "where": "the 'last run did not finish - Put my profile back' banner across the top" },
+    "GuidedFill": { "value": "#2A2410", "where": "the box that asks the player to do an in-game step ('Your turn in the game')" },
+    "Shade": { "value": "#99000000", "where": "the dimming over the window while the Settings or History drawer is open" }
+  },
+
+  "gradients": {
+    "PrimaryAndProgress": {
+      "stops": [
+        { "color": "#8E6F1E", "at": 0.0 },
+        { "color": "#F2D57A", "at": 0.6 },
+        { "color": "#D4AF37", "at": 1.0 }
+      ],
+      "direction": "left to right",
+      "where": "the START / Save / Put my profile back buttons and the progress bar of a running step"
+    }
+  },
+
+  "windowsAccent": {
+    "where": "the colour Windows' own controls use (focused text boxes, drop-down highlights, selected list rows) - lightest to darkest",
+    "Light3": "#F8E6AE", "Light2": "#F2D57A", "Light1": "#E2C25A", "Base": "#D4AF37", "Dark1": "#B08F2A", "Dark2": "#8E6F1E", "Dark3": "#6B5317"
+  },
+
+  "fonts": {
+    "Ui": { "value": "Segoe UI Variable Text, Segoe UI", "where": "all normal text" },
+    "Heading": { "value": "Bahnschrift SemiBold, Segoe UI Semibold", "where": "the program's name, section headings, the step title, primary buttons" },
+    "Mono": { "value": "Cascadia Mono, Consolas", "where": "the log (live and in History)" }
+  },
+
+  "sizes": {
+    "where": "text sizes in points",
+    "Heading1": 22, "StepTitle": 26, "Clock": 20, "Heading2": 15, "Verdict": 15, "Body": 14, "Small": 12.5, "Log": 12.5, "PrimaryButton": 15,
+    "_note": "Heading1 is also the program's name in the header; Clock is the run's elapsed time at the top right of the running step"
+  },
+
+  "shape": {
+    "where": "roundness (corner radius) and edges",
+    "CardCorner": 8, "ButtonCorner": 6, "CheckBoxCorner": 4, "GuidedBoxCorner": 6, "ProgressBarHeight": 8
+  },
+
+  "glyphs": {
+    "where": "the mark at the end of each step row",
+    "Running": "▶", "Done": "✔", "Failed": "✖", "Stopped": "■", "Skipped": "–",
+    "IssueBlocks": "✖", "IssueNote": "•"
+  },
+
+  "statusDots": {
+    "where": "the two dots in the status bar take their colours from the list above: Mod Organizer open = Warn, Skyrim running = Bad, either one closed = Muted",
+    "Mo2Open": "Warn", "GameRunning": "Bad", "Closed": "Muted"
+  },
+
+  "icon": {
+    "value": "",
+    "where": "an .ico or .png file beside the theme file (empty = the program's own): the 30 x 30 logo left of the program's name and the window's taskbar / title-bar icon (the notification-area icon stays the program's own)"
+  },
+
+  "_not_in_a_theme": [
+    "the layout: header, step list on the left, the running step and the log on the right, the status bar, the drawers",
+    "the words on screen (labels, messages, the readme)",
+    "sounds: the run-finished sound is Windows' own notification sound"
+  ]
+}

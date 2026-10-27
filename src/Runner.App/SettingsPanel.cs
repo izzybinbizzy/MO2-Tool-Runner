@@ -170,6 +170,42 @@ public static class SettingsPanel
 		Field(stack, apply, "Commands after a run (one per line)", work, "afterRun", JsonValueKind.Array);
 
 		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
+		// the window's look for every setup (his ask 2026-10-27: themes his design agent makes from "Theme template.json")
+		Head("THE WINDOW'S LOOK");
+		var themeNote = new TextBlock { Text = "A theme is a copy of \"Theme template.json\" (in the Themes folder) with new values. It applies at once.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+		var themeRow = new StackPanel { Orientation = Orientation.Horizontal };
+		var themes = new ComboBox { MinWidth = 220, Margin = new Thickness(0, 0, 10, 0) };
+		System.Windows.Automation.AutomationProperties.SetName(themes, "Theme");
+		void FillThemes()
+		{
+			var list = Theme.List();
+			themes.ItemsSource = list.Select(t => t.Name).ToList();
+			themes.SelectedItem = list.Any(t => t.Name == Theme.Current) ? Theme.Current : Theme.Default;
+		}
+		try {
+			Theme.EnsureFolder();
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) {
+			themeNote.Text = "The Themes folder could not be made: " + e.Message;
+		}
+		FillThemes();
+		themes.SelectionChanged += (_, _) => {
+			if (themes.SelectedItem is not string name || name == Theme.Current) {
+				return;
+			}
+			var problems = Theme.Apply(name);
+			themeNote.Text = problems.Count == 0 ? $"\"{Theme.Current}\" in use." : "In use, with these values left as the default: " + string.Join("; ", problems.Take(6));
+		};
+		var openThemes = new Button { Content = "Open the Themes folder", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };
+		openThemes.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Theme.Folder) { UseShellExecute = true });
+		var reload = new Button { Content = "Look again", Style = (Style)a_w.FindResource("Ghost"), ToolTip = "Reads the Themes folder again (a theme just added)" };
+		reload.Click += (_, _) => FillThemes();
+		themeRow.Children.Add(themes);
+		themeRow.Children.Add(openThemes);
+		themeRow.Children.Add(reload);
+		stack.Children.Add(themeNote);
+		stack.Children.Add(themeRow);
+
 		Head("TOOL UPDATES");
 		var updNote = new TextBlock { Text = "Asks each tool's own page (Nexus, GitHub) for its newest version - only when you press this.",
 			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
