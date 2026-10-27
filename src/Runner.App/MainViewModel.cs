@@ -316,6 +316,14 @@ public sealed partial class MainViewModel : Observable
 			Say("Working out what the run will do ...", "");
 			var setup = Setup;
 			var file = SelectedSetup!.File;
+			byte[] shown;
+			try {
+				shown = Files.ReadShared(file);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				_previewing = false;
+				Say("Could not read the setup: " + e.Message, "bad");
+				return;
+			}
 			var usual = _usual;
 			string preview;
 			try {
@@ -338,6 +346,17 @@ public sealed partial class MainViewModel : Observable
 			}
 			if (!string.Equals(SelectedSetup?.File, file, StringComparison.OrdinalIgnoreCase)) {
 				Say("Not started: another setup was picked while the preview was open - press Start again.", "warn");
+				return;
+			}
+			// a step switched while the box was open changes what runs: the player sees a new preview first
+			bool same;
+			try {
+				same = Files.ReadShared(file).AsSpan().SequenceEqual(shown);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				same = false;
+			}
+			if (!same) {
+				Say("Not started: the setup changed while the preview was open - press Start again to see the new one.", "warn");
 				return;
 			}
 		}

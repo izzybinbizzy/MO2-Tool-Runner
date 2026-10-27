@@ -37,23 +37,20 @@ public sealed class DevBench(string a_baseUrl = "http://127.0.0.1:8920/api/tool/
 		}
 	}
 
-	public JsonNode? Papyrus(string a_script, string a_function, params object[] a_args)
-	{
-		var r = Call("papyrus", new { action = "call", script = a_script, function = a_function, args = a_args }, 30);
-		if (r["called"]?.GetValue<bool>() != true) {
-			throw new StepFailedException($"the game did not run {a_script}.{a_function}: {r.ToJsonString()[..Math.Min(300, r.ToJsonString().Length)]}");
-		}
-		return r["returned"];
-	}
+	public JsonNode? Papyrus(string a_script, string a_function, params object[] a_args) =>
+		Returned(Call("papyrus", new { action = "call", script = a_script, function = a_function, args = a_args }, 30), a_script, a_function);
 
 	// a Papyrus member function called on one reference (its form id, e.g. "0x00000014" for the player)
-	public JsonNode? PapyrusOn(string a_self, string a_script, string a_function, params object[] a_args)
+	public JsonNode? PapyrusOn(string a_self, string a_script, string a_function, params object[] a_args) =>
+		Returned(Call("papyrus", new { action = "call", script = a_script, function = a_function, args = a_args, self = new { form = a_self } }, 40), a_script, a_function);
+
+	static JsonNode? Returned(JsonNode a_r, string a_script, string a_function)
 	{
-		var r = Call("papyrus", new { action = "call", script = a_script, function = a_function, args = a_args, self = new { form = a_self } }, 40);
-		if (r["called"]?.GetValue<bool>() != true) {
-			throw new StepFailedException($"the game did not run {a_script}.{a_function}: {r.ToJsonString()[..Math.Min(300, r.ToJsonString().Length)]}");
+		if (a_r["called"] is not JsonValue c || !c.TryGetValue<bool>(out var called) || !called) {
+			var text = a_r.ToJsonString();
+			throw new StepFailedException($"the game did not run {a_script}.{a_function}: {text[..Math.Min(300, text.Length)]}");
 		}
-		return r["returned"];
+		return a_r["returned"];
 	}
 
 	// a returned reference's form id as "0xXXXXXXXX"

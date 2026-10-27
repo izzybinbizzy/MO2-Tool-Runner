@@ -187,8 +187,9 @@ public static class Waits
 					alive = false;
 				}
 				if (alive) {
-					if (a_progress != null) {
-						var seen = a_progress();
+					// a window whose text cannot be read (empty) is judged by the tool's CPU, so a working tool is never called idle
+					var seen = a_progress?.Invoke();
+					if (!string.IsNullOrEmpty(seen)) {
 						if (seen != lastSeen) {
 							lastSeen = seen;
 							lastBusy = sw.Elapsed;

@@ -379,11 +379,12 @@ public sealed class ShaderStep : IStep
 			Directory.Delete(owCache, true);
 		}
 		var logs = InGame.SkseLogs(a_ctx.Setup, a_ctx.Mo2);
+		string? result = null;
+		var verified = true;
+		var count = 0;
 		using (new Toggle(a_ctx, a_on, a_off, "the shader cache", a_ctx.Cancel)) {
 			var restarts = 0;
 			var total = Stopwatch.StartNew();
-			string? result = null;
-			var verified = true;
 			Process? g = null;
 			// any failure or Stop: the game this step started is closed here, inside the Toggle, so MO2 can close for the put-back
 			try {
@@ -463,7 +464,7 @@ public sealed class ShaderStep : IStep
 			a_ctx.Log.Detail(result);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 30)));
 			InGame.CloseGame(a_ctx);
-			var count = Files.CountFiles(owCache);
+			count = Files.CountFiles(owCache);
 			if (count < a_s.Int("min_files", 50)) {
 				throw new StepFailedException($"the shader cache looks empty ({count} files)");
 			}
@@ -471,9 +472,10 @@ public sealed class ShaderStep : IStep
 			Files.MoveContents(owCache, Path.Combine(a_ctx.Mo2.ModDir(a_c.OutputMod), "ShaderCache"));
 			Directory.Delete(owCache, true);
 			StepKit.MarkReplaced(a_ctx, a_c.OutputMod);
-			Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c, a_ctx.Profile), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
-				["verified"] = verified }.ToJsonString());
-			a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 		}
+		// stamped against the profile as it is put back, the state the next freshness check reads - never the compile's own switches
+		Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c, a_ctx.Profile), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
+			["verified"] = verified }.ToJsonString());
+		a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 	}
 }

@@ -65,7 +65,13 @@ public static partial class ToolSettings
 		if (l == null || l.Values.Count == 0 || exe == null || VarsLog(exe, a_step) is not { } log || File.GetLastWriteTimeUtc(log) < a_since.ToUniversalTime()) {
 			return [];
 		}
-		var now = ReadVars(log);
+		Dictionary<string, string> now;
+		try {
+			now = ReadVars(log);
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			a_ctx.Log.Warn($"{l.Tool}'s values could not be compared with the learned ones - its log did not read ({e.Message})");
+			return [];
+		}
 		var diff = l.Values.Where(kv => now.TryGetValue(kv.Key, out var v) && v != kv.Value)
 			.Select(kv => $"{kv.Key} {now[kv.Key]} (learned {kv.Value})").ToList();
 		if (diff.Count > 0) {

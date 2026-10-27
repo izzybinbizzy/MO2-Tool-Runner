@@ -93,32 +93,71 @@ public static class Theme
 			if (name != Default) {
 				Apply(name, false);
 			}
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) {
+			Reset();
 		}
 	}
 
-	// applies the theme by its name; returns what did not read (empty = all of it). a_keep: remembered for the next start
-	public static List<string> Apply(string a_name, bool a_keep = true)
+	// the theme's own icon, for the window made after the theme was applied (at start the window does not exist yet)
+	public static ImageSource? Icon { get; private set; }
+
+	// the built-in look: every resource as the program started with it, a theme's extra keys removed
+	static void Reset()
 	{
 		var res = Application.Current.Resources;
 		s_defaults ??= res.Keys.Cast<object>().ToDictionary(k => k, k => res[k]);
+		foreach (var k in res.Keys.Cast<object>().Where(k => !s_defaults.ContainsKey(k)).ToList()) {
+			res.Remove(k);
+		}
 		foreach (var (k, v) in s_defaults) {
 			res[k] = v;
 		}
 		s_glyphs = new(DefaultGlyphs);
+		Icon = null;
 		Application.Current.MainWindow?.ClearValue(Window.IconProperty);
 		SetMode("Dark");
+	}
+
+	// a theme file read and parsed (no window work - Settings does this off the window's thread)
+	sealed record Read(JsonObject? Json, string? Dir, string? Problem);
+
+	static Read ReadTheme(string a_name)
+	{
+		var file = List().FirstOrDefault(t => t.Name == a_name).File;
+		if (file == null) {
+			return new(null, null, $"no theme called \"{a_name}\" in the Themes folder - the built-in one is used");
+		}
+		try {
+			return new(JsonNode.Parse(Files.ReadSharedText(file)) as JsonObject ?? [], Path.GetDirectoryName(file)!, null);
+		} catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
+			return new(null, null, $"{Path.GetFileName(file)} does not read ({e.Message}) - the built-in theme is used");
+		}
+	}
+
+	// the Settings picker: the folder and the file read off the window's thread, the look applied on it
+	public static async Task<List<string>> ApplyAsync(string a_name)
+	{
+		var read = a_name == Default ? null : await Task.Run(() => ReadTheme(a_name));
+		return Apply(a_name, read, true);
+	}
+
+	// applies the theme by its name; returns what did not read (empty = all of it). a_keep: remembered for the next start
+	public static List<string> Apply(string a_name, bool a_keep = true) => Apply(a_name, a_name == Default ? null : ReadTheme(a_name), a_keep);
+
+	static List<string> Apply(string a_name, Read? a_read, bool a_keep)
+	{
+		Reset();
 		var problems = new List<string>();
 		if (a_name != Default) {
-			var file = List().FirstOrDefault(t => t.Name == a_name).File;
-			if (file == null) {
-				problems.Add($"no theme called \"{a_name}\" in the Themes folder - the built-in one is used");
+			if (a_read?.Json == null) {
+				problems.Add(a_read?.Problem ?? $"no theme called \"{a_name}\" - the built-in one is used");
 				a_name = Default;
 			} else {
 				try {
-					ApplyFile(JsonNode.Parse(Files.ReadSharedText(file)) as JsonObject ?? [], Path.GetDirectoryName(file)!, problems);
-				} catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
-					problems.Add($"{Path.GetFileName(file)} does not read ({e.Message}) - the built-in theme is used");
+					ApplyFile(a_read.Json, a_read.Dir!, problems);
+				} catch (InvalidOperationException e) {
+					Reset();
+					problems.Add($"\"{a_name}\" does not read ({e.Message}) - the built-in theme is used");
 					a_name = Default;
 				}
 			}
@@ -174,7 +213,7 @@ public static class Theme
 				res[key] = b;
 			}
 		}
-		if ((a_t["gradients"] as JsonObject)?["PrimaryAndProgress"]?["stops"] is JsonArray stops && stops.Count >= 2) {
+		if (((a_t["gradients"] as JsonObject)?["PrimaryAndProgress"] as JsonObject)?["stops"] is JsonArray stops && stops.Count >= 2) {
 			var g = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
 			foreach (var s in stops.OfType<JsonObject>()) {
 				if (ReadColor("gradients.PrimaryAndProgress", s["color"]?.ToString()) is { } c && s["at"] is JsonValue at && at.TryGetValue<double>(out var o)) {
@@ -233,16 +272,23 @@ public static class Theme
 			}
 		}
 		if (Value(a_t["icon"]) is { Length: > 0 } icon) {
-			var path = Path.Combine(a_dir, icon);
-			try {
-				var img = BitmapFrame.Create(new Uri(path), BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-				img.Freeze();
-				res["Logo"] = img;
-				if (Application.Current.MainWindow != null) {
-					Application.Current.MainWindow.Icon = img;
+			// only a file beside the theme: a full path, a share or ".." would read (or reach) outside its folder
+			var dir = Path.GetFullPath(a_dir).TrimEnd('\\') + "\\";
+			var path = Path.GetFullPath(Path.Combine(dir, icon));
+			if (Path.IsPathRooted(icon) || !path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)) {
+				a_problems.Add($"icon: \"{icon}\" must be a file beside the theme");
+			} else {
+				try {
+					var img = BitmapFrame.Create(new Uri(path), BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+					img.Freeze();
+					res["Logo"] = img;
+					Icon = img;
+					if (Application.Current.MainWindow != null) {
+						Application.Current.MainWindow.Icon = img;
+					}
+				} catch (Exception e) when (e is IOException or UriFormatException or NotSupportedException or ArgumentException) {
+					a_problems.Add($"icon: \"{icon}\" does not open ({e.Message})");
 				}
-			} catch (Exception e) when (e is IOException or UriFormatException or NotSupportedException or ArgumentException) {
-				a_problems.Add($"icon: \"{icon}\" does not open ({e.Message})");
 			}
 		}
 	}

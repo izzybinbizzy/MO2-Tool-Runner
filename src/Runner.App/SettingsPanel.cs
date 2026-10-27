@@ -177,23 +177,33 @@ public static class SettingsPanel
 		var themeRow = new StackPanel { Orientation = Orientation.Horizontal };
 		var themes = new ComboBox { MinWidth = 220, Margin = new Thickness(0, 0, 10, 0) };
 		System.Windows.Automation.AutomationProperties.SetName(themes, "Theme");
-		void FillThemes()
+		// the Themes folder is read off the window's thread (many or slow files never freeze it)
+		var filling = false;
+		async void FillThemes()
 		{
-			var list = Theme.List();
+			var (list, error) = await Task.Run(() => {
+				string? err = null;
+				try {
+					Theme.EnsureFolder();
+				} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) {
+					err = e.Message;
+				}
+				return (Theme.List(), err);
+			});
+			if (error != null) {
+				themeNote.Text = "The Themes folder could not be made: " + error;
+			}
+			filling = true;
 			themes.ItemsSource = list.Select(t => t.Name).ToList();
 			themes.SelectedItem = list.Any(t => t.Name == Theme.Current) ? Theme.Current : Theme.Default;
-		}
-		try {
-			Theme.EnsureFolder();
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) {
-			themeNote.Text = "The Themes folder could not be made: " + e.Message;
+			filling = false;
 		}
 		FillThemes();
-		themes.SelectionChanged += (_, _) => {
-			if (themes.SelectedItem is not string name || name == Theme.Current) {
+		themes.SelectionChanged += async (_, _) => {
+			if (filling || themes.SelectedItem is not string name || name == Theme.Current) {
 				return;
 			}
-			var problems = Theme.Apply(name);
+			var problems = await Theme.ApplyAsync(name);
 			themeNote.Text = problems.Count == 0 ? $"\"{Theme.Current}\" in use." : "In use, with these values left as the default: " + string.Join("; ", problems.Take(6));
 		};
 		var openThemes = new Button { Content = "Open the Themes folder", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };

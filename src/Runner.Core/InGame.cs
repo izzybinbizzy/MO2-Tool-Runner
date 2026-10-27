@@ -175,7 +175,7 @@ public static partial class InGame
 		var until = DateTime.UtcNow.AddSeconds(a_seconds);
 		while (DateTime.UtcNow < until) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			if (Game(a_ctx) == null) {
+			if (!GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while the save settled");
 			}
 			Thread.Sleep(1000);
@@ -189,17 +189,31 @@ public static partial class InGame
 		Thread.Sleep(3000);
 		while (sw.Elapsed < TimeSpan.FromMinutes(5)) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
+			if (!GameUp(a_ctx)) {
+				throw new StepFailedException("the game closed while the new place loaded");
+			}
 			try {
 				if (a_ctx.DevBench.Call("inspect", new { kind = "state" }, 10)["playerLoaded"]?.GetValue<bool>() == true &&
 				    a_ctx.DevBench.Call("menu", new { action = "list" }, 10)["loading"]?.GetValue<bool>() != true) {
 					return;
 				}
-			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException) {
+			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException or FormatException) {
 			}
 			Thread.Sleep(3000);
 		}
 		throw new StepFailedException("the new place did not finish loading within 5 minutes");
 	}
+
+	static bool GameUp(RunContext a_ctx)
+	{
+		using var g = Game(a_ctx);
+		return g != null;
+	}
+
+	// a step that only helps (the horse check, the marker removal, DynDOLOD back on): any DevBench failure is a warning, a real
+	// Stop is not (a DevBench timeout is a TaskCanceledException too, which the run would otherwise read as a Stop)
+	static bool Helps(RunContext a_ctx, Exception a_e) => !a_ctx.Cancel.IsCancellationRequested &&
+		a_e is StepFailedException or HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException or FormatException;
 
 	const string Player = "0x00000014";
 
@@ -213,7 +227,7 @@ public static partial class InGame
 				a_ctx.Log.Detail("off the horse first");
 			}
 			a_ctx.DevBench.PapyrusOn(Player, "Actor", "StopCombat");
-		} catch (StepFailedException e) {
+		} catch (Exception e) when (Helps(a_ctx, e)) {
 			a_ctx.Log.Warn("could not check the horse / fight before the teleport: " + e.Message);
 		}
 	}
@@ -248,7 +262,7 @@ public static partial class InGame
 			if (sw.Elapsed > limit) {
 				throw new StepFailedException($"the game (or DevBench) did not answer within {limit.TotalMinutes:0} minutes");
 			}
-			if (sw.Elapsed > TimeSpan.FromSeconds(30) && Game(a_ctx) == null) {
+			if (sw.Elapsed > TimeSpan.FromSeconds(30) && !GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while it was starting");
 			}
 			Thread.Sleep(2000);
@@ -272,7 +286,7 @@ public static partial class InGame
 		t.Restart();
 		while (t.Elapsed < limit) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			if (Game(a_ctx) == null) {
+			if (!GameUp(a_ctx)) {
 				throw new StepFailedException($"the game closed while loading \"{a_save}\"");
 			}
 			try {
@@ -328,7 +342,7 @@ public static partial class InGame
 		var quietSince = TimeSpan.Zero;
 		while (sw.Elapsed < max) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			if (Game(a_ctx) == null) {
+			if (!GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while its shaders compiled");
 			}
 			if (Compiling(logs, a_ctx.Mo2.OverwriteDir, a_since)) {
@@ -395,7 +409,7 @@ public static partial class InGame
 		}
 		Procs.KillTree(g.Id);
 		var sw = Stopwatch.StartNew();
-		while (Game(a_ctx) != null && sw.Elapsed < TimeSpan.FromSeconds(30)) {
+		while (GameUp(a_ctx) && sw.Elapsed < TimeSpan.FromSeconds(30)) {
 			Thread.Sleep(500);
 		}
 		a_ctx.Log.Detail("the game is closed");
@@ -408,7 +422,7 @@ public static partial class InGame
 		LaunchGame(a_ctx, a_s);
 		a_ctx.Guide.Ask(a_step, a_what + " Then quit the game and press Done.", a_ctx.Cancel);
 		var sw = Stopwatch.StartNew();
-		while (Game(a_ctx) != null) {
+		while (GameUp(a_ctx)) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			if (sw.Elapsed > TimeSpan.FromMinutes(2)) {
 				throw new StepFailedException("the game is still running - quit it, then start the step again");
@@ -536,10 +550,13 @@ public static partial class InGame
 				Settle(a_ctx, "playsave", a_s.Int("settle_s", 10), "back at your place");
 				try {
 					a_ctx.DevBench.PapyrusOn(marker, "ObjectReference", "Delete");
-				} catch (StepFailedException e) {
+				} catch (Exception e) when (Helps(a_ctx, e)) {
 					a_ctx.Log.Warn("the place marker was not removed: " + e.Message);
 				}
 				a_ctx.Log.Detail("you are back where you stood before the clean save");
+			} else {
+				a_ctx.Log.Warn("no place was recorded in this run (the clean save was made by an earlier run) - the player stays where the clean save left them");
+				a_ctx.Journal.Notes.Add("the save to play was made where the clean save ended - no place from before it was recorded in this run");
 			}
 			if (a_s.Bool("dyndolod_off", true)) {
 				const string cls = "SHESON_DynDOLOD_Plugin";
@@ -549,7 +566,7 @@ public static partial class InGame
 						Settle(a_ctx, "playsave", a_s.Int("dyndolod_wait_s", 30), "DynDOLOD switched on again");
 					}
 					a_ctx.Log.Detail("DynDOLOD is on");
-				} catch (StepFailedException e) {
+				} catch (Exception e) when (Helps(a_ctx, e)) {
 					a_ctx.Log.Warn("DynDOLOD's state could not be read (" + e.Message + ") - check its menu in game");
 				}
 			}

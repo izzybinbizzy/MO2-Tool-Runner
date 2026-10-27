@@ -1301,6 +1301,9 @@ public static class Program
 			var b = Setup.FromJson((JsonObject)a.Root.DeepClone(), Path.Combine(f.Data, "Setups", "Copy of Test.json"));
 			Check(Schedule.TaskName(a) != Schedule.TaskName(b), "two setups with one name get two tasks");
 			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.Load(f.SetupFile)), "the same setup file always gets the same task");
+			var renamed = (JsonObject)a.Root.DeepClone();
+			renamed["name"] = "A New Name";
+			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.FromJson(renamed, f.SetupFile)), "a setup renamed inside keeps its task");
 		}
 		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
 		if (Environment.GetEnvironmentVariable("MO2TR_SCHEDULE_PROBE") != "1") {

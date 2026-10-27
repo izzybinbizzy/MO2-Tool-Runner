@@ -95,10 +95,12 @@ public static class LodGuide
 	public static string? NexusPage(string a_modDir)
 	{
 		var meta = Path.Combine(a_modDir, "meta.ini");
-		if (!File.Exists(meta)) {
+		List<string> lines;
+		try {
+			lines = File.Exists(meta) ? Files.ReadSharedText(meta).Split('\n').Select(l => l.Trim()).ToList() : [];
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 			return null;
 		}
-		var lines = Files.ReadSharedText(meta).Split('\n').Select(l => l.Trim()).ToList();
 		string? Value(string a_key) => lines
 			.FirstOrDefault(l => l.StartsWith(a_key + "=", StringComparison.OrdinalIgnoreCase))?[(a_key.Length + 1)..];
 		if (!int.TryParse(Value("modid"), System.Globalization.NumberStyles.None, InvariantCulture, out var id) || id <= 0) {

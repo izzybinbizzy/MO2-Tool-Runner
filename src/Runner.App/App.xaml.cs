@@ -45,6 +45,9 @@ public partial class App : Application
 		// the theme picked last time, before the window is drawn
 		Theme.ApplySaved();
 		var w = new MainWindow();
+		if (Theme.Icon is { } icon) {
+			w.Icon = icon;
+		}
 		MainWindow = w;
 		w.Show();
 	}
@@ -120,7 +123,8 @@ public partial class App : Application
 		Pump(w, 600);
 		Save("6 a guided step");
 		// a made-up theme over the same run: every themeable value changed, so the picture shows what a theme reaches
-		var demoTheme = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner demo theme.json");
+		var demoTheme = Path.Combine(Path.GetTempPath(), $"MO2 Tool Runner demo theme {Guid.NewGuid():N}.json");
+		try {
 		File.WriteAllText(demoTheme, """
 			{ "name": { "value": "Demo" }, "windowsMode": { "value": "Light" },
 			  "colors": { "Bg": { "value": "#E9EEF5" }, "Panel": { "value": "#FFFFFF" }, "Panel2": { "value": "#F3F6FA" }, "Line": { "value": "#C9D3E0" },
@@ -137,8 +141,10 @@ public partial class App : Application
 		var themeProblems = Theme.ApplyFileForPicture(demoTheme);
 		Pump(w, 800);
 		Save("8 a theme (demo)" + (themeProblems.Count > 0 ? " - with problems" : ""));
-		Theme.Apply(Theme.Default, false);
-		File.Delete(demoTheme);
+		} finally {
+			Theme.Apply(Theme.Default, false);
+			File.Delete(demoTheme);
+		}
 		w.Close();
 		return 0;
 	}
