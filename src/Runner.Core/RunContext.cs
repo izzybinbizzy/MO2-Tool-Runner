@@ -206,7 +206,7 @@ public static class Waits
 						} else {
 							var boxes = Uia.Boxes(Procs.Tree(a_proc.Id));
 							var said = boxes.Count > 0 ? " It shows: " + string.Join(" / ", boxes.Select(b => b.Text)) :
-								lastSeen is { Length: > 0 } s ? " Its window shows: " + (s.Length > 300 ? s[..300] : s) : " It shows no question.";
+								lastSeen is { Length: > 0 } s ? " Its window shows: " + (s.Length > 300 ? "..." + s[^300..] : s) : " It shows no question.";
 							throw new StepFailedException($"{StepCatalog.Name(a_step)} sat idle for {idleLimit.TotalMinutes:0} minutes without finishing.{said}");
 						}
 					}

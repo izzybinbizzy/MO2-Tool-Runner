@@ -227,14 +227,25 @@ public sealed class SynthesisStep : IStep
 		Build(a_ctx, a_s, image, exePath);
 		using (new Toggle(a_ctx, [], a_s.List("disable_during"), "Synthesis", a_ctx.Cancel)) {
 			try {
+				var tRun = DateTime.UtcNow;
+				var logs = Path.Combine(Path.GetDirectoryName(exePath)!, "logs");
+				string? runLog = null;
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, null, a_ctx.Cancel);
 				var w = StepKit.WaitWindow(a_ctx, image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "Synthesis's window");
 				Press(a_ctx, w);
 				a_ctx.Activity(Key, "Synthesis is running its patchers");
-				// judged by its window (its timers and patcher states change while it works), never by its CPU alone
+				// judged by its window (its timers and patcher states change while it works), never by its CPU alone; a patcher
+				// that failed is read off Synthesis's own log the moment its run ends (2026-10-27: one failed, no Synthesis.esp)
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(90), () => {
 					var fresh = new[] { espOw, espMod }.FirstOrDefault(p => File.Exists(p) && File.GetLastWriteTimeUtc(p) > t0);
-					return fresh != null && DateTime.UtcNow - File.GetLastWriteTimeUtc(fresh) > TimeSpan.FromSeconds(20) ? Waits.Poll.Done : Waits.Poll.Wait;
+					if (fresh != null && DateTime.UtcNow - File.GetLastWriteTimeUtc(fresh) > TimeSpan.FromSeconds(20)) {
+						return Waits.Poll.Done;
+					}
+					runLog ??= RunLog(logs, tRun);
+					if (fresh == null && runLog != null && Failure(Files.ReadSharedText(runLog)) is { } why) {
+						throw new StepFailedException($"Synthesis: {why} - it wrote no Synthesis.esp (its log: {runLog})");
+					}
+					return Waits.Poll.Wait;
 				}, a_progress: () => Uia.TextOf(w, 4000));
 			} finally {
 				StepKit.CloseTool(a_ctx, image);
@@ -248,6 +259,27 @@ public sealed class SynthesisStep : IStep
 			throw new StepFailedException("Synthesis wrote no new Synthesis.esp");
 		}
 		a_ctx.SetAfter(mod);
+	}
+
+	// the log Synthesis started for this run (it keeps one per start, plus Current.log)
+	static string? RunLog(string a_dir, DateTime a_since) => Directory.Exists(a_dir)
+		? new DirectoryInfo(a_dir).GetFiles("*.log").Where(f => !f.Name.Equals("Current.log", StringComparison.OrdinalIgnoreCase) && f.CreationTimeUtc >= a_since)
+			.OrderByDescending(f => f.CreationTimeUtc).Select(f => f.FullName).FirstOrDefault()
+		: null;
+
+	// a finished run whose log holds an error: which patcher failed and why; null while it runs or when nothing failed
+	public static string? Failure(string a_log)
+	{
+		if (!a_log.Contains("Finished patcher run", StringComparison.Ordinal)) {
+			return null;
+		}
+		var err = Regex.Matches(a_log, @"\[ERR\] \[T\d+\] (?<m>.+)").Select(m => m.Groups["m"].Value.Trim()).FirstOrDefault(m => m.Length > 0 && !m.StartsWith("Error while running", StringComparison.Ordinal));
+		if (err == null) {
+			return null;
+		}
+		var at = a_log.IndexOf(err, StringComparison.Ordinal);
+		var patcher = Regex.Matches(a_log[..at], @"Starting Patcher (?<p>.+?) Run").LastOrDefault()?.Groups["p"].Value;
+		return (patcher != null ? $"its patcher \"{patcher}\" failed: " : "a patcher failed: ") + (err.Length > 300 ? err[..300] : err);
 	}
 
 	// its Run button: an enabled one on screen (it has two "GoButton"s - 2026-10-27 the first one pressed nothing and the window

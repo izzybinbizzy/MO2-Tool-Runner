@@ -943,6 +943,22 @@ public static class Program
 		}
 	}
 
+	// a Synthesis patcher that failed is named off Synthesis's own log once its run ends (2026-10-27: Leveled List Resolver
+	// could not write a compressed record, no Synthesis.esp, and the step only said "sat idle")
+	static void T_SynthesisPatcherFailureIsNamed()
+	{
+		const string head = """
+			2026-10-27 16:04:36.640 -04:00 [INF] [T16] ================= Starting Patcher Leveled List Resolver Run =================
+			2026-10-27 16:04:44.387 -04:00 [INF] [T34] Writing to output: C:\Temp\Synthesis.esp
+			2026-10-27 16:04:45.899 -04:00 [ERR] [T35] System.NotImplementedException: Writing with compression enabled is not currently supported.
+			2026-10-27 16:04:45.907 -04:00 [ERR] [T35] Error while running:
+			""";
+		Equal<string?>(null, SynthesisStep.Failure(head), "still running: not judged yet");
+		var why = SynthesisStep.Failure(head + "2026-10-27 16:04:45.911 -04:00 [INF] [T2] Finished patcher run\n");
+		Check(why != null && why.Contains("\"Leveled List Resolver\"", StringComparison.Ordinal) && why.Contains("compression", StringComparison.Ordinal), "patcher and reason named: " + why);
+		Equal<string?>(null, SynthesisStep.Failure("[INF] [T2] Starting Patcher A Run\n[INF] [T2] Finished patcher run\n"), "a clean run is no failure");
+	}
+
 	static void T_BeforeRunCommandMustSucceed()
 	{
 		using var f = new FakeMo2();
