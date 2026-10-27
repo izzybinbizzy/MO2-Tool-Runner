@@ -408,9 +408,13 @@ public static class Program
 		Check(InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(-1)), "dated stamp, remaining > 0");
 		File.WriteAllText(log, "[17:50:34.017] [info] [ShaderTiming] x remaining=0\n");
 		Check(!InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(-1)), "remaining 0 = done");
-		File.WriteAllText(Path.Combine(logs, "OpenShaders.log"), "[info] Shader compilation started\n");
+		var open = Path.Combine(logs, "OpenShaders.log");
+		File.WriteAllText(open, "[info] Shader compilation started\n");
+		// the newer log by its write time (a fast machine writes both in the same clock tick)
+		File.SetLastWriteTimeUtc(open, File.GetLastWriteTimeUtc(log).AddSeconds(5));
 		Check(InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(-1)), "Open Shaders: started, no completed (the newest log wins)");
-		File.AppendAllText(Path.Combine(logs, "OpenShaders.log"), "[info] Shader compilation completed: 3169/3169 tasks\n");
+		File.AppendAllText(open, "[info] Shader compilation completed: 3169/3169 tasks\n");
+		File.SetLastWriteTimeUtc(open, File.GetLastWriteTimeUtc(log).AddSeconds(10));
 		Check(!InGame.Compiling(logs, f.Overwrite, DateTime.Now.AddMinutes(-1)), "completed");
 		var cache = Path.Combine(f.Overwrite, "ShaderCache");
 		Directory.CreateDirectory(cache);
@@ -818,9 +822,11 @@ public static class Program
 		var keep = HiddenDesktop.OnPlayersDesktop;
 		HiddenDesktop.GuardPoll = TimeSpan.FromMilliseconds(100);
 		try {
-			// pythonw: no window of any kind (a console program could open a terminal on his screen)
+			// pythonw where it is installed (no window of any kind); elsewhere Windows' own ping, which opens none either:
+			// HiddenDesktop.Start gives a console program no console at all (CREATE_NO_WINDOW)
 			var pyw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Python", "pythoncore-3.14-64", "pythonw.exe");
-			var ping = $"\"{pyw}\" -c \"import time; time.sleep(30)\"";
+			var ping = File.Exists(pyw) ? $"\"{pyw}\" -c \"import time; time.sleep(30)\"" :
+				$"\"{Path.Combine(Environment.SystemDirectory, "PING.EXE")}\" -n 31 127.0.0.1";
 			HiddenDesktop.OnPlayersDesktop = _ => [];
 			using (var quiet = new HiddenDesktop("MO2-Tool-Runner-test-a")) {
 				using var p = quiet.Start(ping, Path.GetTempPath());
