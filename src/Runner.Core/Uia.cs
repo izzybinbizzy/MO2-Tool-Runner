@@ -109,6 +109,16 @@ public static class Uia
 
 	// a Win32 button gets a posted click message (Invoke can wait inside a click handler that runs a modal loop, and is refused
 	// on a hidden desktop - measured 2026-10-27); any other button Invoke, else the message. Never the real mouse.
+	// enabled and on screen (a collapsed group's button is neither)
+	public static bool Usable(AutomationElement a_e)
+	{
+		try {
+			return a_e.Current.IsEnabled && !a_e.Current.IsOffscreen;
+		} catch (ElementNotAvailableException) {
+			return false;
+		}
+	}
+
 	public static bool Press(AutomationElement a_e)
 	{
 		try {

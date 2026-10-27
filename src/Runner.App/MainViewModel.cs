@@ -315,12 +315,13 @@ public sealed partial class MainViewModel : Observable
 			_previewing = true;
 			Say("Working out what the run will do ...", "");
 			var setup = Setup;
+			var file = SelectedSetup!.File;
 			var usual = _usual;
 			string preview;
 			try {
 				preview = await Task.Run(() => string.Join("\n", RunPreview.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance),
 					Runner.Plan(setup, a_only, a_from, a_until)).Lines(k => usual.TryGetValue(k, out var t) ? t : null)));
-			} catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException) {
+			} catch (Exception e) {
 				Say("Could not work out what the run would do: " + e.Message, "bad");
 				return;
 			} finally {
@@ -330,9 +331,13 @@ public sealed partial class MainViewModel : Observable
 				Say("Not started - nothing was changed.", "");
 				return;
 			}
-			// the window waited on the player: look again
+			// the window waited on the player: look again, and start only the setup that was previewed
 			if (CannotStart() is { } now) {
 				Say(now, "bad");
+				return;
+			}
+			if (!string.Equals(SelectedSetup?.File, file, StringComparison.OrdinalIgnoreCase)) {
+				Say("Not started: another setup was picked while the preview was open - press Start again.", "warn");
 				return;
 			}
 		}

@@ -348,8 +348,10 @@ public static class Ask
 		var body = new StackPanel { Margin = new Thickness(22) };
 		body.Children.Add(new TextBlock { Text = a_title, Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 12), FontSize = 18 });
 		// a long text (a run's preview) scrolls inside the box instead of growing past the screen
-		body.Children.Add(new ScrollViewer { MaxHeight = 460, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-			Content = new TextBlock { Text = a_text, TextWrapping = TextWrapping.Wrap } });
+		var scroll = new ScrollViewer { MaxHeight = 460, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = true,
+			Content = new TextBlock { Text = a_text, TextWrapping = TextWrapping.Wrap } };
+		System.Windows.Automation.AutomationProperties.SetName(scroll, a_title);
+		body.Children.Add(scroll);
 		body.Children.Add(buttons);
 		w.Content = new Border { Background = Brushes2.Get("Panel"), Child = body };
 		w.Loaded += (_, _) => no.Focus();

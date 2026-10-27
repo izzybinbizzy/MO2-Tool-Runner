@@ -68,6 +68,48 @@ public static class Plugins
 		return outSet;
 	}
 
+	// what a plugin holds, read off record and group HEADERS only (nothing decompressed): its top-level group labels, "TREE" also
+	// for a STAT record flagged "Has Tree LOD" (flag 0x40), and with a_land "LAND" when a worldspace group holds a landscape record
+	public static HashSet<string> Kinds(string a_path, bool a_land)
+	{
+		var outSet = new HashSet<string>(StringComparer.Ordinal);
+		using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+		var head = new byte[24];
+		if (fs.Read(head, 0, 24) < 24 || Encoding.ASCII.GetString(head, 0, 4) != "TES4") {
+			return outSet;
+		}
+		fs.Seek(BitConverter.ToUInt32(head, 4), SeekOrigin.Current);
+		while (fs.Position + 24 <= fs.Length && fs.Read(head, 0, 24) == 24) {
+			var size = BitConverter.ToUInt32(head, 4);
+			if (Encoding.ASCII.GetString(head, 0, 4) != "GRUP" || size < 24) {
+				break;
+			}
+			var label = Encoding.ASCII.GetString(head, 8, 4);
+			outSet.Add(label);
+			var end = fs.Position - 24 + size;
+			if ((label == "STAT" && !outSet.Contains("TREE")) || (label == "WRLD" && a_land && !outSet.Contains("LAND"))) {
+				// inside the group: a nested group's header is stepped into, a record is skipped by its data size
+				while (fs.Position + 24 <= end && fs.Read(head, 0, 24) == 24) {
+					var type = Encoding.ASCII.GetString(head, 0, 4);
+					if (type == "GRUP") {
+						continue;
+					}
+					if (label == "STAT" && (BitConverter.ToUInt32(head, 8) & 0x40) != 0) {
+						outSet.Add("TREE");
+						break;
+					}
+					if (label == "WRLD" && type == "LAND") {
+						outSet.Add("LAND");
+						break;
+					}
+					fs.Seek(BitConverter.ToUInt32(head, 4), SeekOrigin.Current);
+				}
+			}
+			fs.Seek(end, SeekOrigin.Begin);
+		}
+		return outSet;
+	}
+
 	// ESM-flagged (TES4 record flag bit 0) or an .esm file
 	public static bool IsMaster(string a_path)
 	{

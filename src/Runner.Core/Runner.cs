@@ -292,13 +292,23 @@ public static class Runner
 	// all). Only THIS setup's run folders go, oldest first, never the running one or one an unfinished run still needs.
 	public static void PruneBackups(RunContext a_ctx)
 	{
+		// cleanup only: whatever goes wrong here is a warning, never a failed run
+		try {
+			PruneBackupsUnguarded(a_ctx);
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.Security.SecurityException) {
+			a_ctx.Log.Warn("old runs' backups not tidied: " + e.Message);
+		}
+	}
+
+	static void PruneBackupsUnguarded(RunContext a_ctx)
+	{
 		var keep = Setup.Int(a_ctx.Setup.Root, "keepBackups") ?? 5;
 		var root = a_ctx.Setup.BackupDir;
 		if (keep <= 0 || root == "" || !Directory.Exists(root)) {
 			return;
 		}
 		var runs = Path.GetDirectoryName(a_ctx.Journal.Folder)!;
-		var needed = Journal.All(runs).Where(j => j.Unfinished).Select(j => Path.GetFullPath(j.BackupDir)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var needed = Journal.All(runs).Where(j => j.Unfinished && !string.IsNullOrWhiteSpace(j.BackupDir)).Select(j => Path.GetFullPath(j.BackupDir)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		needed.Add(Path.GetFullPath(a_ctx.BackupFolder));
 		var own = new System.Text.RegularExpressions.Regex(@"^\d{4}-\d\d-\d\d \d\d-\d\d-\d\d " + System.Text.RegularExpressions.Regex.Escape(a_ctx.Setup.Name) + "$");
 		var old = new DirectoryInfo(root).GetDirectories().Where(d => own.IsMatch(d.Name)).OrderByDescending(d => d.Name, StringComparer.Ordinal).Skip(keep)
@@ -653,11 +663,10 @@ public static class Runner
 	static void Hook(RunLog a_log, string a_command, string a_when)
 	{
 		a_log.Detail($"{a_when}: {a_command}");
-		var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-		psi.ArgumentList.Add("/d");
-		psi.ArgumentList.Add("/s");
-		psi.ArgumentList.Add("/c");
-		psi.ArgumentList.Add(a_command);
+		// cmd reads its own quoting, not Windows' argument escaping: /s /c "<the command as written>" (its quotes kept as they are)
+		var psi = new ProcessStartInfo("cmd.exe", "/d /s /c \"" + a_command + "\"") {
+			UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+		};
 		using var p = Process.Start(psi) ?? throw new StepFailedException("could not start: " + a_command);
 		var o = p.StandardOutput.ReadToEndAsync();
 		var e = p.StandardError.ReadToEndAsync();

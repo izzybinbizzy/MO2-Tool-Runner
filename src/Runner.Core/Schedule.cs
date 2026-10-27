@@ -16,8 +16,12 @@ public static partial class Schedule
 
 	static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
-	public static string TaskName(Setup a_setup) =>
-		"MO2 Tool Runner - " + string.Concat(a_setup.Name.Select(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ? '-' : c)).Trim();
+	// one task per setup FILE (two setups may share a name): its name plus a short mark of its file's full path
+	public static string TaskName(Setup a_setup)
+	{
+		var mark = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(a_setup.File).ToUpperInvariant())))[..6];
+		return "MO2 Tool Runner - " + string.Concat(a_setup.Name.Select(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ? '-' : c)).Trim() + " " + mark;
+	}
 
 	// the next time a clock time comes round (today if still ahead, else tomorrow)
 	public static DateTime Next(TimeSpan a_time, DateTime a_now)
@@ -76,7 +80,7 @@ public static partial class Schedule
 
 	public static void Register(string a_name, string a_xml)
 	{
-		var file = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner task " + Environment.ProcessId + ".xml");
+		var file = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner task " + Guid.NewGuid().ToString("N") + ".xml");
 		File.WriteAllText(file, a_xml, Encoding.Unicode);
 		try {
 			var (code, text) = Schtasks("/Create", "/TN", a_name, "/XML", file, "/F");
@@ -121,12 +125,16 @@ public static partial class Schedule
 			psi.ArgumentList.Add(a);
 		}
 		using var p = Process.Start(psi) ?? throw new InvalidOperationException("schtasks did not start");
+		var output = p.StandardOutput.ReadToEndAsync();
 		var err = p.StandardError.ReadToEndAsync();
-		var output = p.StandardOutput.ReadToEnd();
 		if (!p.WaitForExit(30_000)) {
-			p.Kill();
-			throw new InvalidOperationException("schtasks did not answer");
+			try {
+				p.Kill(true);
+			} catch (InvalidOperationException) {
+			}
+			throw new InvalidOperationException("schtasks did not answer within 30 seconds");
 		}
-		return (p.ExitCode, output + err.Result);
+		p.WaitForExit();
+		return (p.ExitCode, output.Result + err.Result);
 	}
 }

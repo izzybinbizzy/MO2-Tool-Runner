@@ -159,6 +159,10 @@ public static class Program
 		public void Dispose()
 		{
 			try {
+				// a test's read-only files would stop the delete
+				foreach (var f in new DirectoryInfo(Root).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
+					f.IsReadOnly = false;
+				}
 				Directory.Delete(Root, true);
 			} catch (IOException) {
 			} catch (UnauthorizedAccessException) {
@@ -882,6 +886,49 @@ public static class Program
 		Equal(1, StepCatalog.DefaultOrder.ToList().IndexOf("synthesis") - StepCatalog.DefaultOrder.ToList().IndexOf("wryebash"), "Wrye Bash sits right before Synthesis");
 	}
 
+	// a command whose program path is quoted (a path with spaces) runs as written - cmd's own quoting, not Windows' escaping
+	// (2026-10-27: the trial's after-run command failed with '\"C:\...python.exe\"' is not recognized)
+	static void T_CommandWithAQuotedPathRuns()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => { }));
+		var s = f.WriteSetup(("snowfixer", []));
+		var flag = Path.Combine(f.Root, "after ran.txt");
+		var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+		s.Root["beforeRun"] = new JsonArray($"\"{cmd}\" /c exit 0");
+		s.Root["afterRun"] = new JsonArray($"\"{cmd}\" /c echo ok> \"{flag}\"");
+		s.Save();
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, r.Verdict);
+		Check(File.Exists(flag), "the after-run command with quoted paths ran");
+	}
+
+	// a tool driven through its window whose window never changes is idle, whatever CPU its window uses drawing itself - the
+	// step fails naming what the window shows (2026-10-27: Synthesis sat on its main screen 4 min, its window using CPU)
+	static void T_AWindowThatNeverChangesIsIdle()
+	{
+		using var f = new FakeMo2();
+		Waits.IdleForTests = TimeSpan.FromSeconds(8);
+		try {
+			StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+				using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "ping.exe"), "-n 60 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false })!;
+				try {
+					Waits.Tool(ctx, "snowfixer", p, TimeSpan.FromMinutes(2), () => Waits.Poll.Wait, a_progress: () => "SYNTHESIS  Run");
+				} finally {
+					p.Kill();
+				}
+			}));
+			f.WriteSetup(("snowfixer", []));
+			var sw = Stopwatch.StartNew();
+			var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+			Equal(RunState.Failed, r.State, r.Verdict);
+			Check(r.Verdict.Contains("sat idle", StringComparison.Ordinal) && r.Verdict.Contains("SYNTHESIS  Run", StringComparison.Ordinal), "named, with the window's text: " + r.Verdict);
+			Check(sw.Elapsed < TimeSpan.FromSeconds(40), "within the idle limit, not the deadline: " + sw.Elapsed);
+		} finally {
+			Waits.IdleForTests = null;
+		}
+	}
+
 	static void T_BeforeRunCommandMustSucceed()
 	{
 		using var f = new FakeMo2();
@@ -1219,6 +1266,12 @@ public static class Program
 		Equal(new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false), once, "once");
 		Check(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(now, true)).Contains("<StartWhenAvailable>false</StartWhenAvailable>", StringComparison.Ordinal),
 			"a missed time is skipped, never run later");
+		using (var f = new FakeMo2()) {
+			var a = f.WriteSetup(("snowfixer", []));
+			var b = Setup.FromJson((JsonObject)a.Root.DeepClone(), Path.Combine(f.Data, "Setups", "Copy of Test.json"));
+			Check(Schedule.TaskName(a) != Schedule.TaskName(b), "two setups with one name get two tasks");
+			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.Load(f.SetupFile)), "the same setup file always gets the same task");
+		}
 		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
 		if (Environment.GetEnvironmentVariable("MO2TR_SCHEDULE_PROBE") != "1") {
 			return;
@@ -1251,14 +1304,48 @@ public static class Program
 				fs.Write(h);
 			}
 		}
+		// a top-level group holding one record (a_nested: inside one more group, as a worldspace's cells are)
+		static void WithRecord(string a_path, string a_group, string a_record, uint a_flags, bool a_nested)
+		{
+			FakeMo2.Plugin(a_path, false);
+			var rec = new byte[24 + 4];
+			Encoding.ASCII.GetBytes(a_record).CopyTo(rec, 0);
+			BitConverter.GetBytes(4u).CopyTo(rec, 4);
+			BitConverter.GetBytes(a_flags).CopyTo(rec, 8);
+			var inner = rec;
+			if (a_nested) {
+				inner = new byte[24 + rec.Length];
+				Encoding.ASCII.GetBytes("GRUP").CopyTo(inner, 0);
+				BitConverter.GetBytes((uint)inner.Length).CopyTo(inner, 4);
+				Encoding.ASCII.GetBytes("CELL").CopyTo(inner, 8);
+				rec.CopyTo(inner, 24);
+			}
+			var top = new byte[24 + inner.Length];
+			Encoding.ASCII.GetBytes("GRUP").CopyTo(top, 0);
+			BitConverter.GetBytes((uint)top.Length).CopyTo(top, 4);
+			Encoding.ASCII.GetBytes(a_group).CopyTo(top, 8);
+			inner.CopyTo(top, 24);
+			using var fs = new FileStream(a_path, FileMode.Append);
+			fs.Write(top);
+		}
 		f.Mod("Grass Mod");
 		WithGroups(Path.Combine(f.Mods, "Grass Mod", "Grass.esp"), "WEAP", "GRAS");
 		File.WriteAllText(Path.Combine(f.Mods, "Grass Mod", "meta.ini"), "[General]\r\ngameName=SkyrimSE\r\nmodid=12345\r\n");
 		f.Mod("Tree Mod");
 		WithGroups(Path.Combine(f.Mods, "Tree Mod", "Trees.esp"), "TREE");
 		WithGroups(Path.Combine(f.Mods, "Output A", "OutA.esp"), "GRAS");
+		f.Mod("Static Trees");
+		WithRecord(Path.Combine(f.Mods, "Static Trees", "StaticTrees.esp"), "STAT", "STAT", 0x40, false);
+		f.Mod("Plain Statics");
+		WithRecord(Path.Combine(f.Mods, "Plain Statics", "PlainStatics.esp"), "STAT", "STAT", 0, false);
+		f.Mod("Land Mod");
+		WithRecord(Path.Combine(f.Mods, "Land Mod", "Land.esp"), "WRLD", "LAND", 0, true);
+		f.Mod("Unticked Plugin");
+		WithGroups(Path.Combine(f.Mods, "Unticked Plugin", "Off.esp"), "GRAS");
 		var ml = Path.Combine(f.ProfileDir, "modlist.txt");
-		File.WriteAllText(ml, File.ReadAllText(ml).Replace("+Needs B", "+Grass Mod\r\n+Tree Mod\r\n+Needs B", StringComparison.Ordinal));
+		File.WriteAllText(ml, File.ReadAllText(ml).Replace("+Needs B", "+Grass Mod\r\n+Tree Mod\r\n+Static Trees\r\n+Plain Statics\r\n+Land Mod\r\n+Unticked Plugin\r\n+Needs B", StringComparison.Ordinal));
+		// only plugins switched on count (Off.esp is installed but not ticked in plugins.txt)
+		File.AppendAllText(Path.Combine(f.ProfileDir, "plugins.txt"), "*Grass.esp\r\n*Trees.esp\r\n*StaticTrees.esp\r\n*PlainStatics.esp\r\n*Land.esp\r\nOff.esp\r\n");
 		Equal(new HashSet<string> { "WEAP", "GRAS" }.SetEquals(Plugins.TopGroups(Path.Combine(f.Mods, "Grass Mod", "Grass.esp"))), true, "its record groups read off their headers");
 		f.WriteSetup(("grass", new JsonObject { ["output_mod"] = "Output A" }));
 		var setup = Setup.Load(f.SetupFile);
@@ -1268,6 +1355,9 @@ public static class Program
 		Equal("https://www.nexusmods.com/skyrimspecialedition/mods/12345", grass.Single().Page, "its own page");
 		var dyn = LodGuide.Find(setup, mo2, "dyndolod");
 		Check(dyn.Any(h => h.Mod == "Tree Mod" && h.Page == null) && dyn.Any(h => h.Mod == "Grass Mod"), "DynDOLOD: grass and trees, a mod with no page said so");
+		Check(dyn.Any(h => h.Mod == "Static Trees") && dyn.All(h => h.Mod != "Plain Statics"), "a static flagged Has Tree LOD counts as a tree, a plain static does not");
+		Check(grass.All(h => h.Mod != "Unticked Plugin"), "a plugin not switched on is not counted");
+		Equal("Land Mod", LodGuide.Find(setup, mo2, "xlodgen").Single().Mod, "xLODGen: a landscape record inside a worldspace");
 		Equal(0, LodGuide.Find(setup, mo2, "snowfixer").Count, "not a LOD step");
 	}
 

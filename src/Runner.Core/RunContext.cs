@@ -155,12 +155,18 @@ public static class Waits
 		Done,
 	}
 
+	// the offline tests only: a short idle limit
+	public static TimeSpan? IdleForTests { get; set; }
+
+	// a_progress: for a tool driven through its window - what its window says; a change counts as work and its CPU does not
+	// (a window drawing itself uses CPU while the tool does nothing - Synthesis sat 4 min on its main screen, 2026-10-27)
 	public static void Tool(RunContext a_ctx, string a_step, Process a_proc, TimeSpan a_deadline, Func<Poll> a_poll,
-		Func<bool>? a_onIdle = null, TimeSpan? a_every = null)
+		Func<bool>? a_onIdle = null, TimeSpan? a_every = null, Func<string>? a_progress = null)
 	{
+		string? lastSeen = null;
 		var every = a_every ?? TimeSpan.FromSeconds(2);
 		var sw = Stopwatch.StartNew();
-		var idleLimit = TimeSpan.FromMinutes(Math.Max(1, a_ctx.Setup.IdleMinutes));
+		var idleLimit = IdleForTests ?? TimeSpan.FromMinutes(Math.Max(1, a_ctx.Setup.IdleMinutes));
 		var lastCpu = TimeSpan.Zero;
 		var lastBusy = sw.Elapsed;
 		var lastSample = TimeSpan.FromSeconds(-10);
@@ -181,17 +187,26 @@ public static class Waits
 					alive = false;
 				}
 				if (alive) {
-					var cpu = Procs.TreeCpu(a_proc.Id);
-					if (cpu - lastCpu > TimeSpan.FromMilliseconds(300)) {
-						lastBusy = sw.Elapsed;
+					if (a_progress != null) {
+						var seen = a_progress();
+						if (seen != lastSeen) {
+							lastSeen = seen;
+							lastBusy = sw.Elapsed;
+						}
+					} else {
+						var cpu = Procs.TreeCpu(a_proc.Id);
+						if (cpu - lastCpu > TimeSpan.FromMilliseconds(300)) {
+							lastBusy = sw.Elapsed;
+						}
+						lastCpu = cpu;
 					}
-					lastCpu = cpu;
 					if (sw.Elapsed - lastBusy > idleLimit) {
 						if (a_onIdle?.Invoke() == true) {
 							lastBusy = sw.Elapsed;
 						} else {
 							var boxes = Uia.Boxes(Procs.Tree(a_proc.Id));
-							var said = boxes.Count > 0 ? " It shows: " + string.Join(" / ", boxes.Select(b => b.Text)) : " It shows no question.";
+							var said = boxes.Count > 0 ? " It shows: " + string.Join(" / ", boxes.Select(b => b.Text)) :
+								lastSeen is { Length: > 0 } s ? " Its window shows: " + (s.Length > 300 ? s[..300] : s) : " It shows no question.";
 							throw new StepFailedException($"{StepCatalog.Name(a_step)} sat idle for {idleLimit.TotalMinutes:0} minutes without finishing.{said}");
 						}
 					}
