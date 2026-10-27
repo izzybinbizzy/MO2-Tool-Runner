@@ -346,7 +346,9 @@ public static class Runner
 				throw new StepFailedException("this step is not available in this version");
 			}
 			learned = ToolSettings.Apply(a_ctx, a_s.Key);
+			var ranFrom = DateTime.Now;
 			step.Run(a_ctx, new StepSettings(a_s.Settings));
+			ToolSettings.CheckValues(a_ctx, a_s.Key, ranFrom);
 			StepKit.CloseTool(a_ctx, new StepSettings(a_s.Settings).Str("image"));
 			foreach (var live in learned) {
 				StepKit.PutFilesBack(a_ctx, live);

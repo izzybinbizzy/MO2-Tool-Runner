@@ -106,10 +106,14 @@ public static class Cli
 		if (!LodGuide.Applies(step)) {
 			throw new ArgumentException($"\"{step}\" is not a LOD step");
 		}
-		foreach (var (title, url) in LodGuide.Docs.GetValueOrDefault(step, [])) {
+		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+		if (LodGuide.SetupNote(setup, mo2, step) is { } note) {
+			Console.WriteLine("note    " + note);
+		}
+		foreach (var (title, url) in LodGuide.DocsFor(setup, mo2, step)) {
 			Console.WriteLine($"help    {title}: {url}");
 		}
-		foreach (var h in LodGuide.Find(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), step)) {
+		foreach (var h in LodGuide.Find(setup, mo2, step)) {
 			Console.WriteLine($"mod     {h.Mod} ({h.What}){(h.Page == null ? "" : "  " + h.Page)}");
 		}
 		return 0;

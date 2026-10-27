@@ -1375,6 +1375,36 @@ public static class Program
 		Equal(0, LodGuide.Find(setup, mo2, "snowfixer").Count, "not a LOD step");
 	}
 
+	// TexGen / DynDOLOD keep their window's values in no file, but write them into their debug log: learned from there, and a
+	// later run that used other values is named in the run's notes (mo2-setup's finding 2026-10-27)
+	static void T_ToolWindowValuesReadOffItsLog()
+	{
+		using var f = new FakeMo2();
+		var exe = Path.Combine(f.Root, "Tools", "DynDOLOD", "TexGenx64.exe");
+		Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(exe)!, "Logs"));
+		File.WriteAllText(exe, "");
+		var log = Path.Combine(Path.GetDirectoryName(exe)!, "Logs", "TexGen_SSE_Debug_log.txt");
+		File.WriteAllText(log, "[00:01] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 80>\r\n[00:01] [81BC] [Other] <Debug: x: y>\r\n" +
+			"[00:15] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 100>\r\n[00:15] [81BC] [ListVars] <Debug: GrassHDBillboards: True>\r\n");
+		var vars = ToolSettings.ReadVars(log);
+		Equal("100", vars["GrassHDBillboardsAmbient"], "the last run's value wins");
+		Equal(2, vars.Count, "only ListVars lines");
+		Equal(log, ToolSettings.VarsLog(exe, "texgen"), "its debug log is found beside the tool");
+		Equal(null, ToolSettings.VarsLog(exe, "snowfixer"), "a tool without one has none");
+		StepRegistry.Replace(new FakeStep("texgen", (ctx, s) => {
+			Thread.Sleep(50);
+			File.WriteAllText(log, "[00:01] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 60>\r\n[00:01] [81BC] [ListVars] <Debug: GrassHDBillboards: True>\r\n");
+		}));
+		f.WriteSetup(("texgen", new JsonObject { ["exe"] = exe }));
+		var setup = Setup.Load(f.SetupFile);
+		ToolSettings.Keep(setup, "texgen", "TexGen", [], vars);
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, "a different value never fails the run: " + r.Verdict);
+		var j = Journal.All(Runner.RunsDir(f.Data)).First();
+		Check(j.Notes.Any(n => n.Contains("GrassHDBillboardsAmbient 60 (learned 100)", StringComparison.Ordinal)), "the difference is named: " + string.Join(" | ", j.Notes));
+		Check(j.Notes.All(n => !n.Contains("GrassHDBillboards True", StringComparison.Ordinal)), "an equal value is not");
+	}
+
 	// the window looks every second: a run record is read again only when its file changed, a removed run drops out, a broken
 	// record is skipped (not the whole list)
 	static void T_RunRecordsAreReadAgainOnlyWhenChanged()

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ToolRunner.Steps;
 
 namespace ToolRunner;
@@ -8,7 +9,7 @@ namespace ToolRunner;
 // the runner saves the settings again"). "Learn": the tool's OWN window opens through Mod Organizer, the player sets it up and
 // closes it, and every settings file it wrote is kept with the setup. Every run puts those files in place before the tool
 // starts (each live file kept in the run record first) and the player's own back after. Nothing of a tool's window is copied.
-public static class ToolSettings
+public static partial class ToolSettings
 {
 	public sealed class LearnedFile
 	{
@@ -22,6 +23,58 @@ public static class ToolSettings
 		public string Tool { get; set; } = "";
 		public DateTime At { get; set; }
 		public List<LearnedFile> Files { get; set; } = [];
+		// what the tool's own window was set to, read off its debug log (TexGen / DynDOLOD keep no file of them - mo2-setup's
+		// finding 2026-10-27); a later run that used other values is said in the run's notes
+		public Dictionary<string, string> Values { get; set; } = [];
+	}
+
+	// a tool that writes every value of its window into its debug log as "[ListVars] <Debug: Name: Value>" (DynDOLOD's tools):
+	// that log, the newest "<Tool>_*_Debug_log.txt" in its Logs folder
+	public static string? VarsLog(string a_exe, string a_step)
+	{
+		var prefix = a_step switch { "texgen" => "TexGen_", "dyndolod" => "DynDOLOD_", _ => null };
+		var logs = Path.Combine(Path.GetDirectoryName(a_exe) ?? "", "Logs");
+		if (prefix == null || !Directory.Exists(logs)) {
+			return null;
+		}
+		return new DirectoryInfo(logs).EnumerateFiles(prefix + "*_Debug_log.txt").OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault()?.FullName;
+	}
+
+	[GeneratedRegex(@"\[ListVars\] <Debug: (?<n>[^:<>]+): (?<v>.*)>\s*$")]
+	private static partial Regex ListVar();
+
+	// the values of the LAST run in that log (a name seen again later wins)
+	public static Dictionary<string, string> ReadVars(string a_log)
+	{
+		var outMap = new Dictionary<string, string>(StringComparer.Ordinal);
+		foreach (var line in Files.ReadSharedText(a_log).Split('\n')) {
+			var m = ListVar().Match(line);
+			if (m.Success) {
+				outMap[m.Groups["n"].Value.Trim()] = m.Groups["v"].Value.Trim();
+			}
+		}
+		return outMap;
+	}
+
+	// after a run of the step: the values its window ran with against the ones learned - a difference is said, never a failure
+	public static List<string> CheckValues(RunContext a_ctx, string a_step, DateTime a_since)
+	{
+		var l = Load(a_ctx.Setup, a_step);
+		var s = new StepSettings(a_ctx.Setup.StepSettings(a_step) ?? []);
+		var exe = s.Str("exe") ?? a_ctx.Mo2.Executable(s.Str("executable") ?? "")?.Binary;
+		if (l == null || l.Values.Count == 0 || exe == null || VarsLog(exe, a_step) is not { } log || File.GetLastWriteTimeUtc(log) < a_since.ToUniversalTime()) {
+			return [];
+		}
+		var now = ReadVars(log);
+		var diff = l.Values.Where(kv => now.TryGetValue(kv.Key, out var v) && v != kv.Value)
+			.Select(kv => $"{kv.Key} {now[kv.Key]} (learned {kv.Value})").ToList();
+		if (diff.Count > 0) {
+			var text = $"{l.Tool} ran with values other than the ones learned from its window: {string.Join(", ", diff.Take(10))}{(diff.Count > 10 ? $" and {diff.Count - 10} more" : "")}" +
+				" - set them in its own window and learn its settings again if that is not what you want";
+			a_ctx.Log.Warn(text);
+			a_ctx.Journal.Notes.Add(text);
+		}
+		return diff;
 	}
 
 	// what a settings file looks like (a tool's logs, caches and outputs are not)
@@ -81,7 +134,7 @@ public static class ToolSettings
 		a_after.Where(kv => !a_before.TryGetValue(kv.Key, out var b) || b != kv.Value).Select(kv => kv.Key).Order(StringComparer.OrdinalIgnoreCase).ToList();
 
 	// keeps these files as the step's learned settings (the old learned set replaced as a whole)
-	public static Learned Keep(Setup a_setup, string a_step, string a_tool, IReadOnlyList<string> a_files)
+	public static Learned Keep(Setup a_setup, string a_step, string a_tool, IReadOnlyList<string> a_files, Dictionary<string, string>? a_values = null)
 	{
 		var dir = Folder(a_setup, a_step);
 		var fresh = dir + " new";
@@ -89,7 +142,7 @@ public static class ToolSettings
 			Directory.Delete(fresh, true);
 		}
 		Directory.CreateDirectory(Path.Combine(fresh, "files"));
-		var l = new Learned { Step = a_step, Tool = a_tool, At = DateTime.UtcNow };
+		var l = new Learned { Step = a_step, Tool = a_tool, At = DateTime.UtcNow, Values = a_values ?? [] };
 		for (var i = 0; i < a_files.Count; ++i) {
 			var stored = Path.Combine("files", $"{i + 1} {Path.GetFileName(a_files[i])}");
 			File.Copy(a_files[i], Path.Combine(fresh, stored));
@@ -129,6 +182,7 @@ public static class ToolSettings
 			roots.AddRange(s.List("settings_dirs"));
 			var skip = new[] { s.Str("output_dir") }.OfType<string>().ToList();
 			var before = Scan(roots, skip);
+			var opened = DateTime.UtcNow;
 			var control = new Mo2Control(mo2, a_setup.Profile, a_log);
 			control.Close(null, a_ct);
 			using var proc = control.RunExecutable(title, image, null, a_ct, TimeSpan.FromMinutes(5));
@@ -143,12 +197,14 @@ public static class ToolSettings
 				a_ct.ThrowIfCancellationRequested();
 				Thread.Sleep(1000);
 			}
-			var changed = Changed(before, Scan(roots, skip));
-			if (changed.Count == 0) {
+			var changed = Changed(before, Scan(roots, skip)).Where(f => !f.EndsWith("_Debug_log.txt", StringComparison.OrdinalIgnoreCase)).ToList();
+			// a tool that keeps its window's values in no file (TexGen, DynDOLOD) still writes them into its debug log when it runs
+			var values = VarsLog(exe, a_step) is { } vl && File.GetLastWriteTimeUtc(vl) >= opened ? ReadVars(vl) : [];
+			if (changed.Count == 0 && values.Count == 0) {
 				throw new StepFailedException($"{tool} saved no settings file while it was open - change a setting (or change one and back), save, close it, and learn again");
 			}
-			var l = Keep(a_setup, a_step, tool, changed);
-			a_log.Say($"{tool}: {changed.Count} settings file(s) kept: {string.Join(", ", changed.Select(Path.GetFileName))}");
+			var l = Keep(a_setup, a_step, tool, changed, values);
+			a_log.Say($"{tool}: {changed.Count} settings file(s) kept{(values.Count > 0 ? $", {values.Count} values of its window read off its log" : "")}");
 			return l;
 		} finally {
 			mutex.ReleaseMutex();

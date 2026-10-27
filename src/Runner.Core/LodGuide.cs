@@ -34,6 +34,32 @@ public static class LodGuide
 
 	public static bool Applies(string a_step) => ForStep.ContainsKey(a_step);
 
+	const string CsPage = "https://dyndolod.info/Mods/Community-Shaders";
+
+	// a ticked mod ships Community Shaders' plugin (Community Shaders, Bottled Shaders, Open Shaders)
+	public static bool RunsCommunityShaders(Setup a_setup, Mo2Instance a_mo2) =>
+		new Profile(a_mo2, a_setup.Profile, () => false).States().Any(kv => kv.Value == '+' &&
+			File.Exists(Path.Combine(a_mo2.ModDir(kv.Key), "SKSE", "Plugins", "CommunityShaders.dll")));
+
+	// the step's help pages for THIS setup: on a Community Shaders setup DynDOLOD's own page for it comes first (mo2-setup's
+	// finding 2026-10-27: there the far grass is made from DynDOLOD's Grass Optimizations assets, not grass LOD billboards)
+	public static List<(string Title, string Url)> DocsFor(Setup a_setup, Mo2Instance a_mo2, string a_step)
+	{
+		var outList = Docs.GetValueOrDefault(a_step, []).ToList();
+		if (a_step is "grass" or "texgen" or "dyndolod" && RunsCommunityShaders(a_setup, a_mo2)) {
+			outList.Insert(0, ("DynDOLOD's page on Community Shaders (its grass LOD settings)", CsPage));
+		}
+		return outList;
+	}
+
+	// a plain line for a Community Shaders setup's grass, else null
+	public static string? SetupNote(Setup a_setup, Mo2Instance a_mo2, string a_step) =>
+		a_step is "grass" or "texgen" or "dyndolod" && RunsCommunityShaders(a_setup, a_mo2)
+			? "This setup runs Community Shaders (or a fork of it). With its Grass Optimizations the far grass is made from DynDOLOD's own grass " +
+			  "assets, so DynDOLOD's grass brightness settings do not change it: DynDOLOD's Community Shaders page has the settings for this setup. " +
+			  "Its Grass Lighting values change the near grass too - your look, set them in Community Shaders' own menu."
+			: null;
+
 	// the mods whose ACTIVE plugins (ticked in plugins.txt, the copy that wins in Mod Organizer) change what this step builds
 	// from; the setup's own outputs left out - they are made from these
 	public static List<Hit> Find(Setup a_setup, Mo2Instance a_mo2, string a_step)

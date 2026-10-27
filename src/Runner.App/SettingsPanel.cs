@@ -79,10 +79,24 @@ public static class SettingsPanel
 			return b;
 		}
 		var docs = new WrapPanel { Margin = new Thickness(-10, 0, 0, 6) };
-		foreach (var (title, url) in LodGuide.Docs.GetValueOrDefault(a_step, [])) {
-			docs.Children.Add(Link(a_w, title, url));
-		}
 		a_host.Children.Add(docs);
+		var note = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6), Foreground = Brushes2.Get("Warn") };
+		a_host.Children.Add(note);
+		// the setup's own pages (a Community Shaders setup has one more) - read off the profile, so not on the window's thread
+		_ = Task.Run(() => {
+			try {
+				var mo2 = Mo2Instance.Load(a_setup.Mo2Exe, a_setup.Mo2Instance);
+				return (LodGuide.DocsFor(a_setup, mo2, a_step), LodGuide.SetupNote(a_setup, mo2, a_step));
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) {
+				return (LodGuide.Docs.GetValueOrDefault(a_step, []).ToList(), (string?)null);
+			}
+		}).ContinueWith(t => {
+			foreach (var (title, url) in t.Result.Item1) {
+				docs.Children.Add(Link(a_w, title, url));
+			}
+			note.Text = t.Result.Item2 ?? "";
+			note.Visibility = t.Result.Item2 == null ? Visibility.Collapsed : Visibility.Visible;
+		}, TaskScheduler.FromCurrentSynchronizationContext());
 		var rows = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
 		var find = new Button { Content = "Find the mods it is built from", Style = (Style)a_w.FindResource("Ghost"), HorizontalAlignment = HorizontalAlignment.Left };
 		find.Click += async (_, _) => {
