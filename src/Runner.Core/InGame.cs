@@ -11,7 +11,6 @@ public static partial class InGame
 	public const string GameImage = "SkyrimSE.exe";
 	public const string SaveOff = "MO2 Tool Runner - DynDOLOD off";
 	public const string SaveClean = "MO2 Tool Runner - clean save";
-	public const string SaveClean2 = "MO2 Tool Runner - clean save 2";
 	public const string SaveReady = "MO2 Tool Runner - ready to play";
 
 	public static readonly string[] ShaderLogNames = ["CommunityShaders.log", "BottledShaders.log", "OpenShaders.log"];
@@ -156,6 +155,69 @@ public static partial class InGame
 		return Path.Combine(myGames, string.IsNullOrEmpty(savePath) ? "Saves" : savePath.TrimEnd('\\'));
 	}
 
+	// the player's own newest save - never one the runner (or the old MO2 Updater) made itself (his addition 2, 2026-10-27)
+	public static string? NewestPlayerSave(Profile a_profile)
+	{
+		var d = SavesDir(a_profile);
+		if (!Directory.Exists(d)) {
+			return null;
+		}
+		var f = new DirectoryInfo(d).EnumerateFiles("*.ess")
+			.Where(x => !x.Name.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("MO2 Updater - ", StringComparison.OrdinalIgnoreCase))
+			.OrderByDescending(x => x.LastWriteTimeUtc).FirstOrDefault();
+		return f == null ? null : Path.GetFileNameWithoutExtension(f.Name);
+	}
+
+	// a save just loaded is given time to settle before anything is done in it (his flow: a full minute)
+	static void Settle(RunContext a_ctx, string a_step, int a_seconds, string a_why)
+	{
+		a_ctx.Activity(a_step, a_why);
+		var until = DateTime.UtcNow.AddSeconds(a_seconds);
+		while (DateTime.UtcNow < until) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			if (Game(a_ctx) == null) {
+				throw new StepFailedException("the game closed while the save settled");
+			}
+			Thread.Sleep(1000);
+		}
+	}
+
+	// after a teleport: the new place loaded (the player there, no loading screen), within 5 minutes
+	static void WaitPlace(RunContext a_ctx)
+	{
+		var sw = Stopwatch.StartNew();
+		Thread.Sleep(3000);
+		while (sw.Elapsed < TimeSpan.FromMinutes(5)) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			try {
+				if (a_ctx.DevBench.Call("inspect", new { kind = "state" }, 10)["playerLoaded"]?.GetValue<bool>() == true &&
+				    a_ctx.DevBench.Call("menu", new { action = "list" }, 10)["loading"]?.GetValue<bool>() != true) {
+					return;
+				}
+			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException) {
+			}
+			Thread.Sleep(3000);
+		}
+		throw new StepFailedException("the new place did not finish loading within 5 minutes");
+	}
+
+	const string Player = "0x00000014";
+
+	// before a teleport: off a horse, out of a fight (god mode is on from the load) - his addition 4
+	static void ReadyToMove(RunContext a_ctx)
+	{
+		try {
+			if (a_ctx.DevBench.PapyrusOn(Player, "Actor", "IsOnMount")?.GetValue<bool>() == true) {
+				a_ctx.DevBench.PapyrusOn(Player, "Actor", "Dismount");
+				Thread.Sleep(4000);
+				a_ctx.Log.Detail("off the horse first");
+			}
+			a_ctx.DevBench.PapyrusOn(Player, "Actor", "StopCombat");
+		} catch (StepFailedException e) {
+			a_ctx.Log.Warn("could not check the horse / fight before the teleport: " + e.Message);
+		}
+	}
+
 	public static string? NewestSave(Profile a_profile, DateTime? a_after = null)
 	{
 		var d = SavesDir(a_profile);
@@ -174,7 +236,8 @@ public static partial class InGame
 	}
 
 	// the game up, any compile waited out, `a_save` loaded, frames moving, god mode on (nothing may kill the player while it waits)
-	public static void StartAndLoad(RunContext a_ctx, string a_step, StepSettings a_s, string a_save)
+	// returns whether the shaders compiled at this start
+	public static bool StartAndLoad(RunContext a_ctx, string a_step, StepSettings a_s, string a_save)
 	{
 		LaunchGame(a_ctx, a_s);
 		var limit = TimeSpan.FromMinutes(a_s.Int("start_min", 8));
@@ -191,7 +254,7 @@ public static partial class InGame
 			Thread.Sleep(2000);
 		}
 		a_ctx.Log.Detail($"the game is up after {sw.Elapsed.TotalSeconds:0} s");
-		WaitCompile(a_ctx, a_step, a_s, started);
+		var compiled = WaitCompile(a_ctx, a_step, a_s, started);
 		a_ctx.Activity(a_step, $"loading \"{a_save}\"");
 		a_ctx.Log.Detail($"loading \"{a_save}\"");
 		var t = Stopwatch.StartNew();
@@ -238,7 +301,7 @@ public static partial class InGame
 					if (f1 != null && f2 > f1) {
 						a_ctx.Log.Detail($"\"{a_save}\" loaded after {t.Elapsed.TotalSeconds:0} s");
 						a_ctx.DevBench.Console("tgm");
-						return;
+						return compiled;
 					}
 				}
 			} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException or FormatException or System.Text.Json.JsonException) {
@@ -255,7 +318,7 @@ public static partial class InGame
 
 	// "You can't load a save while shaders are compiling" (his word). A compile can begin a minute after the game answers and
 	// write its first line only when a shader finishes, so it is watched for `compile_watch_s` (300) before a load is sent.
-	public static void WaitCompile(RunContext a_ctx, string a_step, StepSettings a_s, DateTime a_since)
+	public static bool WaitCompile(RunContext a_ctx, string a_step, StepSettings a_s, DateTime a_since)
 	{
 		var logs = SkseLogs(a_ctx.Setup, a_ctx.Mo2);
 		var watch = TimeSpan.FromSeconds(a_s.Int("compile_watch_s", 300));
@@ -279,7 +342,7 @@ public static partial class InGame
 				if (seen) {
 					a_ctx.Log.Detail($"the shader compile finished after {sw.Elapsed.TotalMinutes:0.0} min");
 				}
-				return;
+				return seen;
 			}
 			Thread.Sleep(5000);
 		}
@@ -359,23 +422,27 @@ public static partial class InGame
 
 	static bool Auto(RunContext a_ctx) => DevBench.InProfile(a_ctx.Profile);
 
-	// phase 1, the profile as it is (before any output goes off): DynDOLOD deactivated by its MCM's own call, into a house,
-	// still off, saved, quit (dyndolod.info/Help/Clean-Save steps 1-4). Only the generated output goes off later - the DLL,
-	// Resources and every other DynDOLOD mod stay on (his word 2026-10-27).
+	// phase 1, the profile as it is (before any output goes off) - his flow, 2026-10-27: the player's newest save loaded and left a
+	// full minute; DynDOLOD deactivated by its MCM's own call, 30 s; the place the player stands recorded (a persistent marker
+	// left there); a teleport to QASmoke; saved there; quit. Only the generated output goes off later - the DLL, Resources and
+	// every other DynDOLOD mod stay on (his word 2026-10-27).
 	public static void Deactivate(RunContext a_ctx, StepSettings a_s)
 	{
 		var outs = a_ctx.Setup.EnabledSteps.Select(s => new StepSettings(s.Settings).OutputMod).OfType<string>().ToList();
 		a_ctx.CleanSaveExtraOff = a_ctx.Profile.Dependents(outs);
 		var dyn = a_s.Bool("dyndolod_off", true);
-		var cell = a_s.Str("interior_cell") ?? "WhiterunBreezehome";
+		var cell = a_s.Str("interior_cell") ?? "QASmoke";
 		if (!Auto(a_ctx)) {
-			a_ctx.CleanSaveName = GuidedSave(a_ctx, "cleansave", a_s, (dyn ? "In the game: load your save, open DynDOLOD's menu (MCM) and switch DynDOLOD off; wait for its message. " : "In the game: load your save. ") +
-				$"Go inside a house, check DynDOLOD is still off, and save.");
+			a_ctx.CleanSaveName = GuidedSave(a_ctx, "cleansave", a_s, "In the game: load your newest save and wait a full minute. " +
+				(dyn ? "Open DynDOLOD's menu (MCM), switch DynDOLOD off, and wait half a minute. " : "") +
+				$"Note exactly where you are standing (you go back there at the end). Open the console and type: coc {cell} - once you are there, save.");
 			return;
 		}
-		var save = a_s.Str("save") is { Length: > 0 } named ? named : NewestSave(a_ctx.Profile) ?? throw new StepFailedException("the profile has no save to load");
+		var save = a_s.Str("save") is { Length: > 0 } named ? named : NewestPlayerSave(a_ctx.Profile) ?? throw new StepFailedException("the profile has no save of yours to load");
+		a_ctx.Log.Detail($"your newest save: \"{save}\"");
 		try {
 			StartAndLoad(a_ctx, "cleansave", a_s, save);
+			Settle(a_ctx, "cleansave", a_s.Int("wait_s", 60), "letting your save settle for a minute");
 			const string cls = "SHESON_DynDOLOD_Plugin";
 			if (dyn) {
 				var was = a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() == true;
@@ -383,28 +450,30 @@ public static partial class InGame
 				if (was) {
 					a_ctx.DevBench.Papyrus(cls, "SetMyActive", false);
 				}
-				Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 10)));
+				Settle(a_ctx, "cleansave", a_s.Int("dyndolod_wait_s", 30), "DynDOLOD switched off - waiting half a minute");
 				if (a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() == true) {
 					throw new StepFailedException("DynDOLOD did not switch off");
 				}
 			}
-			a_ctx.DevBench.Console("coc " + cell);
-			var sw = Stopwatch.StartNew();
-			while (sw.Elapsed < TimeSpan.FromMinutes(5)) {
-				Thread.Sleep(4000);
-				try {
-					if (a_ctx.DevBench.Call("inspect", new { kind = "state" }, 10)["playerLoaded"]?.GetValue<bool>() == true &&
-					    a_ctx.DevBench.Call("menu", new { action = "list" }, 10)["loading"]?.GetValue<bool>() != true) {
-						break;
-					}
-				} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException) {
-				}
+			ReadyToMove(a_ctx);
+			// where the player stands, kept as a persistent marker in the save (the save to play takes them back to it)
+			var marker = DevBench.FormKey(a_ctx.DevBench.PapyrusOn(Player, "ObjectReference", "PlaceAtMe", new { form = "0x0000003B" }, 1, true, false));
+			if (marker != null) {
+				var angle = a_ctx.DevBench.PapyrusOn(Player, "ObjectReference", "GetAngleZ")?.GetValue<double>() ?? 0;
+				a_ctx.DevBench.PapyrusOn(marker, "ObjectReference", "SetAngle", 0.0, 0.0, angle);
+				a_ctx.Journal.ReturnMarker = marker;
+				a_ctx.Journal.Save();
+				a_ctx.Log.Detail($"your place recorded (marker {marker})");
+			} else {
+				a_ctx.Log.Warn("your place could not be recorded - the save to play will leave you in " + cell);
 			}
+			a_ctx.DevBench.Console("coc " + cell);
+			WaitPlace(a_ctx);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 10)));
 			if (dyn && a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() == true) {
-				throw new StepFailedException("DynDOLOD switched itself back on inside the house");
+				throw new StepFailedException($"DynDOLOD switched itself back on in {cell}");
 			}
-			a_ctx.Log.Detail(dyn ? $"DynDOLOD off and still off inside {cell}" : $"inside {cell}");
+			a_ctx.Log.Detail(dyn ? $"DynDOLOD off and still off in {cell}" : $"in {cell}");
 			SaveAndQuit(a_ctx, SaveOff);
 			a_ctx.CleanSaveName = SaveOff;
 		} catch {
@@ -413,7 +482,8 @@ public static partial class InGame
 		}
 	}
 
-	// phase 2, every output off: load that save, wait, save (the clean save); load it, save again
+	// phase 2, every old output off (Mod Organizer started again by the switch): that save loaded past its warnings, a full
+	// minute, saved - the clean save the rebuild starts from (his flow)
 	public static void CleanSaves(RunContext a_ctx, StepSettings a_s)
 	{
 		var from = a_ctx.CleanSaveName ?? throw new StepFailedException("no DynDOLOD-off save from this run - the clean save starts at the beginning of a run");
@@ -422,38 +492,67 @@ public static partial class InGame
 		}
 		using var _ = new Toggle(a_ctx, [], a_ctx.CleanSaveExtraOff.Keys, "the clean save", a_ctx.Cancel);
 		if (!Auto(a_ctx)) {
-			GuidedSave(a_ctx, "cleansave", a_s, $"In the game: load the save \"{from}\", wait half a minute, and save.");
-			var second = GuidedSave(a_ctx, "cleansave", a_s, "In the game: load the save you just made, wait half a minute, and save again.");
-			a_ctx.CleanSaveName = second;
+			a_ctx.CleanSaveName = GuidedSave(a_ctx, "cleansave", a_s, $"In the game: load the save \"{from}\" (answer its warnings about missing files with Yes / continue), wait a full minute, and save.");
 			return;
 		}
 		try {
-			foreach (var (src, dst) in new[] { (from, SaveClean), (SaveClean, SaveClean2) }) {
-				StartAndLoad(a_ctx, "cleansave", a_s, src);
-				Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("wait_s", 30)));
-				SaveAndQuit(a_ctx, dst);
-			}
-			a_ctx.CleanSaveName = SaveClean2;
+			StartAndLoad(a_ctx, "cleansave", a_s, from);
+			Settle(a_ctx, "cleansave", a_s.Int("wait_s", 60), "letting the clean save settle for a minute");
+			SaveAndQuit(a_ctx, SaveClean);
+			a_ctx.CleanSaveName = SaveClean;
 		} catch {
 			CloseGame(a_ctx);
 			throw;
 		}
-		a_ctx.Log.Detail($"clean save made and saved again: \"{SaveClean2}\"");
+		a_ctx.Log.Detail($"clean save made: \"{SaveClean}\"");
 	}
 
-	// the save to play: the newest clean save loaded with every new output on, saved again
+	// the save to play: the clean save loaded with every new output on, a full minute, the player taken back to the place
+	// recorded before QASmoke, DynDOLOD on again, saved (his addition 1). A compile at this start means the shader cache was
+	// out of date - said in the run's result (his question 2026-10-27, "rebuilding another tool wont cause shaders to need to
+	// be rebuilt")
 	public static void PlaySave(RunContext a_ctx, StepSettings a_s)
 	{
-		var from = a_ctx.CleanSaveName ?? (NewestNamed(a_ctx.Profile, SaveClean2) ? SaveClean2 : a_s.Str("save") is { Length: > 0 } s ? s : NewestSave(a_ctx.Profile)) ??
+		var from = a_ctx.CleanSaveName ?? (NewestNamed(a_ctx.Profile, SaveClean) ? SaveClean : a_s.Str("save") is { Length: > 0 } s ? s : NewestPlayerSave(a_ctx.Profile)) ??
 		           throw new StepFailedException("no save to load");
+		var marker = a_ctx.Journal.ReturnMarker;
 		a_ctx.Control.Close();
 		if (!Auto(a_ctx)) {
-			GuidedSave(a_ctx, "playsave", a_s, $"In the game: load \"{from}\", wait half a minute, and save.");
+			GuidedSave(a_ctx, "playsave", a_s, $"In the game: load \"{from}\" and wait a full minute. Go back to the place you noted at the start" +
+				" (the console: coc <that place>), check DynDOLOD is on in its menu (MCM), and save.");
 			return;
 		}
 		try {
-			StartAndLoad(a_ctx, "playsave", a_s, from);
-			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("wait_s", 30)));
+			var compiled = StartAndLoad(a_ctx, "playsave", a_s, from);
+			if (compiled) {
+				a_ctx.Log.Warn("the game compiled shaders at this start - the shader cache was out of date (a shader mod, its settings or the game changed)");
+				a_ctx.Journal.Notes.Add("the shader cache was out of date at the save to play - the next run rebuilds it");
+			}
+			Settle(a_ctx, "playsave", a_s.Int("wait_s", 60), "letting the save settle for a minute");
+			if (marker != null) {
+				ReadyToMove(a_ctx);
+				a_ctx.DevBench.PapyrusOn(Player, "ObjectReference", "MoveTo", new { form = marker }, 0.0, 0.0, 0.0, true);
+				WaitPlace(a_ctx);
+				Settle(a_ctx, "playsave", a_s.Int("settle_s", 10), "back at your place");
+				try {
+					a_ctx.DevBench.PapyrusOn(marker, "ObjectReference", "Delete");
+				} catch (StepFailedException e) {
+					a_ctx.Log.Warn("the place marker was not removed: " + e.Message);
+				}
+				a_ctx.Log.Detail("you are back where you stood before the clean save");
+			}
+			if (a_s.Bool("dyndolod_off", true)) {
+				const string cls = "SHESON_DynDOLOD_Plugin";
+				try {
+					if (a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() != true) {
+						a_ctx.DevBench.Papyrus(cls, "SetMyActive", true);
+						Settle(a_ctx, "playsave", a_s.Int("dyndolod_wait_s", 30), "DynDOLOD switched on again");
+					}
+					a_ctx.Log.Detail("DynDOLOD is on");
+				} catch (StepFailedException e) {
+					a_ctx.Log.Warn("DynDOLOD's state could not be read (" + e.Message + ") - check its menu in game");
+				}
+			}
 			SaveAndQuit(a_ctx, SaveReady);
 		} catch {
 			CloseGame(a_ctx);

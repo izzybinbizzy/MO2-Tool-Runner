@@ -441,6 +441,20 @@ public static class Program
 		File.WriteAllText(dll, "v2");
 		Check(a != ShaderStep.Fingerprint(mo2, c), "a new DLL = a new fingerprint");
 		Check(!ShaderStep.UpToDate(mo2, c), "no cache = not up to date");
+		// with the profile: a feature mod's shader file changes it; what a generator writes (a plugin, a mesh) never does
+		var p = ProfileOf(f);
+		var feature = Path.Combine(f.Mods, "Base Mod", "Shaders", "Features", "Grass.ini");
+		Directory.CreateDirectory(Path.GetDirectoryName(feature)!);
+		File.WriteAllText(feature, "[Info]\r\nVersion=1-0-0\r\n");
+		var withProfile = ShaderStep.Fingerprint(mo2, c, p);
+		File.WriteAllText(feature, "[Info]\r\nVersion=1-1-0\r\n");
+		var changed = ShaderStep.Fingerprint(mo2, c, p);
+		Check(withProfile != changed, "a ticked mod's shader file is part of it");
+		FakeMo2.Plugin(Path.Combine(f.Mods, "Output A", "OutA.esp"), true);
+		var mesh = Path.Combine(f.Mods, "Output A", "Meshes", "lod.nif");
+		Directory.CreateDirectory(Path.GetDirectoryName(mesh)!);
+		File.WriteAllText(mesh, "a rebuilt LOD mesh");
+		Equal(changed, ShaderStep.Fingerprint(mo2, c, p), "a rebuilt plugin or mesh leaves it as it was");
 	}
 
 	static void T_CheckBoxPixels()

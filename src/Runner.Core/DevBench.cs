@@ -46,6 +46,28 @@ public sealed class DevBench(string a_baseUrl = "http://127.0.0.1:8920/api/tool/
 		return r["returned"];
 	}
 
+	// a Papyrus member function called on one reference (its form id, e.g. "0x00000014" for the player)
+	public JsonNode? PapyrusOn(string a_self, string a_script, string a_function, params object[] a_args)
+	{
+		var r = Call("papyrus", new { action = "call", script = a_script, function = a_function, args = a_args, self = new { form = a_self } }, 40);
+		if (r["called"]?.GetValue<bool>() != true) {
+			throw new StepFailedException($"the game did not run {a_script}.{a_function}: {r.ToJsonString()[..Math.Min(300, r.ToJsonString().Length)]}");
+		}
+		return r["returned"];
+	}
+
+	// a returned reference's form id as "0xXXXXXXXX"
+	public static string? FormKey(JsonNode? a_v)
+	{
+		var v = a_v is JsonObject o ? o["formId"] ?? o["formID"] : a_v;
+		if (v is JsonValue jv && jv.TryGetValue<long>(out var n)) {
+			return $"0x{n:X8}";
+		}
+		var s = v?.ToString().Trim();
+		return s != null && long.TryParse(s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s, System.Globalization.NumberStyles.HexNumber, InvariantCulture, out var h)
+			? $"0x{h:X8}" : null;
+	}
+
 	public void Console(string a_command) => Call("console", new { action = "exec", command = a_command });
 
 	// is DevBench in this profile (its DLL in a ticked mod)?
