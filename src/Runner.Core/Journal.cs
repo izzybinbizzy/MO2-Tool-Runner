@@ -81,6 +81,8 @@ public sealed class Journal
 	public List<string> Added { get; set; } = [];
 	public List<ParkRecord> Parked { get; set; } = [];
 	public List<KeptFile> Kept { get; set; } = [];
+	// the marker left where the player stood before the clean save's teleport (the save to play takes them back to it)
+	public string? ReturnMarker { get; set; }
 	public List<string> Notes { get; set; } = [];
 
 	[JsonIgnore]

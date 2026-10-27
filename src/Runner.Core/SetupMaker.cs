@@ -62,7 +62,7 @@ public static class SetupMaker
 			Add("shaders", true, new JsonObject { ["launch_executable"] = skse, ["caches"] = caches, ["deadline_min"] = 180 });
 		}
 		var dynDll = states.Any(s => s.Value == '+' && Directory.Exists(mo2.ModDir(s.Key)) && File.Exists(Path.Combine(mo2.ModDir(s.Key), "SKSE", "Plugins", "DynDOLOD.dll")));
-		Add("cleansave", false, new JsonObject { ["launch_executable"] = skse, ["interior_cell"] = "WhiterunBreezehome", ["dyndolod_off"] = dynDll, ["save"] = "" });
+		Add("cleansave", false, new JsonObject { ["launch_executable"] = skse, ["interior_cell"] = "QASmoke", ["wait_s"] = 60, ["dyndolod_wait_s"] = 30, ["dyndolod_off"] = dynDll, ["save"] = "" });
 		// off by default: a guided step waits for the player, and a run left alone should not
 		if (ByBinary(mo2, "Wrye Bash.exe") is { } wb) {
 			Add("wryebash", false, new JsonObject { ["executable"] = wb.Title, ["output_mod"] = Out("Bashed Patch") });

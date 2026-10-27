@@ -227,24 +227,26 @@ public sealed class SynthesisStep : IStep
 		Build(a_ctx, a_s, image, exePath);
 		using (new Toggle(a_ctx, [], a_s.List("disable_during"), "Synthesis", a_ctx.Cancel)) {
 			try {
+				var tRun = DateTime.UtcNow;
+				var logs = Path.Combine(Path.GetDirectoryName(exePath)!, "logs");
+				string? runLog = null;
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, null, a_ctx.Cancel);
 				var w = StepKit.WaitWindow(a_ctx, image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "Synthesis's window");
-				System.Windows.Automation.AutomationElement? go = null;
-				var sw = System.Diagnostics.Stopwatch.StartNew();
-				while (go == null && sw.Elapsed < TimeSpan.FromMinutes(5)) {
-					a_ctx.Cancel.ThrowIfCancellationRequested();
-					go = Uia.All(w, System.Windows.Automation.ControlType.Button).FirstOrDefault(b => Regex.IsMatch(Uia.AutomationId(b) + " " + Uia.Name(b), @"^GoButton|\bRun\b|RunPatchers", RegexOptions.IgnoreCase));
-					if (go == null && sw.Elapsed > TimeSpan.FromMinutes(1) && Regex.IsMatch(Uia.TextOf(w), "Build required|Blocking Error")) {
-						throw new StepFailedException("Synthesis still wants a build inside Mod Organizer: " + Uia.TextOf(w, 300));
-					}
-					Thread.Sleep(3000);
-				}
-				Uia.Press(go ?? throw new StepFailedException("Synthesis has no Run button"));
+				Press(a_ctx, w);
 				a_ctx.Activity(Key, "Synthesis is running its patchers");
+				// judged by its window (its timers and patcher states change while it works), never by its CPU alone; a patcher
+				// that failed is read off Synthesis's own log the moment its run ends (2026-10-27: one failed, no Synthesis.esp)
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(90), () => {
 					var fresh = new[] { espOw, espMod }.FirstOrDefault(p => File.Exists(p) && File.GetLastWriteTimeUtc(p) > t0);
-					return fresh != null && DateTime.UtcNow - File.GetLastWriteTimeUtc(fresh) > TimeSpan.FromSeconds(20) ? Waits.Poll.Done : Waits.Poll.Wait;
-				});
+					if (fresh != null && DateTime.UtcNow - File.GetLastWriteTimeUtc(fresh) > TimeSpan.FromSeconds(20)) {
+						return Waits.Poll.Done;
+					}
+					runLog ??= RunLog(logs, tRun);
+					if (fresh == null && runLog != null && Failure(Files.ReadSharedText(runLog)) is { } why) {
+						throw new StepFailedException($"Synthesis: {why} - it wrote no Synthesis.esp (its log: {runLog})");
+					}
+					return Waits.Poll.Wait;
+				}, a_progress: () => Uia.TextOf(w, 4000));
 			} finally {
 				StepKit.CloseTool(a_ctx, image);
 			}
@@ -257,6 +259,68 @@ public sealed class SynthesisStep : IStep
 			throw new StepFailedException("Synthesis wrote no new Synthesis.esp");
 		}
 		a_ctx.SetAfter(mod);
+	}
+
+	// the log Synthesis started for this run (it keeps one per start, plus Current.log)
+	static string? RunLog(string a_dir, DateTime a_since) => Directory.Exists(a_dir)
+		? new DirectoryInfo(a_dir).GetFiles("*.log").Where(f => !f.Name.Equals("Current.log", StringComparison.OrdinalIgnoreCase) && f.CreationTimeUtc >= a_since)
+			.OrderByDescending(f => f.CreationTimeUtc).Select(f => f.FullName).FirstOrDefault()
+		: null;
+
+	// a finished run whose log holds an error: which patcher failed and why; null while it runs or when nothing failed
+	public static string? Failure(string a_log)
+	{
+		if (!a_log.Contains("Finished patcher run", StringComparison.Ordinal)) {
+			return null;
+		}
+		var err = Regex.Matches(a_log, @"\[ERR\] \[T\d+\] (?<m>.+)").Select(m => m.Groups["m"].Value.Trim()).FirstOrDefault(m => m.Length > 0 && !m.StartsWith("Error while running", StringComparison.Ordinal));
+		if (err == null) {
+			return null;
+		}
+		var at = a_log.IndexOf(err, StringComparison.Ordinal);
+		var patcher = Regex.Matches(a_log[..at], @"Starting Patcher (?<p>.+?) Run").LastOrDefault()?.Groups["p"].Value;
+		return (patcher != null ? $"its patcher \"{patcher}\" failed: " : "a patcher failed: ") + (err.Length > 300 ? err[..300] : err);
+	}
+
+	// its Run button: an enabled one on screen (it has two "GoButton"s - 2026-10-27 the first one pressed nothing and the window
+	// sat on its main screen), pressed, and the run proven started by its window changing; else the other one, else the step fails
+	// naming what the window shows - never a window left open doing nothing
+	static void Press(RunContext a_ctx, System.Windows.Automation.AutomationElement a_w)
+	{
+		var idle = TimeSpan.FromMinutes(Math.Max(1, a_ctx.Setup.IdleMinutes));
+		var sw = System.Diagnostics.Stopwatch.StartNew();
+		List<System.Windows.Automation.AutomationElement> Buttons() => Uia.All(a_w, System.Windows.Automation.ControlType.Button)
+			.Where(b => Regex.IsMatch(Uia.AutomationId(b) + " " + Uia.Name(b), @"^GoButton|\bRun\b|RunPatchers", RegexOptions.IgnoreCase) && Uia.Usable(b)).ToList();
+		var go = Buttons();
+		while (go.Count == 0) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			var txt = Uia.TextOf(a_w, 300);
+			if (Regex.IsMatch(txt, "Build required|Blocking Error")) {
+				throw new StepFailedException("Synthesis still wants a build inside Mod Organizer: " + txt);
+			}
+			if (sw.Elapsed > idle) {
+				throw new StepFailedException($"Synthesis showed no usable Run button within {idle.TotalMinutes:0} minutes. Its window shows: {txt}");
+			}
+			Thread.Sleep(2000);
+			go = Buttons();
+		}
+		foreach (var b in go) {
+			var before = Uia.TextOf(a_w, 4000);
+			if (!Uia.Press(b)) {
+				continue;
+			}
+			var until = DateTime.UtcNow.AddSeconds(45);
+			while (DateTime.UtcNow < until) {
+				a_ctx.Cancel.ThrowIfCancellationRequested();
+				Thread.Sleep(1500);
+				if (Uia.TextOf(a_w, 4000) != before || Buttons().Count == 0) {
+					a_ctx.Log.Detail("Synthesis: Run pressed, its patchers started");
+					return;
+				}
+			}
+			a_ctx.Log.Warn("Synthesis: a Run button pressed, nothing changed in 45 s - trying the next one");
+		}
+		throw new StepFailedException("Synthesis did not start its patchers when Run was pressed. Its window shows: " + Uia.TextOf(a_w, 300));
 	}
 
 	static void Build(RunContext a_ctx, StepSettings a_s, string a_image, string a_exe)

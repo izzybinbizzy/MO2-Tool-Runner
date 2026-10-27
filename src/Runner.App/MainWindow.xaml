@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ToolRunner.App"
         Title="MO2 Tool Runner" Width="1240" Height="800" MinWidth="980" MinHeight="620"
-        Background="{StaticResource Bg}" Foreground="{StaticResource Text}" FontFamily="{StaticResource UiFont}" FontSize="14"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}" FontFamily="{DynamicResource UiFont}" FontSize="{DynamicResource SizeBody}"
         WindowStartupLocation="CenterScreen" ShowActivated="True">
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="Vis"/>
@@ -19,7 +19,7 @@
   </Window.InputBindings>
 
   <!-- its own background: the Fluent theme may make the window itself see-through (Mica) -->
-  <Grid Background="{StaticResource Bg}">
+  <Grid Background="{DynamicResource Bg}">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
@@ -28,7 +28,7 @@
     </Grid.RowDefinitions>
 
     <!-- header: the name, the setup, the panels; three columns so nothing is cut off down to the smallest window -->
-    <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="20,12">
+    <Border Grid.Row="0" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="20,12">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
@@ -36,11 +36,11 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-          <Image Source="Icon.ico" Width="30" Height="30" Margin="0,0,12,0" AutomationProperties.Name="MO2 Tool Runner"/>
+          <Image Source="{DynamicResource Logo}" Width="30" Height="30" Margin="0,0,12,0" AutomationProperties.Name="MO2 Tool Runner"/>
           <TextBlock Text="MO2 TOOL RUNNER" Style="{StaticResource H1}" VerticalAlignment="Center"/>
         </StackPanel>
         <DockPanel Grid.Column="1" VerticalAlignment="Center" Margin="28,0,16,0">
-          <TextBlock DockPanel.Dock="Left" Text="Setup" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <TextBlock DockPanel.Dock="Left" Text="Setup" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"/>
           <Button DockPanel.Dock="Right" Content="_New setup" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="NewSetup_Click" ToolTip="Make a setup for an MO2 profile (Ctrl+N)"
                   IsEnabled="{Binding IsRunning, Converter={StaticResource Not}}"/>
           <ComboBox x:Name="SetupBox" ItemsSource="{Binding Setups}" SelectedItem="{Binding SelectedSetup}" DisplayMemberPath="Name" MinWidth="150" MaxWidth="320"
@@ -56,15 +56,15 @@
 
     <!-- banners: an interrupted run; a message -->
     <StackPanel Grid.Row="1">
-      <Border Background="#3A1B17" BorderBrush="{StaticResource Bad}" BorderThickness="0,0,0,1" Padding="20,10"
+      <Border Background="{DynamicResource BannerBad}" BorderBrush="{DynamicResource Bad}" BorderThickness="0,0,0,1" Padding="20,10"
               Visibility="{Binding Interrupted, Converter={StaticResource NotEmpty}}">
         <DockPanel>
           <Button DockPanel.Dock="Right" Content="_Put my profile back" Style="{StaticResource Primary}" Command="{Binding RestoreCommand}"
                   AutomationProperties.HelpText="Puts every output and your load order back as before the run that did not finish"/>
-          <TextBlock Text="{Binding Interrupted}" Foreground="{StaticResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"/>
+          <TextBlock Text="{Binding Interrupted}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"/>
         </DockPanel>
       </Border>
-      <Border Padding="20,6" Visibility="{Binding Message, Converter={StaticResource NotEmpty}}" Background="{StaticResource Panel2}">
+      <Border Padding="20,6" Visibility="{Binding Message, Converter={StaticResource NotEmpty}}" Background="{DynamicResource Panel2}">
         <TextBlock Text="{Binding Message}" Foreground="{Binding MessageKind, Converter={StaticResource KindBrush}}" TextWrapping="Wrap"
                    AutomationProperties.LiveSetting="Polite"/>
       </Border>
@@ -92,8 +92,8 @@
         <TextBlock Text="No steps yet: press New setup at the top and pick your Mod Organizer and profile - the steps are found from its Executables list."
                    Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="16" Panel.ZIndex="1" IsHitTestVisible="False"
                    Visibility="{Binding Steps.Count, Converter={StaticResource ZeroVis}}"/>
-        <ListBox x:Name="StepList" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" Background="{StaticResource Panel}"
-                 BorderBrush="{StaticResource Line}" BorderThickness="1" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+        <ListBox x:Name="StepList" ItemsSource="{Binding Steps}" SelectedItem="{Binding SelectedStep}" Background="{DynamicResource Panel}"
+                 BorderBrush="{DynamicResource Line}" BorderThickness="1" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  AutomationProperties.Name="Steps" KeyDown="StepList_KeyDown" CheckBox.Click="StepOn_Click">
           <!-- no event handler inside a template or a style: WPF numbers them wrongly there (it crashed at start) -->
           <ListBox.ContextMenu>
@@ -127,7 +127,7 @@
                 </Grid.ColumnDefinitions>
                 <CheckBox Grid.Column="0" IsChecked="{Binding On}" VerticalAlignment="Center" Margin="0,0,6,0"
                           AutomationProperties.Name="{Binding Name, StringFormat='Run {0}'}" IsTabStop="False"/>
-                <TextBlock Grid.Column="1" Text="{Binding Number}" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Text="{Binding Number}" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="2" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
                   <TextBlock Text="{Binding Note}" Style="{StaticResource MutedText}" TextWrapping="Wrap"
@@ -135,7 +135,7 @@
                              Visibility="{Binding Note, Converter={StaticResource NotEmpty}}"/>
                 </StackPanel>
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                  <TextBlock Text="{Binding Elapsed}" Foreground="{StaticResource GoldLight}" Margin="0,0,8,0"/>
+                  <TextBlock Text="{Binding Elapsed}" Foreground="{DynamicResource GoldLight}" Margin="0,0,8,0"/>
                   <TextBlock Text="{Binding Usual}" Style="{StaticResource MutedText}" ToolTip="its usual time"/>
                 </StackPanel>
                 <TextBlock Grid.Column="4" Text="{Binding Glyph}" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="14"
@@ -153,20 +153,20 @@
           <StackPanel>
             <DockPanel>
               <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
-                <TextBlock Text="{Binding Clock}" FontFamily="{StaticResource HeadFont}" FontSize="20" Foreground="{StaticResource GoldLight}" HorizontalAlignment="Right"/>
+                <TextBlock Text="{Binding Clock}" FontFamily="{DynamicResource HeadFont}" FontSize="{DynamicResource SizeClock}" Foreground="{DynamicResource GoldLight}" HorizontalAlignment="Right"/>
                 <TextBlock Text="{Binding Left}" Style="{StaticResource MutedText}" HorizontalAlignment="Right"/>
               </StackPanel>
               <StackPanel>
-                <TextBlock Text="{Binding NowTitle}" FontFamily="{StaticResource HeadFont}" FontSize="26" Foreground="{StaticResource GoldLight}"
+                <TextBlock Text="{Binding NowTitle}" FontFamily="{DynamicResource HeadFont}" FontSize="{DynamicResource SizeStepTitle}" Foreground="{DynamicResource GoldLight}"
                            AutomationProperties.LiveSetting="Polite"/>
-                <TextBlock Text="{Binding NowActivity}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource Text}"/>
+                <TextBlock Text="{Binding NowActivity}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{DynamicResource Text}"/>
               </StackPanel>
             </DockPanel>
-            <ProgressBar Height="8" Margin="0,14,0,0" Maximum="1" Value="{Binding Progress}" Foreground="{StaticResource GoldBar}" AutomationProperties.Name="Run progress"
+            <ProgressBar Height="{DynamicResource ProgressBarHeight}" Margin="0,14,0,0" Maximum="1" Value="{Binding Progress}" Foreground="{DynamicResource GoldBar}" AutomationProperties.Name="Run progress"
                          IsIndeterminate="{Binding ProgressKnown, Converter={StaticResource Not}}"
                          Visibility="{Binding ShowProgress, Converter={StaticResource Vis}}"/>
             <!-- a guided in-game step waits for the player -->
-            <Border Margin="0,14,0,0" Padding="14" CornerRadius="6" Background="#2A2410" BorderBrush="{StaticResource Gold}" BorderThickness="1"
+            <Border Margin="0,14,0,0" Padding="14" CornerRadius="{DynamicResource GuidedBoxCorner}" Background="{DynamicResource GuidedFill}" BorderBrush="{DynamicResource Gold}" BorderThickness="1"
                     Visibility="{Binding Waiting, Converter={StaticResource NotEmpty}}">
               <DockPanel>
                 <Button DockPanel.Dock="Right" Content="_Done" Style="{StaticResource Primary}" Command="{Binding ContinueCommand}" Margin="12,0,0,0"/>
@@ -176,13 +176,13 @@
                 </StackPanel>
               </DockPanel>
             </Border>
-            <TextBlock Text="{Binding Verdict}" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="15"
+            <TextBlock Text="{Binding Verdict}" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="{DynamicResource SizeVerdict}"
                        Foreground="{Binding VerdictKind, Converter={StaticResource KindBrush}}"
                        Visibility="{Binding Verdict, Converter={StaticResource NotEmpty}}"/>
             <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
               <Button Style="{StaticResource Primary}" Command="{Binding StartCommand}" IsEnabled="{Binding CanStart}"
                       ToolTip="Run every ticked step (Ctrl+Enter)" AutomationProperties.Name="Start">
-                <TextBlock Text="START" Foreground="#0B0B0D"/>
+                <TextBlock Text="START" Foreground="{DynamicResource OnAccent}"/>
               </Button>
               <Button Content="Stop _after this step" Style="{StaticResource Ghost}" Command="{Binding StopAfterCommand}" Margin="12,0,0,0"
                       IsEnabled="{Binding IsRunning}" ToolTip="Lets the running step finish, then puts your profile back"/>
@@ -202,11 +202,11 @@
         <!-- the log -->
         <DockPanel>
           <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-            <CheckBox DockPanel.Dock="Right" x:Name="Follow" Content="Follow" IsChecked="True" Foreground="{StaticResource Muted}"/>
+            <CheckBox DockPanel.Dock="Right" x:Name="Follow" Content="Follow" IsChecked="True" Foreground="{DynamicResource Muted}"/>
             <TextBlock Text="LOG" Style="{StaticResource H2}" Margin="0"/>
           </DockPanel>
-          <TextBox x:Name="LogBox" IsReadOnly="True" IsUndoEnabled="False" FontFamily="{StaticResource MonoFont}" FontSize="12.5"
-                   Background="{StaticResource Panel}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}"
+          <TextBox x:Name="LogBox" IsReadOnly="True" IsUndoEnabled="False" FontFamily="{DynamicResource MonoFont}" FontSize="{DynamicResource SizeLog}"
+                   Background="{DynamicResource Panel}" Foreground="{DynamicResource Text}" BorderBrush="{DynamicResource Line}"
                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"
                    AutomationProperties.Name="Run log"/>
         </DockPanel>
@@ -214,16 +214,16 @@
     </Grid>
 
     <!-- status bar: MO2 and the game on the left, the version and the keys on the right -->
-    <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,6">
+    <Border Grid.Row="3" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="20,6">
       <DockPanel>
         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,24,0">
           <TextBlock Margin="0,0,18,0" AutomationProperties.LiveSetting="Polite">
             <Run Text="●" Foreground="{Binding Mo2Open, Converter={StaticResource StateBrush}, ConverterParameter=warn}"/>
-            <Run Text="{Binding Mo2Text, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+            <Run Text="{Binding Mo2Text, Mode=OneWay}" Foreground="{DynamicResource Text}"/>
           </TextBlock>
           <TextBlock AutomationProperties.LiveSetting="Polite">
             <Run Text="●" Foreground="{Binding GameRunning, Converter={StaticResource StateBrush}, ConverterParameter=bad}"/>
-            <Run Text="{Binding GameText, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+            <Run Text="{Binding GameText, Mode=OneWay}" Foreground="{DynamicResource Text}"/>
           </TextBlock>
         </StackPanel>
         <TextBlock x:Name="Footer" Style="{StaticResource MutedText}" HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"/>
@@ -231,9 +231,9 @@
     </Border>
 
     <!-- side panels over the right part: history, settings -->
-    <Border x:Name="Shade" Grid.Row="0" Grid.RowSpan="4" Background="#99000000" Visibility="Collapsed" MouseDown="Shade_MouseDown"/>
-    <Border x:Name="Drawer" Grid.Row="1" Grid.RowSpan="3" HorizontalAlignment="Right" Width="640" Background="{StaticResource Panel}"
-            BorderBrush="{StaticResource GoldDim}" BorderThickness="1,0,0,0" Visibility="Collapsed">
+    <Border x:Name="Shade" Grid.Row="0" Grid.RowSpan="4" Background="{DynamicResource Shade}" Visibility="Collapsed" MouseDown="Shade_MouseDown"/>
+    <Border x:Name="Drawer" Grid.Row="1" Grid.RowSpan="3" HorizontalAlignment="Right" Width="640" Background="{DynamicResource Panel}"
+            BorderBrush="{DynamicResource GoldDim}" BorderThickness="1,0,0,0" Visibility="Collapsed">
       <DockPanel Margin="20">
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
           <Button DockPanel.Dock="Right" Content="Close" Style="{StaticResource Ghost}" Click="CloseDrawer_Click" ToolTip="Esc"/>

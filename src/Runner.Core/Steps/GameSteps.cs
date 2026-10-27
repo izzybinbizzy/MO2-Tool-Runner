@@ -253,7 +253,13 @@ public sealed class ShaderStep : IStep
 	}
 
 	// what the cache depends on: the shader mod's DLL(s), its version and its settings files - hashed
-	public static string Fingerprint(Mo2Instance a_mo2, Cache a_c)
+	// what the cache is built from: the shader mod (its DLLs, meta.ini, settings), its settings mod and - with the profile - every
+	// shader file a ticked mod ships (a Community Shaders feature can be its own mod) and the game's version. Nothing a generator
+	// writes (plugins, meshes, textures, LOD, grass, animations) is in it: those never make the cache stale (his question
+	// 2026-10-27, "can you confirm rebuilding another tool wont cause shaders to need to be rebuilt")
+	public static readonly string[] ShaderFileKinds = [".hlsl", ".hlsli", ".ini", ".json", ".fx", ".fxh", ".csh", ".vsh", ".psh"];
+
+	public static string Fingerprint(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null)
 	{
 		using var sha = SHA256.Create();
 		void Add(string a_file)
@@ -281,13 +287,34 @@ public sealed class ShaderStep : IStep
 				Add(f);
 			}
 		}
+		if (a_profile != null) {
+			foreach (var mod in a_profile.States().Where(kv => kv.Value == '+' && !string.Equals(kv.Key, a_c.OutputMod, StringComparison.OrdinalIgnoreCase))
+				         .Select(kv => kv.Key).Order(StringComparer.OrdinalIgnoreCase)) {
+				var shaders = Path.Combine(a_mo2.ModDir(mod), "Shaders");
+				if (!Directory.Exists(shaders)) {
+					continue;
+				}
+				foreach (var f in Directory.EnumerateFiles(shaders, "*", SearchOption.AllDirectories)
+					         .Where(f => ShaderFileKinds.Contains(Path.GetExtension(f).ToLowerInvariant())).Order(StringComparer.OrdinalIgnoreCase)) {
+					var rel = System.Text.Encoding.UTF8.GetBytes(mod + "|" + Path.GetRelativePath(shaders, f).ToLowerInvariant());
+					sha.TransformBlock(rel, 0, rel.Length, null, 0);
+					var data = File.ReadAllBytes(f);
+					sha.TransformBlock(data, 0, data.Length, null, 0);
+				}
+			}
+			var exe = Path.Combine(a_mo2.GameDir, "SkyrimSE.exe");
+			if (File.Exists(exe)) {
+				var v = System.Text.Encoding.UTF8.GetBytes("game " + System.Diagnostics.FileVersionInfo.GetVersionInfo(exe).FileVersion);
+				sha.TransformBlock(v, 0, v.Length, null, 0);
+			}
+		}
 		sha.TransformFinalBlock([], 0, 0);
 		return Convert.ToHexString(sha.Hash!);
 	}
 
 	static string StampFile(Mo2Instance a_mo2, Cache a_c) => Path.Combine(a_mo2.ModDir(a_c.OutputMod), "MO2 Tool Runner cache.json");
 
-	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c)
+	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null)
 	{
 		var stamp = StampFile(a_mo2, a_c);
 		if (!File.Exists(stamp) || Files.CountFiles(Path.Combine(a_mo2.ModDir(a_c.OutputMod), "ShaderCache")) < 50) {
@@ -296,7 +323,7 @@ public sealed class ShaderStep : IStep
 		try {
 			var o = JsonNode.Parse(Files.ReadSharedText(stamp)) as JsonObject;
 			// a cache that ended by quiet (the log never said it was done) is built again
-			return o?["verified"]?.GetValue<bool>() != false && o?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c);
+			return o?["verified"]?.GetValue<bool>() != false && o?["fingerprint"]?.ToString() == Fingerprint(a_mo2, a_c, a_profile);
 		} catch (System.Text.Json.JsonException) {
 			return false;
 		}
@@ -317,7 +344,7 @@ public sealed class ShaderStep : IStep
 				a_ctx.Log.Detail($"the {c.ShaderMod} cache: not rebuilt (setup: never)");
 				continue;
 			}
-			if (mode == ShaderRebuild.WhenChanged && UpToDate(a_ctx.Mo2, c)) {
+			if (mode == ShaderRebuild.WhenChanged && UpToDate(a_ctx.Mo2, c, a_ctx.Profile)) {
 				a_ctx.Log.Detail($"the {c.ShaderMod} cache is current (nothing it depends on changed) - not rebuilt");
 				continue;
 			}
@@ -352,11 +379,12 @@ public sealed class ShaderStep : IStep
 			Directory.Delete(owCache, true);
 		}
 		var logs = InGame.SkseLogs(a_ctx.Setup, a_ctx.Mo2);
+		string? result = null;
+		var verified = true;
+		var count = 0;
 		using (new Toggle(a_ctx, a_on, a_off, "the shader cache", a_ctx.Cancel)) {
 			var restarts = 0;
 			var total = Stopwatch.StartNew();
-			string? result = null;
-			var verified = true;
 			Process? g = null;
 			// any failure or Stop: the game this step started is closed here, inside the Toggle, so MO2 can close for the put-back
 			try {
@@ -436,7 +464,7 @@ public sealed class ShaderStep : IStep
 			a_ctx.Log.Detail(result);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 30)));
 			InGame.CloseGame(a_ctx);
-			var count = Files.CountFiles(owCache);
+			count = Files.CountFiles(owCache);
 			if (count < a_s.Int("min_files", 50)) {
 				throw new StepFailedException($"the shader cache looks empty ({count} files)");
 			}
@@ -444,9 +472,10 @@ public sealed class ShaderStep : IStep
 			Files.MoveContents(owCache, Path.Combine(a_ctx.Mo2.ModDir(a_c.OutputMod), "ShaderCache"));
 			Directory.Delete(owCache, true);
 			StepKit.MarkReplaced(a_ctx, a_c.OutputMod);
-			Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
-				["verified"] = verified }.ToJsonString());
-			a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 		}
+		// stamped against the profile as it is put back, the state the next freshness check reads - never the compile's own switches
+		Files.WriteAtomic(StampFile(a_ctx.Mo2, a_c), new JsonObject { ["fingerprint"] = Fingerprint(a_ctx.Mo2, a_c, a_ctx.Profile), ["built"] = DateTime.Now.ToString("O"), ["files"] = count,
+			["verified"] = verified }.ToJsonString());
+		a_ctx.Note($"shaders ({a_c.OutputMod}): {result}");
 	}
 }

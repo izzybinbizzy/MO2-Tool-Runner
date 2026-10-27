@@ -205,6 +205,11 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	static void WritePluginFile(string a_path, List<string> a_lines, string a_nl, bool a_bom) =>
 		Files.WriteAtomic(a_path, string.Join(a_nl, a_lines) + a_nl, new UTF8Encoding(a_bom));
 
+	// the plugins ticked in plugins.txt ("*name")
+	public List<string> ActivePlugins() => File.Exists(PluginsTxt)
+		? ReadPluginFile(PluginsTxt).Lines.Where(l => l.StartsWith('*')).Select(l => l[1..].Trim()).ToList()
+		: [];
+
 	public sealed record PlaceRule(string Plugin, string Where, bool Active = false);
 
 	// generated plugins put where they go (the setup's placement rules), in plugins.txt and loadorder.txt:

@@ -3,13 +3,15 @@ namespace ToolRunner.App;
 // The command line (for players who script, and for agents under watch.py):
 //   "MO2 Tool Runner.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
 //   "MO2 Tool Runner.exe" check --setup <file>                                                  the pre-check, printed
+//   "MO2 Tool Runner.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
+//   "MO2 Tool Runner.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
 //   "MO2 Tool Runner.exe" restore [--setup <file>]                                              put back an interrupted run
 //   "MO2 Tool Runner.exe" stop | stop-after                                                     ask the running run to stop
 //   "MO2 Tool Runner.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
-	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "restore" or "stop" or "stop-after" or "import" or "updates" or "--help" or "-h" or "/?";
+	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "preview" or "lod" or "restore" or "stop" or "stop-after" or "import" or "updates" or "--help" or "-h" or "/?";
 
 	static string? Opt(string[] a_args, string a_name)
 	{
@@ -24,6 +26,8 @@ public static class Cli
 			return a_args[0] switch {
 				"run" => Run(a_args),
 				"check" => Check(a_args),
+				"preview" => Preview(a_args),
+				"lod" => Lod(a_args),
 				"restore" => RestoreCmd(a_args),
 				"stop" or "stop-after" => Stop(a_args[0]),
 				"import" => Import(a_args),
@@ -43,7 +47,7 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("MO2 Tool Runner - run | check | restore | stop | stop-after   (see the readme)");
+		Console.WriteLine("MO2 Tool Runner - run | check | preview | lod | restore | stop | stop-after | updates   (see the readme)");
 		return 0;
 	}
 
@@ -81,6 +85,38 @@ public static class Cli
 		}
 		Console.WriteLine(issues.Any(i => i.Blocking) ? "NOT READY" : "READY");
 		return issues.Any(i => i.Blocking) ? 1 : 0;
+	}
+
+	static int Preview(string[] a_args)
+	{
+		var setup = Setup.Load(SetupArg(a_args));
+		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+		var usual = Engine.UsualTimes(setup.File);
+		var p = RunPreview.Build(setup, mo2, Runner.Plan(setup, Opt(a_args, "--only"), Opt(a_args, "--from"), Opt(a_args, "--until")));
+		foreach (var l in p.Lines(k => usual.TryGetValue(k, out var t) ? t : null)) {
+			Console.WriteLine(l);
+		}
+		return 0;
+	}
+
+	static int Lod(string[] a_args)
+	{
+		var setup = Setup.Load(SetupArg(a_args));
+		var step = Opt(a_args, "--step") ?? throw new ArgumentException("--step <step> is needed (grass, texgen, dyndolod, treelodgen, xlodgen, anvillod)");
+		if (!LodGuide.Applies(step)) {
+			throw new ArgumentException($"\"{step}\" is not a LOD step");
+		}
+		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+		if (LodGuide.SetupNote(setup, mo2, step) is { } note) {
+			Console.WriteLine("note    " + note);
+		}
+		foreach (var (title, url) in LodGuide.DocsFor(setup, mo2, step)) {
+			Console.WriteLine($"help    {title}: {url}");
+		}
+		foreach (var h in LodGuide.Find(setup, mo2, step)) {
+			Console.WriteLine($"mod     {h.Mod} ({h.What}){(h.Page == null ? "" : "  " + h.Page)}");
+		}
+		return 0;
 	}
 
 	static int Updates(string[] a_args)

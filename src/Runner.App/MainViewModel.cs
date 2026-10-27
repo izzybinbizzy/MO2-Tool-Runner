@@ -18,11 +18,11 @@ public sealed partial class StepRow : Observable
 	public int Number { get; set => Set(ref field, value); }
 
 	public string Glyph => State switch {
-		StepState.Running => "▶",
-		StepState.Done => "✔",
-		StepState.Failed => "✖",
-		StepState.Stopped => "■",
-		StepState.Skipped => "–",
+		StepState.Running => Theme.Glyph("Running"),
+		StepState.Done => Theme.Glyph("Done"),
+		StepState.Failed => Theme.Glyph("Failed"),
+		StepState.Stopped => Theme.Glyph("Stopped"),
+		StepState.Skipped => Theme.Glyph("Skipped"),
 		_ => "",
 	};
 
@@ -290,23 +290,77 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	// ---------------------------------------------------------------- actions
-	void Start() => StartWith(null, null, null);
+	void Start() => _ = StartWith(null, null, null);
 
-	public void StartWith(string? a_only, string? a_from, string? a_until)
+	// his checklist 270: what the run will do, shown before anything changes (the setup's "previewBeforeRun", on unless switched
+	// off); the window answers it (true = start)
+	public Func<string, bool>? ConfirmRun { get; set; }
+	bool _previewing;
+
+	string? CannotStart() =>
+		SelectedSetup == null || Setup == null ? "Make or pick a setup first." :
+		Engine.Active() != null ? "A run is going already." :
+		Engine.Interrupted() != null ? "The last run did not finish - put your profile back first (the button at the top)." : null;
+
+	public async Task StartWith(string? a_only, string? a_from, string? a_until)
 	{
-		if (SelectedSetup == null || Setup == null) {
-			Say("Make or pick a setup first.", "bad");
+		if (_previewing) {
 			return;
 		}
-		if (Engine.Active() != null) {
-			Say("A run is going already.", "bad");
+		if (CannotStart() is { } why) {
+			Say(why, "bad");
 			return;
 		}
-		if (Engine.Interrupted() != null) {
-			Say("The last run did not finish - put your profile back first (the button at the top).", "bad");
-			return;
+		if (Setup.Bool(Setup!.Root, "previewBeforeRun") != false && ConfirmRun != null) {
+			_previewing = true;
+			Say("Working out what the run will do ...", "");
+			var setup = Setup;
+			var file = SelectedSetup!.File;
+			byte[] shown;
+			try {
+				shown = Files.ReadShared(file);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				_previewing = false;
+				Say("Could not read the setup: " + e.Message, "bad");
+				return;
+			}
+			var usual = _usual;
+			string preview;
+			try {
+				preview = await Task.Run(() => string.Join("\n", RunPreview.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance),
+					Runner.Plan(setup, a_only, a_from, a_until)).Lines(k => usual.TryGetValue(k, out var t) ? t : null)));
+			} catch (Exception e) {
+				Say("Could not work out what the run would do: " + e.Message, "bad");
+				return;
+			} finally {
+				_previewing = false;
+			}
+			if (!ConfirmRun(preview)) {
+				Say("Not started - nothing was changed.", "");
+				return;
+			}
+			// the window waited on the player: look again, and start only the setup that was previewed
+			if (CannotStart() is { } now) {
+				Say(now, "bad");
+				return;
+			}
+			if (!string.Equals(SelectedSetup?.File, file, StringComparison.OrdinalIgnoreCase)) {
+				Say("Not started: another setup was picked while the preview was open - press Start again.", "warn");
+				return;
+			}
+			// a step switched while the box was open changes what runs: the player sees a new preview first
+			bool same;
+			try {
+				same = Files.ReadShared(file).AsSpan().SequenceEqual(shown);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				same = false;
+			}
+			if (!same) {
+				Say("Not started: the setup changed while the preview was open - press Start again to see the new one.", "warn");
+				return;
+			}
 		}
-		var (ok, text) = Engine.StartRun(SelectedSetup.File, a_only, a_from, a_until);
+		var (ok, text) = Engine.StartRun(SelectedSetup!.File, a_only, a_from, a_until);
 		if (!ok) {
 			Say("Could not start: " + text, "bad");
 			return;
@@ -404,7 +458,7 @@ public sealed partial class MainViewModel : Observable
 			return;
 		}
 		foreach (var i in found) {
-			Issues.Add($"{(i.Blocking ? "✖" : "•")}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
+			Issues.Add($"{(i.Blocking ? Theme.Glyph("IssueBlocks") : Theme.Glyph("IssueNote"))}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
 		}
 		var blocks = found.Count(i => i.Blocking);
 		Say(blocks > 0 ? $"{blocks} thing(s) would stop the run." : found.Count > 0 ? "Ready - with notes." : "Ready - everything checks out.", blocks > 0 ? "bad" : "good");

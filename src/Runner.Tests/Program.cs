@@ -159,6 +159,10 @@ public static class Program
 		public void Dispose()
 		{
 			try {
+				// a test's read-only files would stop the delete
+				foreach (var f in new DirectoryInfo(Root).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
+					f.IsReadOnly = false;
+				}
 				Directory.Delete(Root, true);
 			} catch (IOException) {
 			} catch (UnauthorizedAccessException) {
@@ -437,6 +441,20 @@ public static class Program
 		File.WriteAllText(dll, "v2");
 		Check(a != ShaderStep.Fingerprint(mo2, c), "a new DLL = a new fingerprint");
 		Check(!ShaderStep.UpToDate(mo2, c), "no cache = not up to date");
+		// with the profile: a feature mod's shader file changes it; what a generator writes (a plugin, a mesh) never does
+		var p = ProfileOf(f);
+		var feature = Path.Combine(f.Mods, "Base Mod", "Shaders", "Features", "Grass.ini");
+		Directory.CreateDirectory(Path.GetDirectoryName(feature)!);
+		File.WriteAllText(feature, "[Info]\r\nVersion=1-0-0\r\n");
+		var withProfile = ShaderStep.Fingerprint(mo2, c, p);
+		File.WriteAllText(feature, "[Info]\r\nVersion=1-1-0\r\n");
+		var changed = ShaderStep.Fingerprint(mo2, c, p);
+		Check(withProfile != changed, "a ticked mod's shader file is part of it");
+		FakeMo2.Plugin(Path.Combine(f.Mods, "Output A", "OutA.esp"), true);
+		var mesh = Path.Combine(f.Mods, "Output A", "Meshes", "lod.nif");
+		Directory.CreateDirectory(Path.GetDirectoryName(mesh)!);
+		File.WriteAllText(mesh, "a rebuilt LOD mesh");
+		Equal(changed, ShaderStep.Fingerprint(mo2, c, p), "a rebuilt plugin or mesh leaves it as it was");
 	}
 
 	static void T_CheckBoxPixels()
@@ -882,6 +900,65 @@ public static class Program
 		Equal(1, StepCatalog.DefaultOrder.ToList().IndexOf("synthesis") - StepCatalog.DefaultOrder.ToList().IndexOf("wryebash"), "Wrye Bash sits right before Synthesis");
 	}
 
+	// a command whose program path is quoted (a path with spaces) runs as written - cmd's own quoting, not Windows' escaping
+	// (2026-10-27: the trial's after-run command failed with '\"C:\...python.exe\"' is not recognized)
+	static void T_CommandWithAQuotedPathRuns()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => { }));
+		var s = f.WriteSetup(("snowfixer", []));
+		var flag = Path.Combine(f.Root, "after ran.txt");
+		var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+		s.Root["beforeRun"] = new JsonArray($"\"{cmd}\" /c exit 0");
+		s.Root["afterRun"] = new JsonArray($"\"{cmd}\" /c echo ok> \"{flag}\"");
+		s.Save();
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, r.Verdict);
+		Check(File.Exists(flag), "the after-run command with quoted paths ran");
+	}
+
+	// a tool driven through its window whose window never changes is idle, whatever CPU its window uses drawing itself - the
+	// step fails naming what the window shows (2026-10-27: Synthesis sat on its main screen 4 min, its window using CPU)
+	static void T_AWindowThatNeverChangesIsIdle()
+	{
+		using var f = new FakeMo2();
+		Waits.IdleForTests = TimeSpan.FromSeconds(8);
+		try {
+			StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+				using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "ping.exe"), "-n 60 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false })!;
+				try {
+					Waits.Tool(ctx, "snowfixer", p, TimeSpan.FromMinutes(2), () => Waits.Poll.Wait, a_progress: () => "SYNTHESIS  Run");
+				} finally {
+					p.Kill();
+				}
+			}));
+			f.WriteSetup(("snowfixer", []));
+			var sw = Stopwatch.StartNew();
+			var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+			Equal(RunState.Failed, r.State, r.Verdict);
+			Check(r.Verdict.Contains("sat idle", StringComparison.Ordinal) && r.Verdict.Contains("SYNTHESIS  Run", StringComparison.Ordinal), "named, with the window's text: " + r.Verdict);
+			Check(sw.Elapsed < TimeSpan.FromSeconds(40), "within the idle limit, not the deadline: " + sw.Elapsed);
+		} finally {
+			Waits.IdleForTests = null;
+		}
+	}
+
+	// a Synthesis patcher that failed is named off Synthesis's own log once its run ends (2026-10-27: Leveled List Resolver
+	// could not write a compressed record, no Synthesis.esp, and the step only said "sat idle")
+	static void T_SynthesisPatcherFailureIsNamed()
+	{
+		const string head = """
+			2026-10-27 16:04:36.640 -04:00 [INF] [T16] ================= Starting Patcher Leveled List Resolver Run =================
+			2026-10-27 16:04:44.387 -04:00 [INF] [T34] Writing to output: C:\Temp\Synthesis.esp
+			2026-10-27 16:04:45.899 -04:00 [ERR] [T35] System.NotImplementedException: Writing with compression enabled is not currently supported.
+			2026-10-27 16:04:45.907 -04:00 [ERR] [T35] Error while running:
+			""";
+		Equal<string?>(null, SynthesisStep.Failure(head), "still running: not judged yet");
+		var why = SynthesisStep.Failure(head + "2026-10-27 16:04:45.911 -04:00 [INF] [T2] Finished patcher run\n");
+		Check(why != null && why.Contains("\"Leveled List Resolver\"", StringComparison.Ordinal) && why.Contains("compression", StringComparison.Ordinal), "patcher and reason named: " + why);
+		Equal<string?>(null, SynthesisStep.Failure("[INF] [T2] Starting Patcher A Run\n[INF] [T2] Finished patcher run\n"), "a clean run is no failure");
+	}
+
 	static void T_BeforeRunCommandMustSucceed()
 	{
 		using var f = new FakeMo2();
@@ -1156,6 +1233,195 @@ public static class Program
 		Equal(RunState.Failed, r.State, "refused");
 		Check(r.Verdict.Contains("outside their folder", StringComparison.Ordinal), "said why: " + r.Verdict);
 		Equal("mine=1", File.ReadAllText(live), "the player's file untouched");
+	}
+
+	// his checklist 270: the preview names the tools, what goes off and why, and what is replaced for good - and changes nothing
+	static void T_PreviewSaysWhatARunDoes()
+	{
+		using var f = new FakeMo2();
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }),
+			("autoblend", new JsonObject { ["output_mod"] = "Output B", ["replaces"] = new JsonArray("Replaced") }));
+		var before = Profile.OrderFiles.Select(n => Path.Combine(f.ProfileDir, n)).Where(File.Exists).Select(File.ReadAllBytes).ToList();
+		var setup = Setup.Load(f.SetupFile);
+		var p = RunPreview.Build(setup, Mo2Instance.Load(f.Exe, f.Instance), Runner.Plan(setup, null, null, null));
+		Equal(2, p.Steps.Count, "two tools");
+		var off = p.OffForTheRun.ToDictionary(o => o.Mod, o => o.Why);
+		Check(off.TryGetValue("Output A", out var a) && a.Contains("SnowFixer", StringComparison.Ordinal), "Output A off, made by SnowFixer");
+		Check(off.ContainsKey("Output B") && off.ContainsKey("Replaced"), "Output B and the replaced mod off");
+		Check(off.TryGetValue("Needs B", out var nb) && nb.Contains("OutB.esp", StringComparison.Ordinal), "a mod needing Output B's plugin off with it, said why");
+		Check(!off.ContainsKey("Base Mod"), "nothing else");
+		Equal("Replaced", p.ReplacedForGood.Single(), "the replaced mod is kept off after");
+		var lines = p.Lines(k => k == "snowfixer" ? TimeSpan.FromMinutes(3) : null);
+		Check(lines.Any(l => l.Contains("usually 3 min", StringComparison.Ordinal)) && lines.Any(l => l.Contains("never timed", StringComparison.Ordinal)),
+			"the usual times and the untimed step: " + string.Join(" | ", lines));
+		var after = Profile.OrderFiles.Select(n => Path.Combine(f.ProfileDir, n)).Where(File.Exists).Select(File.ReadAllBytes).ToList();
+		Check(before.Zip(after).All(x => x.First.SequenceEqual(x.Second)) && before.Count == after.Count, "the profile byte for byte as before");
+		Check(!Directory.Exists(Runner.RunsDir(f.Data)) || Directory.GetDirectories(Runner.RunsDir(f.Data)).Length == 0, "no run record made");
+	}
+
+	// his checklist 270: only the last few runs' backups stay - this setup's oldest go, another setup's never
+	static void T_OnlyTheLastBackupsAreKept()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => WriteOutput(ctx, "snowfixer", "Output A", "OutA.esp")));
+		var setup = f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		setup.Root["keepBackups"] = 2;
+		setup.Save();
+		for (var d = 1; d <= 4; ++d) {
+			var old = Path.Combine(f.Backups, $"2026-01-0{d} 00-00-00 Test");
+			Directory.CreateDirectory(old);
+			var ro = Path.Combine(old, "old.txt");
+			File.WriteAllText(ro, "x");
+			File.SetAttributes(ro, FileAttributes.ReadOnly);
+		}
+		Directory.CreateDirectory(Path.Combine(f.Backups, "2026-01-01 00-00-00 Other"));
+		Directory.CreateDirectory(Path.Combine(f.Backups, "my own folder"));
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, r.Verdict);
+		var left = Directory.GetDirectories(f.Backups).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
+		Equal(4, left.Count, "this run's, the newest old one, the other setup's, the player's own folder: " + string.Join(" | ", left));
+		Check(left.Contains("2026-01-04 00-00-00 Test") && !left.Contains("2026-01-03 00-00-00 Test"), "the newest old one stays, older ones go");
+		Check(left.Contains("2026-01-01 00-00-00 Other") && left.Contains("my own folder"), "another setup's and a folder not of a run stay");
+	}
+
+	// his checklist 270: a run at a set time - its Windows task definition reads back as written
+	static void T_ScheduleDefinitionReadsBack()
+	{
+		var now = new DateTime(2026, 10, 27, 14, 0, 0);
+		Equal(new DateTime(2026, 10, 28, 3, 0, 0), Schedule.Next(TimeSpan.FromHours(3), now), "03:00 is tomorrow at 14:00");
+		Equal(new DateTime(2026, 10, 27, 22, 30, 0), Schedule.Next(new TimeSpan(22, 30, 0), now), "22:30 is still today");
+		var daily = Schedule.Parse(Schedule.TaskXml(@"C:\Some Folder\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true)));
+		Equal(new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true), daily, "every day at 03:00");
+		var once = Schedule.Parse(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false)));
+		Equal(new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false), once, "once");
+		Check(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(now, true)).Contains("<StartWhenAvailable>false</StartWhenAvailable>", StringComparison.Ordinal),
+			"a missed time is skipped, never run later");
+		using (var f = new FakeMo2()) {
+			var a = f.WriteSetup(("snowfixer", []));
+			var b = Setup.FromJson((JsonObject)a.Root.DeepClone(), Path.Combine(f.Data, "Setups", "Copy of Test.json"));
+			Check(Schedule.TaskName(a) != Schedule.TaskName(b), "two setups with one name get two tasks");
+			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.Load(f.SetupFile)), "the same setup file always gets the same task");
+			var renamed = (JsonObject)a.Root.DeepClone();
+			renamed["name"] = "A New Name";
+			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.FromJson(renamed, f.SetupFile)), "a setup renamed inside keeps its task");
+		}
+		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
+		if (Environment.GetEnvironmentVariable("MO2TR_SCHEDULE_PROBE") != "1") {
+			return;
+		}
+		const string name = "MO2 Tool Runner - zz offline test";
+		var when = new Schedule.RunTime(DateTime.Now.Date.AddYears(1).AddHours(3), true);
+		try {
+			Schedule.Register(name, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit", when));
+			Equal(when, Schedule.ReadTask(name), "Windows has it as written");
+		} finally {
+			Schedule.RemoveTask(name);
+		}
+		Equal(null, Schedule.ReadTask(name), "and it is gone again");
+	}
+
+	// his lesson 2026-10-27 (checklist 271): the mods a LOD step builds from are found off their plugins' record groups, each with
+	// its own page; the setup's own outputs (made from them) are left out
+	static void T_LodGuideFindsTheModsItBuildsFrom()
+	{
+		using var f = new FakeMo2();
+		static void WithGroups(string a_path, params string[] a_groups)
+		{
+			FakeMo2.Plugin(a_path, false);
+			using var fs = new FileStream(a_path, FileMode.Append);
+			foreach (var g in a_groups) {
+				var h = new byte[24 + 8];
+				Encoding.ASCII.GetBytes("GRUP").CopyTo(h, 0);
+				BitConverter.GetBytes((uint)h.Length).CopyTo(h, 4);
+				Encoding.ASCII.GetBytes(g).CopyTo(h, 8);
+				fs.Write(h);
+			}
+		}
+		// a top-level group holding one record (a_nested: inside one more group, as a worldspace's cells are)
+		static void WithRecord(string a_path, string a_group, string a_record, uint a_flags, bool a_nested)
+		{
+			FakeMo2.Plugin(a_path, false);
+			var rec = new byte[24 + 4];
+			Encoding.ASCII.GetBytes(a_record).CopyTo(rec, 0);
+			BitConverter.GetBytes(4u).CopyTo(rec, 4);
+			BitConverter.GetBytes(a_flags).CopyTo(rec, 8);
+			var inner = rec;
+			if (a_nested) {
+				inner = new byte[24 + rec.Length];
+				Encoding.ASCII.GetBytes("GRUP").CopyTo(inner, 0);
+				BitConverter.GetBytes((uint)inner.Length).CopyTo(inner, 4);
+				Encoding.ASCII.GetBytes("CELL").CopyTo(inner, 8);
+				rec.CopyTo(inner, 24);
+			}
+			var top = new byte[24 + inner.Length];
+			Encoding.ASCII.GetBytes("GRUP").CopyTo(top, 0);
+			BitConverter.GetBytes((uint)top.Length).CopyTo(top, 4);
+			Encoding.ASCII.GetBytes(a_group).CopyTo(top, 8);
+			inner.CopyTo(top, 24);
+			using var fs = new FileStream(a_path, FileMode.Append);
+			fs.Write(top);
+		}
+		f.Mod("Grass Mod");
+		WithGroups(Path.Combine(f.Mods, "Grass Mod", "Grass.esp"), "WEAP", "GRAS");
+		File.WriteAllText(Path.Combine(f.Mods, "Grass Mod", "meta.ini"), "[General]\r\ngameName=SkyrimSE\r\nmodid=12345\r\n");
+		f.Mod("Tree Mod");
+		WithGroups(Path.Combine(f.Mods, "Tree Mod", "Trees.esp"), "TREE");
+		WithGroups(Path.Combine(f.Mods, "Output A", "OutA.esp"), "GRAS");
+		f.Mod("Static Trees");
+		WithRecord(Path.Combine(f.Mods, "Static Trees", "StaticTrees.esp"), "STAT", "STAT", 0x40, false);
+		f.Mod("Plain Statics");
+		WithRecord(Path.Combine(f.Mods, "Plain Statics", "PlainStatics.esp"), "STAT", "STAT", 0, false);
+		f.Mod("Land Mod");
+		WithRecord(Path.Combine(f.Mods, "Land Mod", "Land.esp"), "WRLD", "LAND", 0, true);
+		f.Mod("Unticked Plugin");
+		WithGroups(Path.Combine(f.Mods, "Unticked Plugin", "Off.esp"), "GRAS");
+		var ml = Path.Combine(f.ProfileDir, "modlist.txt");
+		File.WriteAllText(ml, File.ReadAllText(ml).Replace("+Needs B", "+Grass Mod\r\n+Tree Mod\r\n+Static Trees\r\n+Plain Statics\r\n+Land Mod\r\n+Unticked Plugin\r\n+Needs B", StringComparison.Ordinal));
+		// only plugins switched on count (Off.esp is installed but not ticked in plugins.txt)
+		File.AppendAllText(Path.Combine(f.ProfileDir, "plugins.txt"), "*Grass.esp\r\n*Trees.esp\r\n*StaticTrees.esp\r\n*PlainStatics.esp\r\n*Land.esp\r\nOff.esp\r\n");
+		Equal(new HashSet<string> { "WEAP", "GRAS" }.SetEquals(Plugins.TopGroups(Path.Combine(f.Mods, "Grass Mod", "Grass.esp"))), true, "its record groups read off their headers");
+		f.WriteSetup(("grass", new JsonObject { ["output_mod"] = "Output A" }));
+		var setup = Setup.Load(f.SetupFile);
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		var grass = LodGuide.Find(setup, mo2, "grass");
+		Equal("Grass Mod", grass.Single().Mod, "the grass mod, not the setup's own output: " + string.Join(", ", grass.Select(h => h.Mod)));
+		Equal("https://www.nexusmods.com/skyrimspecialedition/mods/12345", grass.Single().Page, "its own page");
+		var dyn = LodGuide.Find(setup, mo2, "dyndolod");
+		Check(dyn.Any(h => h.Mod == "Tree Mod" && h.Page == null) && dyn.Any(h => h.Mod == "Grass Mod"), "DynDOLOD: grass and trees, a mod with no page said so");
+		Check(dyn.Any(h => h.Mod == "Static Trees") && dyn.All(h => h.Mod != "Plain Statics"), "a static flagged Has Tree LOD counts as a tree, a plain static does not");
+		Check(grass.All(h => h.Mod != "Unticked Plugin"), "a plugin not switched on is not counted");
+		Equal("Land Mod", LodGuide.Find(setup, mo2, "xlodgen").Single().Mod, "xLODGen: a landscape record inside a worldspace");
+		Equal(0, LodGuide.Find(setup, mo2, "snowfixer").Count, "not a LOD step");
+	}
+
+	// TexGen / DynDOLOD keep their window's values in no file, but write them into their debug log: learned from there, and a
+	// later run that used other values is named in the run's notes (mo2-setup's finding 2026-10-27)
+	static void T_ToolWindowValuesReadOffItsLog()
+	{
+		using var f = new FakeMo2();
+		var exe = Path.Combine(f.Root, "Tools", "DynDOLOD", "TexGenx64.exe");
+		Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(exe)!, "Logs"));
+		File.WriteAllText(exe, "");
+		var log = Path.Combine(Path.GetDirectoryName(exe)!, "Logs", "TexGen_SSE_Debug_log.txt");
+		File.WriteAllText(log, "[00:01] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 80>\r\n[00:01] [81BC] [Other] <Debug: x: y>\r\n" +
+			"[00:15] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 100>\r\n[00:15] [81BC] [ListVars] <Debug: GrassHDBillboards: True>\r\n");
+		var vars = ToolSettings.ReadVars(log);
+		Equal("100", vars["GrassHDBillboardsAmbient"], "the last run's value wins");
+		Equal(2, vars.Count, "only ListVars lines");
+		Equal(log, ToolSettings.VarsLog(exe, "texgen"), "its debug log is found beside the tool");
+		Equal(null, ToolSettings.VarsLog(exe, "snowfixer"), "a tool without one has none");
+		StepRegistry.Replace(new FakeStep("texgen", (ctx, s) => {
+			Thread.Sleep(50);
+			File.WriteAllText(log, "[00:01] [81BC] [ListVars] <Debug: GrassHDBillboardsAmbient: 60>\r\n[00:01] [81BC] [ListVars] <Debug: GrassHDBillboards: True>\r\n");
+		}));
+		f.WriteSetup(("texgen", new JsonObject { ["exe"] = exe }));
+		var setup = Setup.Load(f.SetupFile);
+		ToolSettings.Keep(setup, "texgen", "TexGen", [], vars);
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, "a different value never fails the run: " + r.Verdict);
+		var j = Journal.All(Runner.RunsDir(f.Data)).First();
+		Check(j.Notes.Any(n => n.Contains("GrassHDBillboardsAmbient 60 (learned 100)", StringComparison.Ordinal)), "the difference is named: " + string.Join(" | ", j.Notes));
+		Check(j.Notes.All(n => !n.Contains("GrassHDBillboards True", StringComparison.Ordinal)), "an equal value is not");
 	}
 
 	// the window looks every second: a run record is read again only when its file changed, a removed run drops out, a broken
