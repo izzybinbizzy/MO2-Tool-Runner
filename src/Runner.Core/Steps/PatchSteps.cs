@@ -232,10 +232,11 @@ public sealed class SynthesisStep : IStep
 				string? runLog = null;
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, null, a_ctx.Cancel);
 				var w = StepKit.WaitWindow(a_ctx, image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "Synthesis's window");
-				Press(a_ctx, w);
+				Press(a_ctx, w, proc);
 				a_ctx.Activity(Key, "Synthesis is running its patchers");
 				// judged by its window (its timers and patcher states change while it works), never by its CPU alone; a patcher
 				// that failed is read off Synthesis's own log the moment its run ends (2026-10-27: one failed, no Synthesis.esp)
+				DateTime? exitedAt = null;
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(90), () => {
 					var fresh = new[] { espOw, espMod }.FirstOrDefault(p => File.Exists(p) && File.GetLastWriteTimeUtc(p) > t0);
 					if (fresh != null && DateTime.UtcNow - File.GetLastWriteTimeUtc(fresh) > TimeSpan.FromSeconds(20)) {
@@ -245,8 +246,15 @@ public sealed class SynthesisStep : IStep
 					if (fresh == null && runLog != null && Failure(Files.ReadSharedText(runLog)) is { } why) {
 						throw new StepFailedException($"Synthesis: {why} - it wrote no Synthesis.esp (its log: {runLog})");
 					}
+					// a Synthesis that closed is given a moment for its last write, then the step ends - never the 90-minute deadline
+					if (fresh == null && Exited(proc)) {
+						exitedAt ??= DateTime.UtcNow;
+						if (DateTime.UtcNow - exitedAt > TimeSpan.FromSeconds(30)) {
+							throw new StepFailedException("Synthesis closed without writing Synthesis.esp" + (runLog != null ? $" (its log: {runLog})" : ""));
+						}
+					}
 					return Waits.Poll.Wait;
-				}, a_progress: () => Uia.TextOf(w, 4000));
+				}, a_progress: () => Uia.TextOf(w, int.MaxValue));
 			} finally {
 				StepKit.CloseTool(a_ctx, image);
 			}
@@ -285,27 +293,39 @@ public sealed class SynthesisStep : IStep
 	// its Run button: an enabled one on screen (it has two "GoButton"s - 2026-10-27 the first one pressed nothing and the window
 	// sat on its main screen), pressed, and the run proven started by its window changing; else the other one, else the step fails
 	// naming what the window shows - never a window left open doing nothing
-	static void Press(RunContext a_ctx, System.Windows.Automation.AutomationElement a_w)
+	static void Press(RunContext a_ctx, System.Windows.Automation.AutomationElement a_w, System.Diagnostics.Process a_proc)
 	{
 		var idle = TimeSpan.FromMinutes(Math.Max(1, a_ctx.Setup.IdleMinutes));
 		var sw = System.Diagnostics.Stopwatch.StartNew();
 		List<System.Windows.Automation.AutomationElement> Buttons() => Uia.All(a_w, System.Windows.Automation.ControlType.Button)
 			.Where(b => Regex.IsMatch(Uia.AutomationId(b) + " " + Uia.Name(b), @"^GoButton|\bRun\b|RunPatchers", RegexOptions.IgnoreCase) && Uia.Usable(b)).ToList();
+		// a window that went away reads as "no buttons, new text" - so a closed Synthesis is caught first, never taken for a start
+		void StillOpen(string a_when)
+		{
+			if (Exited(a_proc)) {
+				throw new StepFailedException($"Synthesis closed {a_when}");
+			}
+		}
+		static string Short(string a_t) => a_t.Length > 300 ? a_t[..300] + " ..." : a_t;
 		var go = Buttons();
+		DateTime? blockedSince = null;
 		while (go.Count == 0) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
-			var txt = Uia.TextOf(a_w, 300);
-			if (Regex.IsMatch(txt, "Build required|Blocking Error")) {
-				throw new StepFailedException("Synthesis still wants a build inside Mod Organizer: " + txt);
+			StillOpen("before its Run button showed");
+			// the whole window is searched; only the message is cut short
+			var txt = Uia.TextOf(a_w, int.MaxValue);
+			if (StillBlocked(ref blockedSince, Regex.IsMatch(txt, "Build required|Blocking Error"), DateTime.UtcNow)) {
+				throw new StepFailedException("Synthesis still wants a build inside Mod Organizer: " + Short(txt));
 			}
 			if (sw.Elapsed > idle) {
-				throw new StepFailedException($"Synthesis showed no usable Run button within {idle.TotalMinutes:0} minutes. Its window shows: {txt}");
+				throw new StepFailedException($"Synthesis showed no usable Run button within {idle.TotalMinutes:0} minutes. Its window shows: {Short(txt)}");
 			}
 			Thread.Sleep(2000);
 			go = Buttons();
 		}
 		foreach (var b in go) {
-			var before = Uia.TextOf(a_w, 4000);
+			// the whole window, so a change far down a big pipeline still counts as the start (the fifth review, N3)
+			var before = Uia.TextOf(a_w, int.MaxValue);
 			if (!Uia.Press(b)) {
 				continue;
 			}
@@ -313,14 +333,36 @@ public sealed class SynthesisStep : IStep
 			while (DateTime.UtcNow < until) {
 				a_ctx.Cancel.ThrowIfCancellationRequested();
 				Thread.Sleep(1500);
-				if (Uia.TextOf(a_w, 4000) != before || Buttons().Count == 0) {
+				StillOpen("right after Run was pressed");
+				if (Uia.TextOf(a_w, int.MaxValue) != before || Buttons().Count == 0) {
 					a_ctx.Log.Detail("Synthesis: Run pressed, its patchers started");
 					return;
 				}
 			}
 			a_ctx.Log.Warn("Synthesis: a Run button pressed, nothing changed in 45 s - trying the next one");
 		}
-		throw new StepFailedException("Synthesis did not start its patchers when Run was pressed. Its window shows: " + Uia.TextOf(a_w, 300));
+		throw new StepFailedException("Synthesis did not start its patchers when Run was pressed. Its window shows: " + Short(Uia.TextOf(a_w, int.MaxValue)));
+	}
+
+	static bool Exited(System.Diagnostics.Process a_p)
+	{
+		try {
+			return a_p.HasExited;
+		} catch (InvalidOperationException) {
+			return true;
+		}
+	}
+
+	// Synthesis shows a blocking error for a few seconds while it loads its settings (2026-10-27 19:29: "no enabled groups to run",
+	// then "No global error" 5 s later), so only one that stays 30 s is real
+	public static bool StillBlocked(ref DateTime? a_since, bool a_blockedNow, DateTime a_now)
+	{
+		if (!a_blockedNow) {
+			a_since = null;
+			return false;
+		}
+		a_since ??= a_now;
+		return a_now - a_since.Value >= TimeSpan.FromSeconds(30);
 	}
 
 	static void Build(RunContext a_ctx, StepSettings a_s, string a_image, string a_exe)
@@ -333,6 +375,8 @@ public sealed class SynthesisStep : IStep
 		var w = StepKit.WaitWindow(a_ctx, a_image, t => t.Contains("Synthesis", StringComparison.Ordinal), TimeSpan.FromMinutes(5), "Synthesis's window");
 		var sw = System.Diagnostics.Stopwatch.StartNew();
 		try {
+			// the build copy shows the same loading-time blocking error as the run: it counts only once it stays 30 s; a "failed" at once
+			DateTime? blockedSince = null;
 			while (sw.Elapsed < TimeSpan.FromMinutes(a_s.Int("build_min", 15))) {
 				a_ctx.Cancel.ThrowIfCancellationRequested();
 				var txt = Uia.TextOf(w);
@@ -340,7 +384,9 @@ public sealed class SynthesisStep : IStep
 					a_ctx.Log.Detail("Synthesis: building complete");
 					return;
 				}
-				if (Regex.IsMatch(txt, "Blocking Error|failed", RegexOptions.IgnoreCase) && !txt.Contains("Preparing", StringComparison.Ordinal)) {
+				var preparing = txt.Contains("Preparing", StringComparison.Ordinal);
+				var blocked = !preparing && Regex.IsMatch(txt, "Blocking Error", RegexOptions.IgnoreCase);
+				if (StillBlocked(ref blockedSince, blocked, DateTime.UtcNow) || (!preparing && Regex.IsMatch(txt, "failed", RegexOptions.IgnoreCase))) {
 					throw new StepFailedException("Synthesis could not build its patchers: " + (txt.Length > 300 ? txt[^300..] : txt));
 				}
 				Thread.Sleep(3000);

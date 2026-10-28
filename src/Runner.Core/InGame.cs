@@ -155,8 +155,9 @@ public static partial class InGame
 		return Path.Combine(myGames, string.IsNullOrEmpty(savePath) ? "Saves" : savePath.TrimEnd('\\'));
 	}
 
-	// the player's own newest save - never one the runner (or the old MO2 Updater) made itself (his addition 2, 2026-10-27)
-	public static string? NewestPlayerSave(Profile a_profile)
+	// the player's own newest save - never one the runner (or the old MO2 Updater) made itself (his addition 2, 2026-10-27), nor
+	// one written while a run of ours went on (an autosave or quicksave the runner's game made in QASmoke - the fourth review, M3)
+	public static string? NewestPlayerSave(Profile a_profile, IReadOnlyList<(DateTime From, DateTime To)>? a_ourRuns = null)
 	{
 		var d = SavesDir(a_profile);
 		if (!Directory.Exists(d)) {
@@ -164,9 +165,86 @@ public static partial class InGame
 		}
 		var f = new DirectoryInfo(d).EnumerateFiles("*.ess")
 			.Where(x => !x.Name.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("MO2 Updater - ", StringComparison.OrdinalIgnoreCase))
+			.Where(x => !(a_ourRuns ?? []).Any(r => x.LastWriteTimeUtc >= r.From && x.LastWriteTimeUtc <= r.To))
 			.OrderByDescending(x => x.LastWriteTimeUtc).FirstOrDefault();
 		return f == null ? null : Path.GetFileNameWithoutExtension(f.Name);
 	}
+
+	// the steps that start the runner's own game (the clean save, the save to play, the shader caches, the game-run grass cache)
+	static readonly HashSet<string> GameSteps = ["cleansave", "playsave", "shaders", "grass"];
+
+	// when the runner's own game ran on this profile, as UTC time spans (a step still going: up to now) - only those, never a
+	// whole run: a save the player makes while a tool step runs is still theirs (CodeRabbit on PR #4)
+	public static List<(DateTime From, DateTime To)> OurRuns(RunContext a_ctx)
+	{
+		try {
+			// only THIS run's open step runs until now; another run's open step (it died) ends when its record was last written
+			return Journal.All(Path.GetDirectoryName(a_ctx.Journal.Folder)!).Where(j => j.Profile.Equals(a_ctx.Profile.Name, StringComparison.OrdinalIgnoreCase))
+				.SelectMany(j => GameTimes(j.Steps, j.Id == a_ctx.Journal.Id ? DateTime.Now : j.Ended ?? File.GetLastWriteTime(j.File))).ToList();
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			return [];
+		}
+	}
+
+	// a_openEnd: where a step with no end stops (now for the run going; its record's last write for a run that died)
+	public static IEnumerable<(DateTime From, DateTime To)> GameTimes(IEnumerable<StepRecord> a_steps, DateTime a_openEnd) =>
+		a_steps.Where(s => GameSteps.Contains(s.Key) && s.Started != null)
+			.Select(s => (s.Started!.Value.ToUniversalTime(), (s.Ended ?? (a_openEnd < s.Started.Value ? s.Started.Value : a_openEnd)).ToUniversalTime()));
+
+	public static DateTime? SaveTime(Profile a_profile, string? a_name)
+	{
+		var f = a_name == null ? null : Path.Combine(SavesDir(a_profile), a_name + ".ess");
+		return f != null && File.Exists(f) ? File.GetLastWriteTimeUtc(f) : null;
+	}
+
+	// which save the save to play starts from (the fourth review, H1): this run's clean save; else the one the setup names; else
+	// an older run's clean save ONLY when it is newer than the player's own newest save (the player has not played since); else
+	// the player's newest - never an old clean save over progress made after it
+	public static (string? Save, string Why) PlaySaveFrom(string? a_thisRun, string? a_named, DateTime? a_oldClean, string? a_player, DateTime? a_playerTime)
+	{
+		if (a_thisRun != null) {
+			return (a_thisRun, "the clean save this run made");
+		}
+		if (!string.IsNullOrEmpty(a_named)) {
+			return (a_named, "the save the setup names");
+		}
+		if (a_oldClean != null && (a_playerTime == null || a_oldClean > a_playerTime)) {
+			return (SaveClean, "an earlier run's clean save - no save of yours is newer");
+		}
+		return a_player != null
+			? (a_player, a_oldClean != null ? "your newest save - newer than the earlier run's clean save" : "your newest save (this run made no clean save)")
+			: (null, "no save to load");
+	}
+
+	// after a run that did not finish: when the newest save on disk is one the runner's game made (QASmoke, DynDOLOD maybe off),
+	// the player is told which of their own to load (the fourth review, M5)
+	public static string? SaveWarning(RunContext a_ctx)
+	{
+		try {
+			var newest = NewestSave(a_ctx.Profile);
+			if (newest == null || newest.Equals(SaveReady, StringComparison.OrdinalIgnoreCase)) {
+				return null;
+			}
+			var ours = newest.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) ||
+			           SaveTime(a_ctx.Profile, newest) is { } t && GameTimes(a_ctx.Journal.Steps, DateTime.Now).Any(r => t >= r.From && t <= r.To);
+			if (!ours) {
+				return null;
+			}
+			var mine = NewestPlayerSave(a_ctx.Profile, OurRuns(a_ctx));
+			return $"your newest save \"{newest}\" was made by this run's game (in QASmoke, DynDOLOD maybe off) - to play, load your own save" +
+				(mine != null ? $" \"{mine}\"" : "");
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			return null;
+		}
+	}
+
+	// does the profile tick DynDOLOD's DLL? (the default for switching it off / on in game - a setup that does not say)
+	public static bool HasDynDolod(Profile a_profile) =>
+		a_profile.States().Where(s => s.Value == '+').Any(s => File.Exists(Path.Combine(a_profile.Mo2.ModDir(s.Key), "SKSE", "Plugins", "DynDOLOD.dll")));
+
+	// the clean save's "dyndolod_off" (the save to play reads the same one - the fourth review, L1 / L2)
+	static bool DynOff(RunContext a_ctx) =>
+		a_ctx.Setup.StepSettings("cleansave") is { } cs && cs["dyndolod_off"] != null ? new StepSettings(cs).Bool("dyndolod_off", false) : HasDynDolod(a_ctx.Profile);
 
 	// a save just loaded is given time to settle before anything is done in it (his flow: a full minute)
 	static void Settle(RunContext a_ctx, string a_step, int a_seconds, string a_why)
@@ -324,6 +402,8 @@ public static partial class InGame
 			// a compile that started under the load is never cut off - the load clock waits while one runs
 			if (t.Elapsed > limit - TimeSpan.FromMinutes(1) && Compiling(SkseLogs(a_ctx.Setup, a_ctx.Mo2), a_ctx.Mo2.OverwriteDir, started)) {
 				a_ctx.Log.Detail("shaders still compiling under the load - waiting for them");
+				// counted as a compile at this start too (the save to play reports a stale cache - the fourth review, L3)
+				compiled = true;
 				t.Restart();
 			}
 		}
@@ -444,7 +524,7 @@ public static partial class InGame
 	{
 		var outs = a_ctx.Setup.EnabledSteps.Select(s => new StepSettings(s.Settings).OutputMod).OfType<string>().ToList();
 		a_ctx.CleanSaveExtraOff = a_ctx.Profile.Dependents(outs);
-		var dyn = a_s.Bool("dyndolod_off", true);
+		var dyn = a_s.Raw["dyndolod_off"] != null ? a_s.Bool("dyndolod_off", false) : HasDynDolod(a_ctx.Profile);
 		var cell = a_s.Str("interior_cell") ?? "QASmoke";
 		if (!Auto(a_ctx)) {
 			a_ctx.CleanSaveName = GuidedSave(a_ctx, "cleansave", a_s, "In the game: load your newest save and wait a full minute. " +
@@ -452,7 +532,7 @@ public static partial class InGame
 				$"Note exactly where you are standing (you go back there at the end). Open the console and type: coc {cell} - once you are there, save.");
 			return;
 		}
-		var save = a_s.Str("save") is { Length: > 0 } named ? named : NewestPlayerSave(a_ctx.Profile) ?? throw new StepFailedException("the profile has no save of yours to load");
+		var save = a_s.Str("save") is { Length: > 0 } named ? named : NewestPlayerSave(a_ctx.Profile, OurRuns(a_ctx)) ?? throw new StepFailedException("the profile has no save of yours to load");
 		a_ctx.Log.Detail($"your newest save: \"{save}\"");
 		try {
 			StartAndLoad(a_ctx, "cleansave", a_s, save);
@@ -527,8 +607,15 @@ public static partial class InGame
 	// be rebuilt")
 	public static void PlaySave(RunContext a_ctx, StepSettings a_s)
 	{
-		var from = a_ctx.CleanSaveName ?? (NewestNamed(a_ctx.Profile, SaveClean) ? SaveClean : a_s.Str("save") is { Length: > 0 } s ? s : NewestPlayerSave(a_ctx.Profile)) ??
-		           throw new StepFailedException("no save to load");
+		var player = a_ctx.CleanSaveName == null ? NewestPlayerSave(a_ctx.Profile, OurRuns(a_ctx)) : null;
+		// a named save that is gone (deleted, renamed) is passed over for the fallbacks, never loaded and failed on
+		var named = a_s.Str("save") is { Length: > 0 } n && SaveTime(a_ctx.Profile, n) != null ? n : null;
+		if (named == null && a_s.Str("save") is { Length: > 0 } missing) {
+			a_ctx.Log.Warn($"the save the setup names (\"{missing}\") is not in the saves folder - another is used");
+		}
+		var (pick, why) = PlaySaveFrom(a_ctx.CleanSaveName, named, SaveTime(a_ctx.Profile, SaveClean), player, SaveTime(a_ctx.Profile, player));
+		var from = pick ?? throw new StepFailedException(why);
+		a_ctx.Log.Detail($"the save to play starts from \"{from}\" ({why})");
 		var marker = a_ctx.Journal.ReturnMarker;
 		a_ctx.Control.Close();
 		if (!Auto(a_ctx)) {
@@ -558,7 +645,7 @@ public static partial class InGame
 				a_ctx.Log.Warn("no place was recorded in this run (the clean save was made by an earlier run) - the player stays where the clean save left them");
 				a_ctx.Journal.Notes.Add("the save to play was made where the clean save ended - no place from before it was recorded in this run");
 			}
-			if (a_s.Bool("dyndolod_off", true)) {
+			if (DynOff(a_ctx)) {
 				const string cls = "SHESON_DynDOLOD_Plugin";
 				try {
 					if (a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() != true) {
@@ -576,6 +663,4 @@ public static partial class InGame
 			throw;
 		}
 	}
-
-	static bool NewestNamed(Profile a_profile, string a_name) => File.Exists(Path.Combine(SavesDir(a_profile), a_name + ".ess"));
 }
