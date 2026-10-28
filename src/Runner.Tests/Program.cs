@@ -1068,6 +1068,17 @@ public static class Program
 		Check(!Uia.Gone(new InvalidOperationException()), "anything else is a real fault");
 	}
 
+	// the trial of 2026-10-27 21:36: xLODGen wrote where MO2's entry for it said (-o:), not into the step's output folder
+	static void T_XLodGenWritesWhereTheStepSays()
+	{
+		var mo2Args = Mo2Instance.Unescape(@"-o:\""D:\\Modding\\Old Scratch\\Terrain LOD\"" -sse");
+		Equal(@"-o:""D:\Modding\Old Scratch\Terrain LOD"" -sse", mo2Args, "MO2's ini escaping undone");
+		Equal(@"-o:""C:\New\Terrain LOD"" -sse", XLodGenStep.WithOutput(mo2Args, @"C:\New\Terrain LOD\"), "an -o: there is replaced");
+		Equal(@"-sse -o:""C:\New""", XLodGenStep.WithOutput("-sse -o:C:\\Old", @"C:\New"), "an unquoted one too");
+		Equal(@"-o:""C:\New"" -sse", XLodGenStep.WithOutput("-sse", @"C:\New"), "none there: put first");
+		Equal(@"-o:""C:\New""", XLodGenStep.WithOutput("", @"C:\New"), "no arguments at all");
+	}
+
 	// both trials of 2026-10-27 ticked xLODGen's LOD levels, the first list in its options, instead of its worldspaces
 	static void T_TheWorldspaceListIsTheOneWithNames()
 	{

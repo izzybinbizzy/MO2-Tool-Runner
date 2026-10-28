@@ -69,6 +69,20 @@ public sealed partial class Mo2Instance
 		return Path.GetFullPath(Path.IsPathRooted(p) ? p : Path.Combine(a_relativeTo, p));
 	}
 
+	// a value as MO2 (Qt) writes it into its ini: \" for a quote and \\ for a backslash
+	public static string Unescape(string a_v)
+	{
+		var sb = new System.Text.StringBuilder(a_v.Length);
+		for (int i = 0; i < a_v.Length; ++i) {
+			if (a_v[i] == '\\' && i + 1 < a_v.Length && a_v[i + 1] is '\\' or '"') {
+				sb.Append(a_v[++i]);
+			} else {
+				sb.Append(a_v[i]);
+			}
+		}
+		return sb.ToString();
+	}
+
 	public string ProfileDir(string a_profile) => Path.Combine(ProfilesDir, a_profile);
 	public string ModDir(string a_mod) => Path.Combine(ModsDir, a_mod);
 

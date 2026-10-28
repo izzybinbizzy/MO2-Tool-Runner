@@ -25,7 +25,11 @@ public sealed class XLodGenStep : IStep
 		var deadline = a_s.Deadline(120);
 		using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "xLODGen", a_ctx.Cancel)) {
 			try {
-				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args"), a_ctx.Cancel);
+				// xLODGen writes where its -o: says - and that is in Mod Organizer's entry for it, not here: the step puts its own
+				// output folder into the arguments it starts xLODGen with (the trial of 2026-10-27 21:36 wrote into another folder)
+				var args = a_s.Str("args") ?? WithOutput(Mo2Instance.Unescape(a_ctx.Mo2.Executable(a_s.Req("executable"))?.Arguments ?? ""), outDir);
+				a_ctx.Log.Detail("xLODGen's arguments: " + args);
+				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, args, a_ctx.Cancel);
 				var main = StepKit.WaitWindow(a_ctx, image, t => t.Contains("LODGen", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "xLODGen's window");
 				a_ctx.Activity(Key, "xLODGen is reading the load order");
 				var opts = Find(a_ctx, main, e => Uia.Name(e) == "LODGen Options" && Uia.Type(e) == ControlType.Window, TimeSpan.FromMinutes(15), "xLODGen's options");
@@ -34,10 +38,11 @@ public sealed class XLodGenStep : IStep
 				CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));
 				Uia.Press(Uia.Button(opts, "Generate") ?? throw new StepFailedException("xLODGen's options have no Generate button"));
 				a_ctx.Activity(Key, "generating terrain LOD");
-				var memo = Find(a_ctx, main, e => Uia.ClassName(e) == "TMemo", TimeSpan.FromSeconds(30), "xLODGen's log box");
-				var memoHwnd = (nint)memo.Current.NativeWindowHandle;
+				var mainHwnd = (nint)main.Current.NativeWindowHandle;
 				Waits.Tool(a_ctx, Key, proc, deadline, () => {
-					var txt = Native.ControlText(memoHwnd);
+					// its log box = the memo of the main window holding the most text, looked up every time (the first memo found
+					// was not it: the trial of 2026-10-27 21:36 ran 26 min, "LOD generation done." never read, step called idle)
+					var txt = LogText(mainHwnd);
 					var tail = txt.Length > 4000 ? txt[^4000..] : txt;
 					if (tail.Contains("LOD generation done", StringComparison.Ordinal)) {
 						return Waits.Poll.Done;
@@ -72,6 +77,27 @@ public sealed class XLodGenStep : IStep
 			StepKit.IntoMod(a_ctx, Key, outDir, mod);
 			a_ctx.SetAfter(mod);
 		}
+	}
+
+	// the tool's arguments with its output folder set to ours: an -o: already there is replaced, else one is put first
+	public static string WithOutput(string a_args, string a_outDir)
+	{
+		var o = $"-o:\"{a_outDir.TrimEnd('\\')}\"";
+		var m = Regex.Match(a_args, "-o:(\"[^\"]*\"|\\S+)", RegexOptions.IgnoreCase);
+		return m.Success ? a_args[..m.Index] + o + a_args[(m.Index + m.Length)..] : (o + " " + a_args).Trim();
+	}
+
+	// the text of the window's log memo: of its memos, the one holding the most text
+	static string LogText(nint a_main)
+	{
+		var best = "";
+		foreach (var h in Native.ChildWindows(a_main).Where(h => Native.ClassName(h) == "TMemo")) {
+			var t = Native.ControlText(h);
+			if (t.Length > best.Length) {
+				best = t;
+			}
+		}
+		return best;
 	}
 
 	// xLODGen's options hold more than one check list - its LOD levels ("", 4, 8, 16, 32) as well as the worldspaces, and UI
