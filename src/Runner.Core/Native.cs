@@ -122,7 +122,17 @@ public static partial class Native
 		}
 		var buf = new char[n + 1];
 		var got = (int)SendMessageBuf(a_hwnd, WM_GETTEXT, n + 1, buf);
-		return UnpackAnsi(new string(buf, 0, Math.Clamp(got, 0, n)));
+		return FromBuffer(buf, got);
+	}
+
+	// A tool that packs its ANSI bytes two to a character counts BYTES in its answer, so half the buffer stays empty; the text
+	// ends at the first empty character, or those empties outvote the packed half and it is never unpacked (the trial of
+	// 2026-10-27 22:40: xLODGen's "LOD generation done." went unseen and the finished tool was called idle)
+	public static string FromBuffer(char[] a_buf, int a_got)
+	{
+		var s = new string(a_buf, 0, Math.Clamp(a_got, 0, a_buf.Length));
+		var nul = s.IndexOf('\0');
+		return UnpackAnsi(nul >= 0 ? s[..nul] : s);
 	}
 
 	public static string UnpackAnsi(string a_s)

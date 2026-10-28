@@ -195,6 +195,14 @@ public static class Program
 		var packed = Encoding.Unicode.GetString(Encoding.ASCII.GetBytes("LOD generation done."));
 		Check(Native.UnpackAnsi(packed).Contains("LOD generation done", StringComparison.Ordinal), "packed ANSI read back");
 		Equal("normal text", Native.UnpackAnsi("normal text"), "plain text untouched");
+		// the buffer as xLODGen fills it: the packed half, then as many empty characters (its answer counts bytes)
+		var bytes = Encoding.ASCII.GetBytes("[17/17] Tamriel\r\nLOD generation done.");
+		var buf = new char[bytes.Length + 1];
+		var half = Encoding.Unicode.GetString(bytes);
+		half.CopyTo(0, buf, 0, half.Length);
+		Check(Native.FromBuffer(buf, bytes.Length).Contains("LOD generation done", StringComparison.Ordinal), "packed text with an empty tail read back");
+		var plain = "plain log line".ToCharArray();
+		Equal("plain log line", Native.FromBuffer(plain, plain.Length), "a plain buffer untouched");
 	}
 
 	// ------------------------------------------------------------------ MO2's ini

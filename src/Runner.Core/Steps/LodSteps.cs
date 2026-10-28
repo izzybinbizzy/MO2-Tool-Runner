@@ -39,11 +39,15 @@ public sealed class XLodGenStep : IStep
 				Uia.Press(Uia.Button(opts, "Generate") ?? throw new StepFailedException("xLODGen's options have no Generate button"));
 				a_ctx.Activity(Key, "generating terrain LOD");
 				var mainHwnd = (nint)main.Current.NativeWindowHandle;
+				var told = Stopwatch.StartNew();
 				Waits.Tool(a_ctx, Key, proc, deadline, () => {
-					// its log box = the memo of the main window holding the most text, looked up every time (the first memo found
-					// was not it: the trial of 2026-10-27 21:36 ran 26 min, "LOD generation done." never read, step called idle)
+					// its log box = the memo of the main window holding the most text, looked up every time
 					var txt = LogText(mainHwnd);
 					var tail = txt.Length > 4000 ? txt[^4000..] : txt;
+					if (told.Elapsed >= TimeSpan.FromMinutes(5)) {
+						told.Restart();
+						a_ctx.Log.Detail($"xLODGen's log: {txt.Length} characters, last line: {LastLine(tail)}");
+					}
 					if (tail.Contains("LOD generation done", StringComparison.Ordinal)) {
 						return Waits.Poll.Done;
 					}
@@ -87,8 +91,14 @@ public sealed class XLodGenStep : IStep
 		return m.Success ? a_args[..m.Index] + o + a_args[(m.Index + m.Length)..] : (o + " " + a_args).Trim();
 	}
 
+	static string LastLine(string a_text)
+	{
+		var last = a_text.TrimEnd().Split('\n').LastOrDefault()?.Trim() ?? "";
+		return last.Length > 140 ? last[..140] : last;
+	}
+
 	// the text of the window's log memo: of its memos, the one holding the most text
-	static string LogText(nint a_main)
+	internal static string LogText(nint a_main)
 	{
 		var best = "";
 		foreach (var h in Native.ChildWindows(a_main).Where(h => Native.ClassName(h) == "TMemo")) {
@@ -370,6 +380,7 @@ public abstract class DynDolodFamily : IStep
 				var main = StepKit.WaitWindow(a_ctx, image, t => Regex.IsMatch(t, "^" + Tool + @" \d"), TimeSpan.FromMinutes(5), Tool + "'s window");
 				a_ctx.Activity(Key, Tool + " is reading the load order");
 				var startedRun = false;
+				var mainHwnd = (nint)main.Current.NativeWindowHandle;
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(120), () => {
 					foreach (var box in Uia.Boxes(StepKit.PidsOf(image)())) {
 						if (Regex.IsMatch(box.Text, @"Installation Error|\bError\b") && !box.Text.Contains("PBR textures detected", StringComparison.Ordinal)) {
@@ -399,8 +410,7 @@ public abstract class DynDolodFamily : IStep
 							a_ctx.Activity(Key, Tool + " is generating");
 						}
 					}
-					var memo = Uia.All(main).FirstOrDefault(e => Uia.ClassName(e) == "TMemo");
-					var txt = memo == null ? "" : Native.ControlText((nint)memo.Current.NativeWindowHandle);
+					var txt = XLodGenStep.LogText(mainHwnd);
 					txt = txt.Length > 3000 ? txt[^3000..] : txt;
 					if (Regex.IsMatch(txt, DoneRx, RegexOptions.IgnoreCase)) {
 						return Waits.Poll.Done;
