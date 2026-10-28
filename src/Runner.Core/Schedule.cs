@@ -157,7 +157,13 @@ public static partial class Schedule
 	public static bool ConfirmedGone(string a_file)
 	{
 		try {
-			if (!Path.IsPathFullyQualified(a_file) || Path.GetPathRoot(a_file) is not { Length: > 0 } root || !Directory.Exists(root)) {
+			// a file Windows finds is never gone, whatever form its path is written in (slashes, a short 8.3 name - the fifth
+			// review, N4); the folder listing below is compared in the full form
+			if (!Path.IsPathFullyQualified(a_file) || File.Exists(a_file)) {
+				return false;
+			}
+			a_file = Path.GetFullPath(a_file);
+			if (Path.GetPathRoot(a_file) is not { Length: > 0 } root || !Directory.Exists(root)) {
 				return false;
 			}
 			var dir = Path.GetDirectoryName(a_file)!;
@@ -170,7 +176,7 @@ public static partial class Schedule
 				}
 			}
 			var listed = Directory.EnumerateFileSystemEntries(probe).ToList();
-			return probe != dir || !listed.Any(f => string.Equals(f, a_file, StringComparison.OrdinalIgnoreCase));
+			return probe != dir || !listed.Any(f => string.Equals(Path.GetFullPath(f), a_file, StringComparison.OrdinalIgnoreCase));
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException) {
 			return false;
 		}

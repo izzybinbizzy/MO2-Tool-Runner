@@ -64,8 +64,9 @@ public sealed class DevBench(string a_baseUrl = "http://127.0.0.1:8920/api/tool/
 		if (string.IsNullOrEmpty(s)) {
 			return null;
 		}
-		// "0x..." and an 8-digit padded id are hex; a plain number with no hex letter is decimal (the fourth review, L5)
-		var hex = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Length == 8 || s.Any(char.IsAsciiLetter);
+		// "0x...", a hex letter, or an 8-digit id padded with a leading zero are hex; any other plain number is decimal (the
+		// fourth review, L5; an 8-digit decimal with no leading zero stays decimal - the fifth, N5)
+		var hex = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Any(char.IsAsciiLetter) || s.Length == 8 && s[0] == '0';
 		var digits = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s;
 		return long.TryParse(digits, hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.None, InvariantCulture, out var h)
 			? $"0x{h:X8}" : null;

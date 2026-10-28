@@ -324,7 +324,8 @@ public sealed class SynthesisStep : IStep
 			go = Buttons();
 		}
 		foreach (var b in go) {
-			var before = Uia.TextOf(a_w, 4000);
+			// the whole window, so a change far down a big pipeline still counts as the start (the fifth review, N3)
+			var before = Uia.TextOf(a_w, int.MaxValue);
 			if (!Uia.Press(b)) {
 				continue;
 			}
@@ -333,7 +334,7 @@ public sealed class SynthesisStep : IStep
 				a_ctx.Cancel.ThrowIfCancellationRequested();
 				Thread.Sleep(1500);
 				StillOpen("right after Run was pressed");
-				if (Uia.TextOf(a_w, 4000) != before || Buttons().Count == 0) {
+				if (Uia.TextOf(a_w, int.MaxValue) != before || Buttons().Count == 0) {
 					a_ctx.Log.Detail("Synthesis: Run pressed, its patchers started");
 					return;
 				}

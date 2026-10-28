@@ -502,9 +502,14 @@ public static class Program
 			new StepRecord { Key = "playsave", Started = mon.AddMinutes(30), Ended = null },
 			new StepRecord { Key = "pandora", Started = null },
 		};
-		var times = InGame.GameTimes(steps).ToList();
+		var times = InGame.GameTimes(steps, mon.AddMinutes(40)).ToList();
 		Equal(2, times.Count, "the clean save and the save to play");
 		Check(!times.Any(t => mon.AddMinutes(15) >= t.From && mon.AddMinutes(15) <= t.To), "a save made during DynDOLOD is the player's");
+		// the fifth review, N1: a run that died in a game step - its open step ends where its record stopped, so a save made a
+		// day later is still the player's
+		var died = InGame.GameTimes([new StepRecord { Key = "cleansave", Started = mon, Ended = null }], mon.AddMinutes(3)).Single();
+		Check(!(thu >= died.From && thu <= died.To), "a save three days after a crashed run is the player's");
+		Equal(mon.AddMinutes(3), died.To, "the open step ends where the dead run's record stopped");
 	}
 
 	// the fourth review, M2: a patcher's CPU counts per child process - one that ends never makes it fall, a new one counts whole
@@ -522,6 +527,8 @@ public static class Program
 		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create("0x3B")), "0x is hex");
 		Equal("0xFF000801", DevBench.FormKey(JsonValue.Create("FF000801")), "an 8-digit id is hex");
 		Equal("0x0000007B", DevBench.FormKey(JsonValue.Create("123")), "a plain number is decimal");
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create("0000003B")), "a padded 8-digit id is hex");
+		Equal("0x00BC614E", DevBench.FormKey(JsonValue.Create("12345678")), "an 8-digit decimal is decimal");
 		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
 		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
 		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
@@ -535,6 +542,7 @@ public static class Program
 			var here = Path.Combine(dir, "Here.json");
 			File.WriteAllText(here, "{}");
 			Check(!Schedule.ConfirmedGone(here), "a file that is there is not gone");
+			Check(!Schedule.ConfirmedGone(here.Replace('\\', '/')), "nor in another path form");
 			Check(Schedule.ConfirmedGone(Path.Combine(dir, "Gone.json")), "missing from a folder that was read: gone");
 			Check(Schedule.ConfirmedGone(Path.Combine(dir, "No Folder", "Gone.json")), "its folder missing on a present drive: gone");
 			Check(!Schedule.ConfirmedGone("Relative.json"), "a relative path proves nothing");
@@ -674,6 +682,7 @@ public static class Program
 		Check(refused.Verdict.Contains("did not finish", StringComparison.Ordinal), "a new run is refused until it is put back: " + refused.Verdict);
 		var r = Runner.Restore(j!);
 		Equal(RunState.Restored, r.State, "restored: " + r.Verdict);
+		Check(Journal.Load(j!.Folder).Steps.All(s => s.State != StepState.Stopped || s.Ended != null), "the step the crash cut off is closed (it never reads as still running)");
 		Check(File.Exists(Path.Combine(f.Mods, "Output A", "OutA.esp")), "the parked output is back");
 		var p = ProfileOf(f);
 		Check(p.IsOn("Output A") && p.IsOn("Output B") && p.IsOn("Needs B"), "the profile as it was");

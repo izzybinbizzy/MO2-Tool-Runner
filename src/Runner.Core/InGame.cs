@@ -178,16 +178,18 @@ public static partial class InGame
 	public static List<(DateTime From, DateTime To)> OurRuns(RunContext a_ctx)
 	{
 		try {
+			// only THIS run's open step runs until now; another run's open step (it died) ends when its record was last written
 			return Journal.All(Path.GetDirectoryName(a_ctx.Journal.Folder)!).Where(j => j.Profile.Equals(a_ctx.Profile.Name, StringComparison.OrdinalIgnoreCase))
-				.SelectMany(j => GameTimes(j.Steps)).ToList();
+				.SelectMany(j => GameTimes(j.Steps, j.Id == a_ctx.Journal.Id ? DateTime.Now : j.Ended ?? File.GetLastWriteTime(j.File))).ToList();
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 			return [];
 		}
 	}
 
-	public static IEnumerable<(DateTime From, DateTime To)> GameTimes(IEnumerable<StepRecord> a_steps) =>
+	// a_openEnd: where a step with no end stops (now for the run going; its record's last write for a run that died)
+	public static IEnumerable<(DateTime From, DateTime To)> GameTimes(IEnumerable<StepRecord> a_steps, DateTime a_openEnd) =>
 		a_steps.Where(s => GameSteps.Contains(s.Key) && s.Started != null)
-			.Select(s => (s.Started!.Value.ToUniversalTime(), (s.Ended ?? DateTime.Now).ToUniversalTime()));
+			.Select(s => (s.Started!.Value.ToUniversalTime(), (s.Ended ?? (a_openEnd < s.Started.Value ? s.Started.Value : a_openEnd)).ToUniversalTime()));
 
 	public static DateTime? SaveTime(Profile a_profile, string? a_name)
 	{
@@ -224,7 +226,7 @@ public static partial class InGame
 				return null;
 			}
 			var ours = newest.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) ||
-			           SaveTime(a_ctx.Profile, newest) is { } t && GameTimes(a_ctx.Journal.Steps).Any(r => t >= r.From && t <= r.To);
+			           SaveTime(a_ctx.Profile, newest) is { } t && GameTimes(a_ctx.Journal.Steps, DateTime.Now).Any(r => t >= r.From && t <= r.To);
 			if (!ours) {
 				return null;
 			}

@@ -595,7 +595,13 @@ public static class Runner
 			log.Error(a_j.Verdict);
 			return new RunOutcome(RunState.Failed, a_j.Verdict, a_j.Folder);
 		}
+		// a step the crash cut off ends when its run record was last written - never left open (an open game step would read as
+		// the runner's game running "until now" and hide every save the player made since - the fifth review, N1)
+		var died = a_j.Ended ?? File.GetLastWriteTime(a_j.File);
 		foreach (var r in a_j.Steps.Where(r => r.State is StepState.Running or StepState.Pending)) {
+			if (r.State == StepState.Running) {
+				r.Ended ??= died;
+			}
 			r.State = r.State == StepState.Running ? StepState.Stopped : StepState.Skipped;
 		}
 		a_j.State = RunState.Restored;
