@@ -29,7 +29,7 @@ public sealed class XLodGenStep : IStep
 				var main = StepKit.WaitWindow(a_ctx, image, t => t.Contains("LODGen", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "xLODGen's window");
 				a_ctx.Activity(Key, "xLODGen is reading the load order");
 				var opts = Find(a_ctx, main, e => Uia.Name(e) == "LODGen Options" && Uia.Type(e) == ControlType.Window, TimeSpan.FromMinutes(15), "xLODGen's options");
-				var list = Find(a_ctx, opts, e => Uia.Type(e) == ControlType.List, TimeSpan.FromSeconds(30), "the worldspace list");
+				var list = WorldspaceList(a_ctx, opts, TimeSpan.FromSeconds(30));
 				var want = a_s.List("worldspaces");
 				CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));
 				Uia.Press(Uia.Button(opts, "Generate") ?? throw new StepFailedException("xLODGen's options have no Generate button"));
@@ -72,6 +72,32 @@ public sealed class XLodGenStep : IStep
 			StepKit.IntoMod(a_ctx, Key, outDir, mod);
 			a_ctx.SetAfter(mod);
 		}
+	}
+
+	// xLODGen's options hold more than one check list - its LOD levels ("", 4, 8, 16, 32) as well as the worldspaces, and UI
+	// Automation's order put the levels first (both real-MO2 trials of 2026-10-27 ticked the LOD levels and left the worldspaces
+	// alone). The worldspace list is the one whose rows are names ("Tamriel [WRLD:0000003C]"), never bare numbers
+	static AutomationElement WorldspaceList(RunContext a_ctx, AutomationElement a_opts, TimeSpan a_timeout)
+	{
+		var sw = Stopwatch.StartNew();
+		while (sw.Elapsed < a_timeout) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			var lists = Uia.All(a_opts, ControlType.List);
+			var names = lists.Select(l => (IReadOnlyList<string>)Uia.All(l, ControlType.ListItem).Select(Uia.Name).ToList()).ToList();
+			if (PickWorldspaces(names) is { } i) {
+				a_ctx.Log.Detail($"the worldspace list: {names[i].Count} worldspace(s) offered ({lists.Count} list(s) in xLODGen's options)");
+				return lists[i];
+			}
+			Thread.Sleep(1000);
+		}
+		throw new StepFailedException($"xLODGen's options show no worldspace list within {a_timeout.TotalSeconds:0} s");
+	}
+
+	// which of a window's lists holds worldspaces: the one with the most rows that are names (a letter in them)
+	public static int? PickWorldspaces(IReadOnlyList<IReadOnlyList<string>> a_lists)
+	{
+		var best = a_lists.Select((l, i) => (i, n: l.Count(r => r.Any(char.IsLetter)))).Where(x => x.n > 0).OrderByDescending(x => x.n).FirstOrDefault();
+		return best.n > 0 ? best.i : null;
 	}
 
 	internal static AutomationElement Find(RunContext a_ctx, AutomationElement a_root, Func<AutomationElement, bool> a_match, TimeSpan a_timeout, string a_what)
@@ -455,7 +481,10 @@ public sealed class DynDolodStep : DynDolodFamily
 
 	protected override void DriveOptions(RunContext a_ctx, AutomationElement a_opts, StepSettings a_s)
 	{
-		var list = Uia.All(a_opts, ControlType.List).FirstOrDefault();
+		// the worldspace list by its rows, never the window's first list (xLODGen's first one was its LOD levels)
+		var lists = Uia.All(a_opts, ControlType.List);
+		var pick = XLodGenStep.PickWorldspaces(lists.Select(l => (IReadOnlyList<string>)Uia.All(l, ControlType.ListItem).Select(Uia.Name).ToList()).ToList());
+		var list = pick is { } i ? lists[i] : null;
 		if (list != null) {
 			var want = a_s.List("worldspaces");
 			CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));

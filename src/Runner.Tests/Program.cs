@@ -1031,6 +1031,17 @@ public static class Program
 		Check(!Uia.Gone(new InvalidOperationException()), "anything else is a real fault");
 	}
 
+	// both trials of 2026-10-27 ticked xLODGen's LOD levels, the first list in its options, instead of its worldspaces
+	static void T_TheWorldspaceListIsTheOneWithNames()
+	{
+		IReadOnlyList<string> levels = ["", "4", "8", "16", "32"];
+		IReadOnlyList<string> worlds = ["Tamriel [WRLD:0000003C]", "DLC2SolstheimWorld [WRLD:04000800]", "MarkarthWorld [WRLD:00016BB4]"];
+		Equal<int?>(1, XLodGenStep.PickWorldspaces([levels, worlds]), "the named rows, not the LOD levels before them");
+		Equal<int?>(0, XLodGenStep.PickWorldspaces([worlds, levels]), "whichever comes first");
+		Equal<int?>(null, XLodGenStep.PickWorldspaces([levels]), "numbers only: no worldspace list yet");
+		Equal<int?>(null, XLodGenStep.PickWorldspaces([]), "no list at all");
+	}
+
 	static void T_SynthesisLoadingErrorIsNotAFailure()
 	{
 		var t = new DateTime(2026, 10, 27, 23, 29, 20, DateTimeKind.Utc);
