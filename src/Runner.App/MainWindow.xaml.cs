@@ -195,12 +195,21 @@ public partial class MainWindow : Window
 		_panel != "settings" || !SettingsPanel.HasChanges ||
 		Ask.Show(this, "Settings not saved", "You changed settings and did not press Save. Leave without saving them?", "Leave without saving", "Keep editing");
 
-	// the off-screen pictures only: the live view stops and a made-up run is shown
-	public void Demo(bool a_waiting)
+	// the off-screen pictures only: the live view stops and a made-up run is shown (a_frame moves it on a minute a frame)
+	public void Demo(bool a_waiting, int a_frame = 0)
 	{
 		_timer.Stop();
-		_vm.Demo(a_waiting);
+		_vm.Demo(a_waiting, a_frame);
 	}
+
+	// the page's pictures only: the dashboard with nothing running, and past runs of the made-up setup
+	public void DemoReady()
+	{
+		_timer.Stop();
+		_vm.DemoReady();
+	}
+
+	public void DemoHistory(IEnumerable<HistoryRow> a_rows) => _vm.DemoHistory(a_rows);
 
 	// a_fresh: rebuild an open drawer (Save, Undo changes); otherwise pressing Settings again keeps what is typed
 	public void ShowPanel(string a_which, bool a_fresh = false)
@@ -329,6 +338,8 @@ public partial class MainWindow : Window
 		grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star) });
 		var list = new ListBox { ItemsSource = _vm.History, Background = Brushes2.Get("Panel2"), BorderBrush = Brushes2.Get("Line") };
+		// a long verdict wraps instead of running off the right edge
+		ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
 		AutomationPropertiesName(list, "Past runs");
 		list.ItemTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
 			"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><StackPanel Margin='2,4'>" +

@@ -54,6 +54,12 @@
       <Color x:Key="SystemAccentColorDark1">#B08F2A</Color>
       <Color x:Key="SystemAccentColorDark2">#8E6F1E</Color>
       <Color x:Key="SystemAccentColorDark3">#6B5317</Color>
+      <!-- a selected list row (past runs, steps): the Fluent one takes Windows' own accent, blue on most PCs -->
+      <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundThemeBrush" Color="{DynamicResource GoldDimColor}" Opacity="0.55"/>
+      <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundPointerOverThemeBrush" Color="{DynamicResource GoldDimColor}" Opacity="0.7"/>
+      <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundPressedThemeBrush" Color="{DynamicResource GoldDimColor}" Opacity="0.85"/>
+      <SolidColorBrush x:Key="ListBoxItemBackgroundSelectedPressedThemeBrush" Color="{DynamicResource GoldDimColor}" Opacity="0.85"/>
+      <SolidColorBrush x:Key="ListBoxItemSelectedForegroundThemeBrush" Color="{DynamicResource TextColor}"/>
 
       <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
       <FontFamily x:Key="HeadFont">Bahnschrift SemiBold, Segoe UI Semibold</FontFamily>
