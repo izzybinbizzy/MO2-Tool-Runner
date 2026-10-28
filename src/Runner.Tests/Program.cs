@@ -1022,6 +1022,15 @@ public static class Program
 		Equal<string?>(null, SynthesisStep.Failure("[INF] [T2] Starting Patcher A Run\n[INF] [T2] Finished patcher run\n"), "a clean run is no failure");
 	}
 
+	// the trial of 2026-10-27 20:26: a window being destroyed answers UI Automation with a raw COM error - a "gone" element, never
+	// a failed step
+	static void T_AWindowGoingAwayIsNotAFailure()
+	{
+		Check(Uia.Gone(new System.Runtime.InteropServices.COMException("Catastrophic failure", unchecked((int)0x8000FFFF))), "E_UNEXPECTED = gone");
+		Check(Uia.Gone(new System.Windows.Automation.ElementNotAvailableException()), "not available = gone");
+		Check(!Uia.Gone(new InvalidOperationException()), "anything else is a real fault");
+	}
+
 	static void T_SynthesisLoadingErrorIsNotAFailure()
 	{
 		var t = new DateTime(2026, 10, 27, 23, 29, 20, DateTimeKind.Utc);
