@@ -129,7 +129,7 @@ public static partial class Schedule
 	// tasks of ours whose setup file is gone (moved, renamed or deleted - their task names came from the old path, so the window
 	// could no longer find them, and Windows would start a run on a missing file): removed, their names returned (the fourth
 	// review, L6)
-	public static List<string> RemoveOrphans()
+	public static List<string> RemoveOrphans(Func<string, bool>? a_only = null)
 	{
 		var removed = new List<string>();
 		var (code, csv) = Schtasks("/Query", "/FO", "CSV", "/NH");
@@ -137,12 +137,11 @@ public static partial class Schedule
 			return removed;
 		}
 		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith("\"\\MO2 Tool Runner - ", StringComparison.Ordinal))
-			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().ToList();
+			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(n => a_only == null || a_only(n)).ToList();
 		foreach (var n in names) {
 			try {
 				var (c, xml) = Schtasks("/Query", "/TN", n, "/XML");
-				// a whole path only: a relative one says nothing about whether the file is there
-				if (c == 0 && SetupOf(xml) is { } file && Path.IsPathFullyQualified(file) && !File.Exists(file)) {
+				if (c == 0 && SetupOf(xml) is { } file && ConfirmedGone(file)) {
 					RemoveTask(n);
 					removed.Add(n);
 				}
@@ -151,6 +150,30 @@ public static partial class Schedule
 			}
 		}
 		return removed;
+	}
+
+	// a setup file that is really gone - not one Windows could not reach: a whole path, its drive there, and its folder either
+	// gone or read whole without it (File.Exists says false for a locked folder or an unplugged drive too - CodeRabbit on PR #4)
+	public static bool ConfirmedGone(string a_file)
+	{
+		try {
+			if (!Path.IsPathFullyQualified(a_file) || Path.GetPathRoot(a_file) is not { Length: > 0 } root || !Directory.Exists(root)) {
+				return false;
+			}
+			var dir = Path.GetDirectoryName(a_file)!;
+			// the deepest folder of the path that is still there must be readable; a folder of it missing on a present drive = gone
+			var probe = dir;
+			while (!Directory.Exists(probe)) {
+				probe = Path.GetDirectoryName(probe);
+				if (probe == null) {
+					return false;
+				}
+			}
+			var listed = Directory.EnumerateFileSystemEntries(probe).ToList();
+			return probe != dir || !listed.Any(f => string.Equals(f, a_file, StringComparison.OrdinalIgnoreCase));
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException) {
+			return false;
+		}
 	}
 
 	// schtasks writes in the console's code page, not UTF-8 (a localized Windows' messages came out garbled - the fourth review, L6)

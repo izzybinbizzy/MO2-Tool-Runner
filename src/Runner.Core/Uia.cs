@@ -11,7 +11,12 @@ public static class Uia
 	// an element that went away while it was read: UI Automation says so with ElementNotAvailableException, or - while a
 	// window is being destroyed - with a raw COM error (xLODGen's options window closing after Generate threw E_UNEXPECTED
 	// at the real-MO2 trial of 2026-10-27 20:26, and the step failed on it)
-	public static bool Gone(Exception a_e) => a_e is ElementNotAvailableException or System.Runtime.InteropServices.COMException;
+	// - only the COM errors that mean "that window / element is gone"; any other provider failure is a real fault and is reported
+	public static bool Gone(Exception a_e) => a_e is ElementNotAvailableException ||
+		a_e is System.Runtime.InteropServices.COMException c && GoneCodes.Contains(unchecked((uint)c.HResult));
+
+	// E_UNEXPECTED (seen), UIA_E_ELEMENTNOTAVAILABLE, RPC_E_DISCONNECTED, RPC_S_SERVER_UNAVAILABLE, RPC_S_CALL_FAILED
+	static readonly HashSet<uint> GoneCodes = [0x8000FFFF, 0x80040201, 0x80010108, 0x800706BA, 0x800706BE];
 
 	public static AutomationElement? FromHandle(nint a_hwnd)
 	{

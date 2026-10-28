@@ -359,6 +359,12 @@ public sealed partial class MainViewModel : Observable
 				Say("Not started - nothing was changed.", "");
 				return;
 			}
+			// a mod ticked or a download installed in Mod Organizer while the box was open changes what goes off - looked at
+			// first, so the checks below run after the last wait and nothing can change between them and the start
+			if (profileDir != null && await Task.Run(() => ProfileStamp(profileDir)) != profileBefore) {
+				Say("Not started: the profile changed in Mod Organizer while the preview was open - press Start again to see the new one.", "warn");
+				return;
+			}
 			// the window waited on the player: look again, and start only the setup that was previewed
 			if (CannotStart() is { } now) {
 				Say(now, "bad");
@@ -379,13 +385,16 @@ public sealed partial class MainViewModel : Observable
 				Say("Not started: the setup changed while the preview was open - press Start again to see the new one.", "warn");
 				return;
 			}
-			// a mod ticked or a download installed in Mod Organizer while the box was open changes what goes off
-			if (profileDir != null && await Task.Run(() => ProfileStamp(profileDir)) != profileBefore) {
-				Say("Not started: the profile changed in Mod Organizer while the preview was open - press Start again to see the new one.", "warn");
-				return;
-			}
+			// the very file previewed, never whatever is selected by now
+			StartNow(file, a_only, a_from, a_until);
+			return;
 		}
-		var (ok, text) = Engine.StartRun(SelectedSetup!.File, a_only, a_from, a_until);
+		StartNow(SelectedSetup!.File, a_only, a_from, a_until);
+	}
+
+	void StartNow(string a_file, string? a_only, string? a_from, string? a_until)
+	{
+		var (ok, text) = Engine.StartRun(a_file, a_only, a_from, a_until);
 		if (!ok) {
 			Say("Could not start: " + text, "bad");
 			return;

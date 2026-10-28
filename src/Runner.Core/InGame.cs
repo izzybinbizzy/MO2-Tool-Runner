@@ -170,17 +170,24 @@ public static partial class InGame
 		return f == null ? null : Path.GetFileNameWithoutExtension(f.Name);
 	}
 
-	// every run of this program on the profile, as UTC time spans (the one going now up to now): the player's game cannot run
-	// beside ours, so a save written inside one was made by the runner's game
+	// the steps that start the runner's own game (the clean save, the save to play, the shader caches, the game-run grass cache)
+	static readonly HashSet<string> GameSteps = ["cleansave", "playsave", "shaders", "grass"];
+
+	// when the runner's own game ran on this profile, as UTC time spans (a step still going: up to now) - only those, never a
+	// whole run: a save the player makes while a tool step runs is still theirs (CodeRabbit on PR #4)
 	public static List<(DateTime From, DateTime To)> OurRuns(RunContext a_ctx)
 	{
 		try {
 			return Journal.All(Path.GetDirectoryName(a_ctx.Journal.Folder)!).Where(j => j.Profile.Equals(a_ctx.Profile.Name, StringComparison.OrdinalIgnoreCase))
-				.Select(j => (j.Started.ToUniversalTime(), (j.Ended ?? DateTime.Now).ToUniversalTime())).ToList();
+				.SelectMany(j => GameTimes(j.Steps)).ToList();
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 			return [];
 		}
 	}
+
+	public static IEnumerable<(DateTime From, DateTime To)> GameTimes(IEnumerable<StepRecord> a_steps) =>
+		a_steps.Where(s => GameSteps.Contains(s.Key) && s.Started != null)
+			.Select(s => (s.Started!.Value.ToUniversalTime(), (s.Ended ?? DateTime.Now).ToUniversalTime()));
 
 	public static DateTime? SaveTime(Profile a_profile, string? a_name)
 	{
@@ -217,7 +224,7 @@ public static partial class InGame
 				return null;
 			}
 			var ours = newest.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) ||
-			           SaveTime(a_ctx.Profile, newest) >= a_ctx.Journal.Started.ToUniversalTime();
+			           SaveTime(a_ctx.Profile, newest) is { } t && GameTimes(a_ctx.Journal.Steps).Any(r => t >= r.From && t <= r.To);
 			if (!ours) {
 				return null;
 			}
@@ -599,7 +606,12 @@ public static partial class InGame
 	public static void PlaySave(RunContext a_ctx, StepSettings a_s)
 	{
 		var player = a_ctx.CleanSaveName == null ? NewestPlayerSave(a_ctx.Profile, OurRuns(a_ctx)) : null;
-		var (pick, why) = PlaySaveFrom(a_ctx.CleanSaveName, a_s.Str("save"), SaveTime(a_ctx.Profile, SaveClean), player, SaveTime(a_ctx.Profile, player));
+		// a named save that is gone (deleted, renamed) is passed over for the fallbacks, never loaded and failed on
+		var named = a_s.Str("save") is { Length: > 0 } n && SaveTime(a_ctx.Profile, n) != null ? n : null;
+		if (named == null && a_s.Str("save") is { Length: > 0 } missing) {
+			a_ctx.Log.Warn($"the save the setup names (\"{missing}\") is not in the saves folder - another is used");
+		}
+		var (pick, why) = PlaySaveFrom(a_ctx.CleanSaveName, named, SaveTime(a_ctx.Profile, SaveClean), player, SaveTime(a_ctx.Profile, player));
 		var from = pick ?? throw new StepFailedException(why);
 		a_ctx.Log.Detail($"the save to play starts from \"{from}\" ({why})");
 		var marker = a_ctx.Journal.ReturnMarker;

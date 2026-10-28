@@ -192,7 +192,13 @@ public static class SettingsPanel
 				try {
 					return (Theme.List(), err);
 				} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) {
-					return (new List<(string Name, string? File)> { (Theme.Default, null) }, "The Themes folder could not be read: " + e.Message);
+					// the theme in use stays listed beside the built-in one, so the picker shows what is on screen and the built-in
+					// look can still be picked (CodeRabbit on PR #4)
+					var keep = new List<(string Name, string? File)> { (Theme.Default, null) };
+					if (Theme.Current != Theme.Default) {
+						keep.Add((Theme.Current, null));
+					}
+					return (keep, "The Themes folder could not be read: " + e.Message);
 				}
 			});
 			if (error != null) {

@@ -304,8 +304,11 @@ public sealed class ShaderStep : IStep
 			}
 		}
 		if (a_profile != null) {
-			// the cache's own shader mod counts ticked or not: the compile ticks it, whatever the player has ticked today
+			// the cache's own shader mod and settings mod count ticked or not: the compile ticks both, whatever the player has ticked
 			AddShaders(a_c.ShaderMod);
+			if (a_c.SettingsMod != null) {
+				AddShaders(a_c.SettingsMod);
+			}
 			var skip = new HashSet<string>(a_otherCaches ?? [], StringComparer.OrdinalIgnoreCase) { a_c.ShaderMod, a_c.OutputMod };
 			if (a_c.SettingsMod != null) {
 				skip.Add(a_c.SettingsMod);

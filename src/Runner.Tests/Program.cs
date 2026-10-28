@@ -495,6 +495,16 @@ public static class Program
 		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
 		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
+		// only the runner's GAME steps count as its own time - a save the player made while a tool step ran is theirs
+		var steps = new[] {
+			new StepRecord { Key = "cleansave", Started = mon, Ended = mon.AddMinutes(5) },
+			new StepRecord { Key = "dyndolod", Started = mon.AddMinutes(5), Ended = mon.AddMinutes(30) },
+			new StepRecord { Key = "playsave", Started = mon.AddMinutes(30), Ended = null },
+			new StepRecord { Key = "pandora", Started = null },
+		};
+		var times = InGame.GameTimes(steps).ToList();
+		Equal(2, times.Count, "the clean save and the save to play");
+		Check(!times.Any(t => mon.AddMinutes(15) >= t.From && mon.AddMinutes(15) <= t.To), "a save made during DynDOLOD is the player's");
 	}
 
 	// the fourth review, M2: a patcher's CPU counts per child process - one that ends never makes it fall, a new one counts whole
@@ -518,6 +528,23 @@ public static class Program
 		var xml = Schedule.TaskXml(@"C:\R\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
 		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
 		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
+		// a setup file is "gone" only when Windows could look and it is not there
+		var dir = Path.Combine(Path.GetTempPath(), "MO2TR orphan " + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(dir);
+		try {
+			var here = Path.Combine(dir, "Here.json");
+			File.WriteAllText(here, "{}");
+			Check(!Schedule.ConfirmedGone(here), "a file that is there is not gone");
+			Check(Schedule.ConfirmedGone(Path.Combine(dir, "Gone.json")), "missing from a folder that was read: gone");
+			Check(Schedule.ConfirmedGone(Path.Combine(dir, "No Folder", "Gone.json")), "its folder missing on a present drive: gone");
+			Check(!Schedule.ConfirmedGone("Relative.json"), "a relative path proves nothing");
+			var noDrive = Enumerable.Range('D', 23).Select(c => $"{(char)c}:\\").FirstOrDefault(r => !Directory.Exists(r));
+			if (noDrive != null) {
+				Check(!Schedule.ConfirmedGone(noDrive + @"Setups\X.json"), "an unplugged drive proves nothing");
+			}
+		} finally {
+			Directory.Delete(dir, true);
+		}
 	}
 
 	static void T_CheckBoxPixels()
@@ -1028,6 +1055,7 @@ public static class Program
 	{
 		Check(Uia.Gone(new System.Runtime.InteropServices.COMException("Catastrophic failure", unchecked((int)0x8000FFFF))), "E_UNEXPECTED = gone");
 		Check(Uia.Gone(new System.Windows.Automation.ElementNotAvailableException()), "not available = gone");
+		Check(!Uia.Gone(new System.Runtime.InteropServices.COMException("Unspecified error", unchecked((int)0x80004005))), "E_FAIL is a real fault");
 		Check(!Uia.Gone(new InvalidOperationException()), "anything else is a real fault");
 	}
 
@@ -1417,7 +1445,8 @@ public static class Program
 		var missing = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner missing " + Guid.NewGuid().ToString("N") + ".json");
 		try {
 			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
-			Check(Schedule.RemoveOrphans().Contains(orphan), "an orphaned task is removed");
+			// only the test's own task is looked at - a task of the player's is never touched by a test
+			Check(Schedule.RemoveOrphans(n => n == orphan).SequenceEqual([orphan]), "an orphaned task is removed");
 			Equal(null, Schedule.ReadTask(orphan), "and Windows no longer has it");
 		} finally {
 			Schedule.RemoveTask(orphan);
