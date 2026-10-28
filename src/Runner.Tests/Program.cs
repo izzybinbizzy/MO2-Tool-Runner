@@ -610,6 +610,93 @@ public static class Program
 		Check(Directory.GetFiles(Path.Combine(f.Backups), "OutA.esp", SearchOption.AllDirectories).Length == 1, "the old output is in the backup");
 	}
 
+	// ------------------------------------------------------------------ what MO2 changed (his ask 2026-10-27)
+	static void T_Mo2ChangesReadThePaneTopDown()
+	{
+		// the file lists the pane bottom-up: a separator sits AFTER its mods; "*" lines are MO2's own, not mods
+		var pane = Mo2Changes.Pane(["# generated", "+Mod C", "-Mod B", "+Utilities_separator", "*DLC: Dawnguard", "+Mod A", "-Other_separator", "+Top Mod", ""]);
+		Equal("Top Mod|-|Mod A|Other|Mod B|Utilities|Mod C|Utilities", string.Join("|", pane.SelectMany(m => new[] { m.Name, m.Section == "" ? "-" : m.Section })), "top-down, each under its separator");
+		Check(pane.Single(m => m.Name == "Mod B").On == false && pane.Single(m => m.Name == "Mod C").On, "ticks read");
+		Check(pane.All(m => !m.Name.StartsWith("DLC", StringComparison.Ordinal) && !m.Name.EndsWith("_separator", StringComparison.Ordinal)), "no base game, no separator");
+	}
+
+	static void T_Mo2ChangesNameEveryKindOfChange()
+	{
+		Mo2Changes.PaneMod M(string a_n, bool a_on, string a_s) => new(a_n, a_on, a_s);
+		var before = new List<Mo2Changes.PaneMod> { M("A", true, "S1"), M("B", true, "S1"), M("C", true, "S1"), M("D", false, "S1"), M("G", true, "S2") };
+		var now = new List<Mo2Changes.PaneMod> { M("B", true, "S1"), M("A", true, "S1"), M("C", false, "S1"), M("D", false, "Other"), M("F", true, "") };
+		var got = Mo2Changes.Compare(before, now);
+		Check(got.Contains(("F", "added (ticked, under no section)")), "added: " + string.Join("; ", got));
+		Check(got.Contains(("G", "removed (was under S2)")), "removed");
+		Check(got.Contains(("C", "unticked")), "unticked");
+		Equal(1, got.Count(r => r.What.StartsWith("moved within", StringComparison.Ordinal)), "two mods swapped = ONE moved");
+		Check(!got.Any(r => r.Mod == "D" && r.What.StartsWith("moved", StringComparison.Ordinal)), "D kept its place: a new section is not a move");
+		// a separator moved past mods: their section changes, their place does not - no row
+		Equal(0, Mo2Changes.Compare([M("A", true, "S1"), M("B", true, "S1")], [M("A", true, "S0"), M("B", true, "S0")]).Count, "a separator's move is no mod's move");
+		// one mod taken from the top to the bottom: only it moved, into its new section
+		var moved = Mo2Changes.Compare([M("A", false, "S1"), M("B", true, "S1"), M("C", true, "S1")], [M("B", true, "S1"), M("C", true, "S1"), M("A", false, "Other")]);
+		Equal("A: moved from S1 to Other", string.Join("; ", moved.Select(r => $"{r.Mod}: {r.What}")), "one move, both sections named");
+		// names as Windows sees folders: a new spelling is the same mod
+		Equal(0, Mo2Changes.Compare([M("PG Patch", true, "S")], [M("PG patch", true, "S")]).Count, "same mod, other case");
+	}
+
+	static void T_Mo2ChangesRecordGroupAndHide()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		var second = Path.Combine(f.Instance, "profiles", "Second");
+		Directory.CreateDirectory(second);
+		File.Copy(Path.Combine(f.ProfileDir, "modlist.txt"), Path.Combine(second, "modlist.txt"));
+		Equal(0, Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count, "the first look only starts watching");
+		var dir = Mo2Changes.Dir(f.Data, mo2);
+		Check(Mo2Changes.WatchedSince(dir) != null && !Path.GetFileName(dir).Contains('_', StringComparison.Ordinal), "watched, its folder named without underscores");
+		// the same change in both profiles, a change in one, a mod added to MO2, a test mod
+		foreach (var p in new[] { f.ProfileDir, second }) {
+			var file = Path.Combine(p, "modlist.txt");
+			File.WriteAllText(file, File.ReadAllText(file).Replace("+Base Mod", "-Base Mod", StringComparison.Ordinal));
+		}
+		File.WriteAllText(Path.Combine(second, "modlist.txt"), File.ReadAllText(Path.Combine(second, "modlist.txt")).Replace("+Replaced", "-Replaced", StringComparison.Ordinal));
+		f.Mod("Fresh Mod");
+		f.Mod("TEST Something");
+		var rows = Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		Check(rows.Any(r => r.Mod == "Base Mod" && r.What == "unticked" && r.Profiles.SequenceEqual(["Second", "Test"])), "one row for both profiles: " + string.Join("; ", rows.Select(r => $"{r.Mod} {r.What} [{string.Join(",", r.Profiles)}]")));
+		Check(rows.Any(r => r.Mod == "Replaced" && r.What == "unticked" && r.Profiles.SequenceEqual(["Second"])), "a change in one profile names it alone");
+		Check(rows.Any(r => r.Mod == "Fresh Mod" && r.What == "added to Mod Organizer" && r.Profiles.Count == 0), "a mod added to MO2");
+		Equal(0, Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count, "nothing new on the next look");
+		var kept = Mo2Changes.Read(dir);
+		Equal(rows.Count, kept.Count, "every row kept on disk");
+		Check(kept.All(r => r.Who == Mo2Changes.Outside), "and whose");
+		// the view: a profile left out comes off each row (a row with none left goes), a mod name left out goes
+		var shown = Mo2Changes.Shown(kept, ["Second"], ["TEST "]);
+		Check(shown.Any(r => r.Mod == "Base Mod" && r.Profiles.SequenceEqual(["Test"])), "Second taken off the shared row");
+		Check(!shown.Any(r => r.Mod == "Replaced"), "a row only of Second dropped");
+		Check(!shown.Any(r => r.Mod.StartsWith("TEST", StringComparison.Ordinal)) && shown.Any(r => r.Mod == "Fresh Mod"), "test mods left out, Mod Organizer's rows kept");
+		// a damaged last look starts the watch again - never a failure
+		File.WriteAllText(Path.Combine(dir, "last look.json"), "{ not json");
+		Equal(0, Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count, "a damaged look starts over");
+		Equal(kept.Count, Mo2Changes.Read(dir).Count, "the rows already kept stay");
+	}
+
+	static void T_RunNotesWhatItChangedApartFromWhatWasChangedOutside()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		// the player unticks a mod in MO2, then a run makes a new output mod
+		var list = Path.Combine(f.ProfileDir, "modlist.txt");
+		File.WriteAllText(list, File.ReadAllText(list).Replace("+Base Mod", "-Base Mod", StringComparison.Ordinal));
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => WriteOutput(ctx, "snowfixer", "New Output", "New.esp")));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "New Output" }));
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, "finished: " + r.Verdict);
+		var rows = Mo2Changes.Read(Mo2Changes.Dir(f.Data, mo2));
+		var text = string.Join("; ", rows.Select(x => $"{x.Mod} {x.What} ({x.Who})"));
+		Check(rows.Any(x => x.Mod == "Base Mod" && x.What == "unticked" && x.Who == Mo2Changes.Outside), "the player's change, as made outside the runner: " + text);
+		Check(rows.Any(x => x.Mod == "New Output" && x.What == "added to Mod Organizer" && x.Who.StartsWith("the run of", StringComparison.Ordinal)), "the run's new mod, as the run's: " + text);
+		Check(rows.Any(x => x.Mod == "New Output" && x.What.StartsWith("added (ticked", StringComparison.Ordinal) && x.Who.StartsWith("the run of", StringComparison.Ordinal)), "ticked in the profile by the run: " + text);
+		Check(!rows.Any(x => x.Mod is "Output A" or "Output B"), "outputs switched off and back on during the run are no net change: " + text);
+	}
+
 	static void T_FailedStepPutsItsOldOutputBack()
 	{
 		using var f = new FakeMo2();

@@ -80,11 +80,24 @@ public partial class App : Application
 			png.Save(f);
 		}
 		Save("1 dashboard");
-		foreach (var (panel, name) in new[] { ("history", "2 history"), ("settings", "3 settings") }) {
-			w.ShowPanel(panel);
-			Pump(w, 600);
-			Save(name);
-		}
+		w.ShowPanel("history");
+		Pump(w, 600);
+		Save("2 history");
+		// History > What MO2 changed, with made-up rows (nothing read from or written to a Mod Organizer)
+		var t = new DateTime(2026, 10, 27, 22, 41, 0);
+		w.ShowChangesDemo([
+			new(t.AddMinutes(-90), Mo2Changes.Outside, "Wildlands Renewal", "added to Mod Organizer", []),
+			new(t.AddMinutes(-90), Mo2Changes.Outside, "Wildlands Renewal", "added (unticked, under Other)", ["Bottled Shaders", "Illuminated - ENB"]),
+			new(t.AddMinutes(-20), Mo2Changes.Outside, "Open Shaders", "unticked", ["RELight - Spell Addon"]),
+			new(t, "the run of Oct 27 22:39 (Bottled Shaders)", "Synthesis - Bottled Shaders", "ticked", ["Bottled Shaders"]),
+			new(t, "the run of Oct 27 22:39 (Bottled Shaders)", "PG Patch - Bottled Shaders", "moved from Generated to Patches", ["Bottled Shaders"]),
+			new(t, "the run of Oct 27 22:39 (Bottled Shaders)", "Old Grass Cache", "removed from Mod Organizer", []),
+		]);
+		Pump(w, 600);
+		Save("2b what MO2 changed");
+		w.ShowPanel("settings");
+		Pump(w, 600);
+		Save("3 settings");
 		// the settings further down: the run options, tool updates, a run at a set time
 		foreach (var (y, name) in new[] { (420.0, "3b settings, run options"), (900.0, "3c settings, set time") }) {
 			w.ScrollDrawer(y);

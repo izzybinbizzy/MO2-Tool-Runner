@@ -124,6 +124,7 @@ public static class Runner
 				Hook(log, cmd, "before the run");
 			}
 			control.Close();
+			NoteChanges(mo2, a_req.DataDir, Mo2Changes.Outside, log);
 			BackupProfile(ctx);
 			foreach (var s in todo) {
 				if (new StepSettings(s.Settings).OutputMod is { } om) {
@@ -216,6 +217,23 @@ public static class Runner
 					log.Warn(e.Message);
 				}
 			}
+			NoteChanges(mo2, a_req.DataDir, RunWho(journal), log);
+		}
+	}
+
+	public static string RunWho(Journal a_j) => $"the run of {a_j.Started.ToString("MMM d HH:mm", InvariantCulture)} ({a_j.SetupName})";
+
+	// Mod Organizer as it is now against the last look, kept as a_who's changes (History > What MO2 changed) - never a reason
+	// to stop a run
+	static void NoteChanges(Mo2Instance a_mo2, string a_dataDir, string a_who, RunLog a_log)
+	{
+		try {
+			var rows = Mo2Changes.Record(a_mo2, a_dataDir, a_who);
+			if (rows.Count > 0) {
+				a_log.Detail($"{rows.Count} change(s) in Mod Organizer {(a_who == Mo2Changes.Outside ? "made outside the runner since its last look" : "by this run")} - History > What MO2 changed");
+			}
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) {
+			a_log.Warn("could not note what Mod Organizer changed: " + e.Message);
 		}
 	}
 
@@ -585,6 +603,10 @@ public static class Runner
 		} catch (Exception e) {
 			log.Error("restore failed: " + Plain(e));
 			return new RunOutcome(RunState.Failed, "could not put the profile back: " + Plain(e), a_j.Folder);
+		}
+		// the run folder is <data>\Runs\<run>
+		if (Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(a_j.Folder))) is { } data) {
+			NoteChanges(mo2, data, "putting back " + RunWho(a_j), log);
 		}
 		if (notBack.Count > 0 || filesNotBack.Count > 0) {
 			// something is still out: Restore stays on offer (the window keeps its button) and says what

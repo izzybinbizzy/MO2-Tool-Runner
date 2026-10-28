@@ -42,6 +42,10 @@ public sealed class Setup
 	public IReadOnlyList<string> BeforeRun => List(Root, "beforeRun");
 	public IReadOnlyList<string> AfterRun => List(Root, "afterRun");
 
+	// what the "What MO2 changed" view leaves out (a profile only tests use, test mods)
+	public IReadOnlyList<string> ChangesHideProfiles => List(Obj("changes"), "hideProfiles");
+	public IReadOnlyList<string> ChangesHideMods => List(Obj("changes"), "hideModsStartingWith");
+
 	public IReadOnlyDictionary<string, string> PlaceAfter =>
 		(Root["placeAfter"] as JsonObject)?.Where(p => p.Value is JsonValue).ToDictionary(p => p.Key, p => p.Value!.ToString(), StringComparer.OrdinalIgnoreCase) ??
 		new Dictionary<string, string>();
