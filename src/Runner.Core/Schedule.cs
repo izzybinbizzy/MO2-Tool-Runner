@@ -114,12 +114,91 @@ public static partial class Schedule
 		}
 	}
 
+	// the setup file a task of ours runs (its "run --setup "<file>"" arguments), null when it is not one of ours
+	public static string? SetupOf(string a_xml)
+	{
+		var doc = XDocument.Parse(Declaration().Replace(a_xml, ""));
+		var args = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value;
+		var m = args == null ? null : SetupArg().Match(args);
+		return m is { Success: true } ? m.Groups["f"].Value : null;
+	}
+
+	[GeneratedRegex("^run --setup \"(?<f>[^\"]+)\"$")]
+	private static partial Regex SetupArg();
+
+	// tasks of ours whose setup file is gone (moved, renamed or deleted - their task names came from the old path, so the window
+	// could no longer find them, and Windows would start a run on a missing file): removed, their names returned (the fourth
+	// review, L6)
+	public static List<string> RemoveOrphans(Func<string, bool>? a_only = null)
+	{
+		var removed = new List<string>();
+		var (code, csv) = Schtasks("/Query", "/FO", "CSV", "/NH");
+		if (code != 0) {
+			return removed;
+		}
+		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith("\"\\MO2 Tool Runner - ", StringComparison.Ordinal))
+			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(n => a_only == null || a_only(n)).ToList();
+		foreach (var n in names) {
+			try {
+				var (c, xml) = Schtasks("/Query", "/TN", n, "/XML");
+				if (c == 0 && SetupOf(xml) is { } file && ConfirmedGone(file)) {
+					RemoveTask(n);
+					removed.Add(n);
+				}
+			} catch (Exception e) when (e is System.Xml.XmlException or InvalidOperationException or ArgumentException) {
+				// a task that does not read is left alone
+			}
+		}
+		return removed;
+	}
+
+	// a setup file that is really gone - not one Windows could not reach: a whole path, its drive there, and its folder either
+	// gone or read whole without it (File.Exists says false for a locked folder or an unplugged drive too - CodeRabbit on PR #4)
+	public static bool ConfirmedGone(string a_file)
+	{
+		try {
+			// a file Windows finds is never gone, whatever form its path is written in (slashes, a short 8.3 name - the fifth
+			// review, N4); the folder listing below is compared in the full form
+			if (!Path.IsPathFullyQualified(a_file) || File.Exists(a_file)) {
+				return false;
+			}
+			a_file = Path.GetFullPath(a_file);
+			if (Path.GetPathRoot(a_file) is not { Length: > 0 } root || !Directory.Exists(root)) {
+				return false;
+			}
+			var dir = Path.GetDirectoryName(a_file)!;
+			// the deepest folder of the path that is still there must be readable; a folder of it missing on a present drive = gone
+			var probe = dir;
+			while (!Directory.Exists(probe)) {
+				probe = Path.GetDirectoryName(probe);
+				if (probe == null) {
+					return false;
+				}
+			}
+			var listed = Directory.EnumerateFileSystemEntries(probe).ToList();
+			return probe != dir || !listed.Any(f => string.Equals(Path.GetFullPath(f), a_file, StringComparison.OrdinalIgnoreCase));
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException) {
+			return false;
+		}
+	}
+
+	// schtasks writes in the console's code page, not UTF-8 (a localized Windows' messages came out garbled - the fourth review, L6)
+	static Encoding ConsoleText()
+	{
+		try {
+			Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+			return Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+		} catch (Exception e) when (e is ArgumentException or NotSupportedException) {
+			return Encoding.UTF8;
+		}
+	}
+
 	// Windows' own schtasks, no window, answered within 30 s
 	static (int Code, string Text) Schtasks(params string[] a_args)
 	{
 		var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe")) {
 			UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-			StandardOutputEncoding = Encoding.UTF8,
+			StandardOutputEncoding = ConsoleText(), StandardErrorEncoding = ConsoleText(),
 		};
 		foreach (var a in a_args) {
 			psi.ArgumentList.Add(a);

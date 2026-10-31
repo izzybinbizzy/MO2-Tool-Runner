@@ -81,9 +81,18 @@ public sealed class Setup
 	static readonly JsonDocumentOptions ReadOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 	static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-	public static Setup Load(string a_file)
+	public static Setup Load(string a_file) => FromText(Files.ReadSharedText(a_file), a_file);
+
+	// the setup as these bytes say (the preview reads the file once and shows exactly what then runs)
+	public static Setup Parse(byte[] a_bytes, string a_file)
 	{
-		var node = JsonNode.Parse(Files.ReadSharedText(a_file), documentOptions: ReadOptions) as JsonObject ??
+		using var r = new StreamReader(new MemoryStream(a_bytes), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+		return FromText(r.ReadToEnd(), a_file);
+	}
+
+	static Setup FromText(string a_text, string a_file)
+	{
+		var node = JsonNode.Parse(a_text, documentOptions: ReadOptions) as JsonObject ??
 		           throw new InvalidDataException("not a setup file (no JSON object): " + a_file);
 		var s = new Setup { File = a_file, Root = node };
 		if (s.Root["schema"] == null && s.Root["steps"] is JsonObject) {

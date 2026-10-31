@@ -25,20 +25,29 @@ public sealed class XLodGenStep : IStep
 		var deadline = a_s.Deadline(120);
 		using (new Toggle(a_ctx, a_s.List("enable_during"), a_s.List("disable_during"), "xLODGen", a_ctx.Cancel)) {
 			try {
-				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, a_s.Str("args"), a_ctx.Cancel);
+				// xLODGen writes where its -o: says - and that is in Mod Organizer's entry for it, not here: the step puts its own
+				// output folder into the arguments it starts xLODGen with (the trial of 2026-10-27 21:36 wrote into another folder)
+				var args = a_s.Str("args") ?? WithOutput(Mo2Instance.Unescape(a_ctx.Mo2.Executable(a_s.Req("executable"))?.Arguments ?? ""), outDir);
+				a_ctx.Log.Detail("xLODGen's arguments: " + args);
+				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, args, a_ctx.Cancel);
 				var main = StepKit.WaitWindow(a_ctx, image, t => t.Contains("LODGen", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "xLODGen's window");
 				a_ctx.Activity(Key, "xLODGen is reading the load order");
 				var opts = Find(a_ctx, main, e => Uia.Name(e) == "LODGen Options" && Uia.Type(e) == ControlType.Window, TimeSpan.FromMinutes(15), "xLODGen's options");
-				var list = Find(a_ctx, opts, e => Uia.Type(e) == ControlType.List, TimeSpan.FromSeconds(30), "the worldspace list");
+				var list = WorldspaceList(a_ctx, opts, TimeSpan.FromSeconds(30));
 				var want = a_s.List("worldspaces");
 				CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));
 				Uia.Press(Uia.Button(opts, "Generate") ?? throw new StepFailedException("xLODGen's options have no Generate button"));
 				a_ctx.Activity(Key, "generating terrain LOD");
-				var memo = Find(a_ctx, main, e => Uia.ClassName(e) == "TMemo", TimeSpan.FromSeconds(30), "xLODGen's log box");
-				var memoHwnd = (nint)memo.Current.NativeWindowHandle;
+				var mainHwnd = (nint)main.Current.NativeWindowHandle;
+				var told = Stopwatch.StartNew();
 				Waits.Tool(a_ctx, Key, proc, deadline, () => {
-					var txt = Native.ControlText(memoHwnd);
+					// its log box = the memo of the main window holding the most text, looked up every time
+					var txt = LogText(mainHwnd);
 					var tail = txt.Length > 4000 ? txt[^4000..] : txt;
+					if (told.Elapsed >= TimeSpan.FromMinutes(5)) {
+						told.Restart();
+						a_ctx.Log.Detail($"xLODGen's log: {txt.Length} characters, last line: {LastLine(tail)}");
+					}
 					if (tail.Contains("LOD generation done", StringComparison.Ordinal)) {
 						return Waits.Poll.Done;
 					}
@@ -72,6 +81,59 @@ public sealed class XLodGenStep : IStep
 			StepKit.IntoMod(a_ctx, Key, outDir, mod);
 			a_ctx.SetAfter(mod);
 		}
+	}
+
+	// the tool's arguments with its output folder set to ours: an -o: already there is replaced, else one is put first
+	public static string WithOutput(string a_args, string a_outDir)
+	{
+		var o = $"-o:\"{a_outDir.TrimEnd('\\')}\"";
+		var m = Regex.Match(a_args, "-o:(\"[^\"]*\"|\\S+)", RegexOptions.IgnoreCase);
+		return m.Success ? a_args[..m.Index] + o + a_args[(m.Index + m.Length)..] : (o + " " + a_args).Trim();
+	}
+
+	static string LastLine(string a_text)
+	{
+		var last = a_text.TrimEnd().Split('\n').LastOrDefault()?.Trim() ?? "";
+		return last.Length > 140 ? last[..140] : last;
+	}
+
+	// the text of the window's log memo: of its memos, the one holding the most text
+	internal static string LogText(nint a_main)
+	{
+		var best = "";
+		foreach (var h in Native.ChildWindows(a_main).Where(h => Native.ClassName(h) == "TMemo")) {
+			var t = Native.ControlText(h);
+			if (t.Length > best.Length) {
+				best = t;
+			}
+		}
+		return best;
+	}
+
+	// xLODGen's options hold more than one check list - its LOD levels ("", 4, 8, 16, 32) as well as the worldspaces, and UI
+	// Automation's order put the levels first (both real-MO2 trials of 2026-10-27 ticked the LOD levels and left the worldspaces
+	// alone). The worldspace list is the one whose rows are names ("Tamriel [WRLD:0000003C]"), never bare numbers
+	static AutomationElement WorldspaceList(RunContext a_ctx, AutomationElement a_opts, TimeSpan a_timeout)
+	{
+		var sw = Stopwatch.StartNew();
+		while (sw.Elapsed < a_timeout) {
+			a_ctx.Cancel.ThrowIfCancellationRequested();
+			var lists = Uia.All(a_opts, ControlType.List);
+			var names = lists.Select(l => (IReadOnlyList<string>)Uia.All(l, ControlType.ListItem).Select(Uia.Name).ToList()).ToList();
+			if (PickWorldspaces(names) is { } i) {
+				a_ctx.Log.Detail($"the worldspace list: {names[i].Count} worldspace(s) offered ({lists.Count} list(s) in xLODGen's options)");
+				return lists[i];
+			}
+			Thread.Sleep(1000);
+		}
+		throw new StepFailedException($"xLODGen's options show no worldspace list within {a_timeout.TotalSeconds:0} s");
+	}
+
+	// which of a window's lists holds worldspaces: the one with the most rows that are names (a letter in them)
+	public static int? PickWorldspaces(IReadOnlyList<IReadOnlyList<string>> a_lists)
+	{
+		var best = a_lists.Select((l, i) => (i, n: l.Count(r => r.Any(char.IsLetter)))).Where(x => x.n > 0).OrderByDescending(x => x.n).FirstOrDefault();
+		return best.n > 0 ? best.i : null;
 	}
 
 	internal static AutomationElement Find(RunContext a_ctx, AutomationElement a_root, Func<AutomationElement, bool> a_match, TimeSpan a_timeout, string a_what)
@@ -318,6 +380,7 @@ public abstract class DynDolodFamily : IStep
 				var main = StepKit.WaitWindow(a_ctx, image, t => Regex.IsMatch(t, "^" + Tool + @" \d"), TimeSpan.FromMinutes(5), Tool + "'s window");
 				a_ctx.Activity(Key, Tool + " is reading the load order");
 				var startedRun = false;
+				var mainHwnd = (nint)main.Current.NativeWindowHandle;
 				Waits.Tool(a_ctx, Key, proc, a_s.Deadline(120), () => {
 					foreach (var box in Uia.Boxes(StepKit.PidsOf(image)())) {
 						if (Regex.IsMatch(box.Text, @"Installation Error|\bError\b") && !box.Text.Contains("PBR textures detected", StringComparison.Ordinal)) {
@@ -347,8 +410,7 @@ public abstract class DynDolodFamily : IStep
 							a_ctx.Activity(Key, Tool + " is generating");
 						}
 					}
-					var memo = Uia.All(main).FirstOrDefault(e => Uia.ClassName(e) == "TMemo");
-					var txt = memo == null ? "" : Native.ControlText((nint)memo.Current.NativeWindowHandle);
+					var txt = XLodGenStep.LogText(mainHwnd);
 					txt = txt.Length > 3000 ? txt[^3000..] : txt;
 					if (Regex.IsMatch(txt, DoneRx, RegexOptions.IgnoreCase)) {
 						return Waits.Poll.Done;
@@ -455,7 +517,10 @@ public sealed class DynDolodStep : DynDolodFamily
 
 	protected override void DriveOptions(RunContext a_ctx, AutomationElement a_opts, StepSettings a_s)
 	{
-		var list = Uia.All(a_opts, ControlType.List).FirstOrDefault();
+		// the worldspace list by its rows, never the window's first list (xLODGen's first one was its LOD levels)
+		var lists = Uia.All(a_opts, ControlType.List);
+		var pick = XLodGenStep.PickWorldspaces(lists.Select(l => (IReadOnlyList<string>)Uia.All(l, ControlType.ListItem).Select(Uia.Name).ToList()).ToList());
+		var list = pick is { } i ? lists[i] : null;
 		if (list != null) {
 			var want = a_s.List("worldspaces");
 			CheckList.Set(a_ctx, list, n => want.Count == 0 || want.Contains("all", StringComparer.OrdinalIgnoreCase) || want.Contains(n.Split(' ')[0], StringComparer.OrdinalIgnoreCase));

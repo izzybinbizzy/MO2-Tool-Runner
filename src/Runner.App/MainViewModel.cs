@@ -302,6 +302,17 @@ public sealed partial class MainViewModel : Observable
 		Engine.Active() != null ? "A run is going already." :
 		Engine.Interrupted() != null ? "The last run did not finish - put your profile back first (the button at the top)." : null;
 
+	// the profile's mod list and plugin list as they are on disk (unreadable = a stamp of its own, so it never matches)
+	static string ProfileStamp(string a_dir)
+	{
+		try {
+			return string.Join("|", new[] { "modlist.txt", "plugins.txt" }.Select(f => Path.Combine(a_dir, f))
+				.Select(f => File.Exists(f) ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Files.ReadShared(f))) : "-"));
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			return "unreadable " + Guid.NewGuid();
+		}
+	}
+
 	public async Task StartWith(string? a_only, string? a_from, string? a_until)
 	{
 		if (_previewing) {
@@ -314,21 +325,30 @@ public sealed partial class MainViewModel : Observable
 		if (Setup.Bool(Setup!.Root, "previewBeforeRun") != false && ConfirmRun != null) {
 			_previewing = true;
 			Say("Working out what the run will do ...", "");
-			var setup = Setup;
 			var file = SelectedSetup!.File;
 			byte[] shown;
+			Setup setup;
 			try {
+				// the preview is built from the file's bytes as read now - the very bytes compared before the start (the
+				// window's own copy can be older than the file - the fourth review, M4)
 				shown = Files.ReadShared(file);
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				setup = Setup.Parse(shown, file);
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException) {
 				_previewing = false;
 				Say("Could not read the setup: " + e.Message, "bad");
 				return;
 			}
 			var usual = _usual;
 			string preview;
+			string? profileDir = null;
+			string profileBefore = "";
 			try {
-				preview = await Task.Run(() => string.Join("\n", RunPreview.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance),
-					Runner.Plan(setup, a_only, a_from, a_until)).Lines(k => usual.TryGetValue(k, out var t) ? t : null)));
+				preview = await Task.Run(() => {
+					var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+					profileDir = mo2.ProfileDir(setup.Profile);
+					profileBefore = ProfileStamp(profileDir);
+					return string.Join("\n", RunPreview.Build(setup, mo2, Runner.Plan(setup, a_only, a_from, a_until)).Lines(k => usual.TryGetValue(k, out var t) ? t : null));
+				});
 			} catch (Exception e) {
 				Say("Could not work out what the run would do: " + e.Message, "bad");
 				return;
@@ -337,6 +357,12 @@ public sealed partial class MainViewModel : Observable
 			}
 			if (!ConfirmRun(preview)) {
 				Say("Not started - nothing was changed.", "");
+				return;
+			}
+			// a mod ticked or a download installed in Mod Organizer while the box was open changes what goes off - looked at
+			// first, so the checks below run after the last wait and nothing can change between them and the start
+			if (profileDir != null && await Task.Run(() => ProfileStamp(profileDir)) != profileBefore) {
+				Say("Not started: the profile changed in Mod Organizer while the preview was open - press Start again to see the new one.", "warn");
 				return;
 			}
 			// the window waited on the player: look again, and start only the setup that was previewed
@@ -359,8 +385,16 @@ public sealed partial class MainViewModel : Observable
 				Say("Not started: the setup changed while the preview was open - press Start again to see the new one.", "warn");
 				return;
 			}
+			// the very file previewed, never whatever is selected by now
+			StartNow(file, a_only, a_from, a_until);
+			return;
 		}
-		var (ok, text) = Engine.StartRun(SelectedSetup!.File, a_only, a_from, a_until);
+		StartNow(SelectedSetup!.File, a_only, a_from, a_until);
+	}
+
+	void StartNow(string a_file, string? a_only, string? a_from, string? a_until)
+	{
+		var (ok, text) = Engine.StartRun(a_file, a_only, a_from, a_until);
 		if (!ok) {
 			Say("Could not start: " + text, "bad");
 			return;

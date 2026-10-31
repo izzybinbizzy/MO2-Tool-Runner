@@ -195,6 +195,14 @@ public static class Program
 		var packed = Encoding.Unicode.GetString(Encoding.ASCII.GetBytes("LOD generation done."));
 		Check(Native.UnpackAnsi(packed).Contains("LOD generation done", StringComparison.Ordinal), "packed ANSI read back");
 		Equal("normal text", Native.UnpackAnsi("normal text"), "plain text untouched");
+		// the buffer as xLODGen fills it: the packed half, then as many empty characters (its answer counts bytes)
+		var bytes = Encoding.ASCII.GetBytes("[17/17] Tamriel\r\nLOD generation done.");
+		var buf = new char[bytes.Length + 1];
+		var half = Encoding.Unicode.GetString(bytes);
+		half.CopyTo(0, buf, 0, half.Length);
+		Check(Native.FromBuffer(buf, bytes.Length).Contains("LOD generation done", StringComparison.Ordinal), "packed text with an empty tail read back");
+		var plain = "plain log line".ToCharArray();
+		Equal("plain log line", Native.FromBuffer(plain, plain.Length), "a plain buffer untouched");
 	}
 
 	// ------------------------------------------------------------------ MO2's ini
@@ -457,6 +465,104 @@ public static class Program
 		Equal(changed, ShaderStep.Fingerprint(mo2, c, p), "a rebuilt plugin or mesh leaves it as it was");
 	}
 
+	// the fourth review, M1: his Bottled profile keeps a cache for each of two shader mods - switching the tick between them, or
+	// updating one, must leave the other's cache current
+	static void T_TwoShaderCachesStayApart()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		foreach (var m in new[] { "Shader A", "Shader B" }) {
+			var hlsl = Path.Combine(f.Mods, m, "Shaders", "Common.hlsl");
+			Directory.CreateDirectory(Path.GetDirectoryName(hlsl)!);
+			File.WriteAllText(hlsl, m + " v1");
+		}
+		var ml = Path.Combine(f.ProfileDir, "modlist.txt");
+		var baseList = f.Text("modlist.txt");
+		var a = new ShaderStep.Cache("Shader A", "Cache A", null);
+		var b = new ShaderStep.Cache("Shader B", "Cache B", null);
+		var notA = ShaderStep.OtherCacheMods([a, b], a);
+		var p = ProfileOf(f);
+		File.WriteAllText(ml, "+Shader A\r\n-Shader B\r\n" + baseList);
+		var aTicked = ShaderStep.Fingerprint(mo2, a, p, notA);
+		File.WriteAllText(ml, "-Shader A\r\n+Shader B\r\n" + baseList);
+		Equal(aTicked, ShaderStep.Fingerprint(mo2, a, p, notA), "the tick moved to the other shader mod: A's cache is still current");
+		File.WriteAllText(Path.Combine(f.Mods, "Shader B", "Shaders", "Common.hlsl"), "Shader B v2");
+		Equal(aTicked, ShaderStep.Fingerprint(mo2, a, p, notA), "the other shader mod updated: A's cache is still current");
+		File.WriteAllText(Path.Combine(f.Mods, "Shader A", "Shaders", "Common.hlsl"), "Shader A v2");
+		Check(aTicked != ShaderStep.Fingerprint(mo2, a, p, notA), "its own shader files changed (ticked or not): A's cache is stale");
+	}
+
+	// the fourth review, H1: the save to play never starts from an old clean save when the player played after it
+	static void T_SaveToPlayStartsFromTheRightSave()
+	{
+		var mon = new DateTime(2026, 10, 26, 3, 0, 0, DateTimeKind.Utc);
+		var thu = mon.AddDays(3);
+		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom("MO2 Tool Runner - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
+		Equal("Named", InGame.PlaySaveFrom(null, "Named", mon, "Save9", thu).Save, "then the one the setup names");
+		Equal("Save9", InGame.PlaySaveFrom(null, null, mon, "Save9", thu).Save, "an old clean save loses to newer progress of the player's");
+		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
+		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
+		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
+		// only the runner's GAME steps count as its own time - a save the player made while a tool step ran is theirs
+		var steps = new[] {
+			new StepRecord { Key = "cleansave", Started = mon, Ended = mon.AddMinutes(5) },
+			new StepRecord { Key = "dyndolod", Started = mon.AddMinutes(5), Ended = mon.AddMinutes(30) },
+			new StepRecord { Key = "playsave", Started = mon.AddMinutes(30), Ended = null },
+			new StepRecord { Key = "pandora", Started = null },
+		};
+		var times = InGame.GameTimes(steps, mon.AddMinutes(40)).ToList();
+		Equal(2, times.Count, "the clean save and the save to play");
+		Check(!times.Any(t => mon.AddMinutes(15) >= t.From && mon.AddMinutes(15) <= t.To), "a save made during DynDOLOD is the player's");
+		// the fifth review, N1: a run that died in a game step - its open step ends where its record stopped, so a save made a
+		// day later is still the player's
+		var died = InGame.GameTimes([new StepRecord { Key = "cleansave", Started = mon, Ended = null }], mon.AddMinutes(3)).Single();
+		Check(!(thu >= died.From && thu <= died.To), "a save three days after a crashed run is the player's");
+		Equal(mon.AddMinutes(3), died.To, "the open step ends where the dead run's record stopped");
+	}
+
+	// the fourth review, M2: a patcher's CPU counts per child process - one that ends never makes it fall, a new one counts whole
+	static void T_ChildCpuGain()
+	{
+		var before = new Dictionary<int, TimeSpan> { [1] = TimeSpan.FromSeconds(5), [2] = TimeSpan.FromSeconds(9) };
+		var now = new Dictionary<int, TimeSpan> { [1] = TimeSpan.FromSeconds(5.1), [3] = TimeSpan.FromSeconds(2) };
+		Equal(TimeSpan.FromSeconds(2.1), Procs.CpuGain(before, now), "child 2 ended (not a loss), child 3 is new (whole), child 1 +0.1 s");
+		Equal(TimeSpan.Zero, Procs.CpuGain(now, now), "nothing used: no gain");
+	}
+
+	// the fourth review, L5 / M4 / L6: a form id read either way, a setup read from bytes, a task's own setup file
+	static void T_SmallReadsFromTheReview()
+	{
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create("0x3B")), "0x is hex");
+		Equal("0xFF000801", DevBench.FormKey(JsonValue.Create("FF000801")), "an 8-digit id is hex");
+		Equal("0x0000007B", DevBench.FormKey(JsonValue.Create("123")), "a plain number is decimal");
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create("0000003B")), "a padded 8-digit id is hex");
+		Equal("0x00BC614E", DevBench.FormKey(JsonValue.Create("12345678")), "an 8-digit decimal is decimal");
+		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
+		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
+		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
+		var xml = Schedule.TaskXml(@"C:\R\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
+		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
+		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
+		// a setup file is "gone" only when Windows could look and it is not there
+		var dir = Path.Combine(Path.GetTempPath(), "MO2TR orphan " + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(dir);
+		try {
+			var here = Path.Combine(dir, "Here.json");
+			File.WriteAllText(here, "{}");
+			Check(!Schedule.ConfirmedGone(here), "a file that is there is not gone");
+			Check(!Schedule.ConfirmedGone(here.Replace('\\', '/')), "nor in another path form");
+			Check(Schedule.ConfirmedGone(Path.Combine(dir, "Gone.json")), "missing from a folder that was read: gone");
+			Check(Schedule.ConfirmedGone(Path.Combine(dir, "No Folder", "Gone.json")), "its folder missing on a present drive: gone");
+			Check(!Schedule.ConfirmedGone("Relative.json"), "a relative path proves nothing");
+			var noDrive = Enumerable.Range('D', 23).Select(c => $"{(char)c}:\\").FirstOrDefault(r => !Directory.Exists(r));
+			if (noDrive != null) {
+				Check(!Schedule.ConfirmedGone(noDrive + @"Setups\X.json"), "an unplugged drive proves nothing");
+			}
+		} finally {
+			Directory.Delete(dir, true);
+		}
+	}
+
 	static void T_CheckBoxPixels()
 	{
 		var px = new int[20 * 3];
@@ -584,6 +690,7 @@ public static class Program
 		Check(refused.Verdict.Contains("did not finish", StringComparison.Ordinal), "a new run is refused until it is put back: " + refused.Verdict);
 		var r = Runner.Restore(j!);
 		Equal(RunState.Restored, r.State, "restored: " + r.Verdict);
+		Check(Journal.Load(j!.Folder).Steps.All(s => s.State != StepState.Stopped || s.Ended != null), "the step the crash cut off is closed (it never reads as still running)");
 		Check(File.Exists(Path.Combine(f.Mods, "Output A", "OutA.esp")), "the parked output is back");
 		var p = ProfileOf(f);
 		Check(p.IsOn("Output A") && p.IsOn("Output B") && p.IsOn("Needs B"), "the profile as it was");
@@ -959,6 +1066,49 @@ public static class Program
 		Equal<string?>(null, SynthesisStep.Failure("[INF] [T2] Starting Patcher A Run\n[INF] [T2] Finished patcher run\n"), "a clean run is no failure");
 	}
 
+	// the trial of 2026-10-27 20:26: a window being destroyed answers UI Automation with a raw COM error - a "gone" element, never
+	// a failed step
+	static void T_AWindowGoingAwayIsNotAFailure()
+	{
+		Check(Uia.Gone(new System.Runtime.InteropServices.COMException("Catastrophic failure", unchecked((int)0x8000FFFF))), "E_UNEXPECTED = gone");
+		Check(Uia.Gone(new System.Windows.Automation.ElementNotAvailableException()), "not available = gone");
+		Check(!Uia.Gone(new System.Runtime.InteropServices.COMException("Unspecified error", unchecked((int)0x80004005))), "E_FAIL is a real fault");
+		Check(!Uia.Gone(new InvalidOperationException()), "anything else is a real fault");
+	}
+
+	// the trial of 2026-10-27 21:36: xLODGen wrote where MO2's entry for it said (-o:), not into the step's output folder
+	static void T_XLodGenWritesWhereTheStepSays()
+	{
+		var mo2Args = Mo2Instance.Unescape(@"-o:\""D:\\Modding\\Old Scratch\\Terrain LOD\"" -sse");
+		Equal(@"-o:""D:\Modding\Old Scratch\Terrain LOD"" -sse", mo2Args, "MO2's ini escaping undone");
+		Equal(@"-o:""C:\New\Terrain LOD"" -sse", XLodGenStep.WithOutput(mo2Args, @"C:\New\Terrain LOD\"), "an -o: there is replaced");
+		Equal(@"-sse -o:""C:\New""", XLodGenStep.WithOutput("-sse -o:C:\\Old", @"C:\New"), "an unquoted one too");
+		Equal(@"-o:""C:\New"" -sse", XLodGenStep.WithOutput("-sse", @"C:\New"), "none there: put first");
+		Equal(@"-o:""C:\New""", XLodGenStep.WithOutput("", @"C:\New"), "no arguments at all");
+	}
+
+	// both trials of 2026-10-27 ticked xLODGen's LOD levels, the first list in its options, instead of its worldspaces
+	static void T_TheWorldspaceListIsTheOneWithNames()
+	{
+		IReadOnlyList<string> levels = ["", "4", "8", "16", "32"];
+		IReadOnlyList<string> worlds = ["Tamriel [WRLD:0000003C]", "DLC2SolstheimWorld [WRLD:04000800]", "MarkarthWorld [WRLD:00016BB4]"];
+		Equal<int?>(1, XLodGenStep.PickWorldspaces([levels, worlds]), "the named rows, not the LOD levels before them");
+		Equal<int?>(0, XLodGenStep.PickWorldspaces([worlds, levels]), "whichever comes first");
+		Equal<int?>(null, XLodGenStep.PickWorldspaces([levels]), "numbers only: no worldspace list yet");
+		Equal<int?>(null, XLodGenStep.PickWorldspaces([]), "no list at all");
+	}
+
+	static void T_SynthesisLoadingErrorIsNotAFailure()
+	{
+		var t = new DateTime(2026, 10, 27, 23, 29, 20, DateTimeKind.Utc);
+		DateTime? since = null;
+		Check(!SynthesisStep.StillBlocked(ref since, true, t), "a blocking error just seen is not judged yet");
+		Check(!SynthesisStep.StillBlocked(ref since, false, t.AddSeconds(5)), "gone 5 s later (its settings loaded)");
+		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(40)), "seen again: its clock starts over");
+		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(69)), "29 s later still not judged");
+		Check(SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(70)), "30 s without a break: the step fails");
+	}
+
 	static void T_BeforeRunCommandMustSucceed()
 	{
 		using var f = new FakeMo2();
@@ -1318,6 +1468,17 @@ public static class Program
 			Schedule.RemoveTask(name);
 		}
 		Equal(null, Schedule.ReadTask(name), "and it is gone again");
+		// a task whose setup file is gone is found and removed; a cmd task of ours with no setup is left alone
+		const string orphan = "MO2 Tool Runner - zz offline orphan";
+		var missing = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner missing " + Guid.NewGuid().ToString("N") + ".json");
+		try {
+			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
+			// only the test's own task is looked at - a task of the player's is never touched by a test
+			Check(Schedule.RemoveOrphans(n => n == orphan).SequenceEqual([orphan]), "an orphaned task is removed");
+			Equal(null, Schedule.ReadTask(orphan), "and Windows no longer has it");
+		} finally {
+			Schedule.RemoveTask(orphan);
+		}
 	}
 
 	// his lesson 2026-10-27 (checklist 271): the mods a LOD step builds from are found off their plugins' record groups, each with

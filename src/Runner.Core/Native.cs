@@ -122,7 +122,17 @@ public static partial class Native
 		}
 		var buf = new char[n + 1];
 		var got = (int)SendMessageBuf(a_hwnd, WM_GETTEXT, n + 1, buf);
-		return UnpackAnsi(new string(buf, 0, Math.Clamp(got, 0, n)));
+		return FromBuffer(buf, got);
+	}
+
+	// A tool that packs its ANSI bytes two to a character counts BYTES in its answer, so half the buffer stays empty; the text
+	// ends at the first empty character, or those empties outvote the packed half and it is never unpacked (the trial of
+	// 2026-10-27 22:40: xLODGen's "LOD generation done." went unseen and the finished tool was called idle)
+	public static string FromBuffer(char[] a_buf, int a_got)
+	{
+		var s = new string(a_buf, 0, Math.Clamp(a_got, 0, a_buf.Length));
+		var nul = s.IndexOf('\0');
+		return UnpackAnsi(nul >= 0 ? s[..nul] : s);
 	}
 
 	public static string UnpackAnsi(string a_s)
@@ -259,6 +269,14 @@ public static class Procs
 		}
 		return total;
 	}
+
+	// each CHILD process's CPU (the root left out: a tool's window drawing itself is not work) - read per process, so a child
+	// that ends never makes the total fall
+	public static Dictionary<int, TimeSpan> ChildCpu(int a_root) => Tree(a_root).Where(p => p != a_root).ToDictionary(p => p, Cpu);
+
+	// how much CPU the children used since the last reading (a new child counts whole)
+	public static TimeSpan CpuGain(IReadOnlyDictionary<int, TimeSpan> a_before, IReadOnlyDictionary<int, TimeSpan> a_now) =>
+		a_now.Aggregate(TimeSpan.Zero, (sum, kv) => sum + (kv.Value - a_before.GetValueOrDefault(kv.Key) is { Ticks: > 0 } d ? d : TimeSpan.Zero));
 
 	public static void KillTree(int a_root)
 	{

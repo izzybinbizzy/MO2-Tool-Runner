@@ -145,7 +145,7 @@ public static class Runner
 				}
 				if (!outputsOff && !lead.Contains(s.Key)) {
 					if (keys.Contains("cleansave")) {
-						RunPhase(ctx, "cleansave", "the clean save, first half: into a house with the profile as it is", () => InGame.Deactivate(ctx, new StepSettings(s.Key == "cleansave" ? s.Settings : setup.StepSettings("cleansave")!)));
+						RunPhase(ctx, "cleansave", "the clean save, first half: to QASmoke with the profile as it is", () => InGame.Deactivate(ctx, new StepSettings(s.Key == "cleansave" ? s.Settings : setup.StepSettings("cleansave")!)));
 						control.Close();
 					}
 					OutputsOff(ctx);
@@ -172,7 +172,10 @@ public static class Runner
 					control.Close();
 					journal.State = RunState.Failed;
 					journal.Verdict = $"every tool finished; the save to play was not made: {journal.Step("playsave")?.Note}";
+					SaySaves(ctx);
+					journal.Ended = DateTime.Now;
 					journal.Save();
+					PruneBackups(ctx);
 					return new RunOutcome(journal.State, journal.Verdict, journal.Folder);
 				}
 				control.Close();
@@ -290,6 +293,16 @@ public static class Runner
 
 	// his checklist 270 ("all 3."): only the last few runs' backups are kept - the setup's "keepBackups" (default 5, 0 = keep
 	// all). Only THIS setup's run folders go, oldest first, never the running one or one an unfinished run still needs.
+	// a run that did not finish may leave the runner's own save (QASmoke, DynDOLOD off) as the newest one: said in its verdict
+	static void SaySaves(RunContext a_ctx)
+	{
+		if (InGame.SaveWarning(a_ctx) is { } w) {
+			a_ctx.Journal.Verdict += " - " + w;
+			a_ctx.Journal.Notes.Add(w);
+			a_ctx.Log.Warn(w);
+		}
+	}
+
 	public static void PruneBackups(RunContext a_ctx)
 	{
 		// cleanup only: whatever goes wrong here is a warning, never a failed run
@@ -484,8 +497,13 @@ public static class Runner
 			_ => $"stopped at {failed?.Name ?? "the start"}: {failed?.Note ?? a_why} - the profile is back as it was, with this run's finished outputs on",
 		};
 		if (a_state != RunState.Finished) {
+			SaySaves(a_ctx);
 			j.Ended = DateTime.Now;
 			a_ctx.Log.Say(j.Verdict);
+			// a failed or stopped run's backups are pruned too (they piled up until the next finished run - the fourth review, L7);
+			// a folder an unfinished run still names is never touched
+			j.Save();
+			PruneBackups(a_ctx);
 		} else {
 			j.State = RunState.Finished;
 		}
@@ -577,7 +595,13 @@ public static class Runner
 			log.Error(a_j.Verdict);
 			return new RunOutcome(RunState.Failed, a_j.Verdict, a_j.Folder);
 		}
+		// a step the crash cut off ends when its run record was last written - never left open (an open game step would read as
+		// the runner's game running "until now" and hide every save the player made since - the fifth review, N1)
+		var died = a_j.Ended ?? File.GetLastWriteTime(a_j.File);
 		foreach (var r in a_j.Steps.Where(r => r.State is StepState.Running or StepState.Pending)) {
+			if (r.State == StepState.Running) {
+				r.Ended ??= died;
+			}
 			r.State = r.State == StepState.Running ? StepState.Stopped : StepState.Skipped;
 		}
 		a_j.State = RunState.Restored;

@@ -8,11 +8,21 @@ public static class Uia
 {
 	public sealed record Box(AutomationElement Element, nint Hwnd, string Title, string Text, IReadOnlyList<AutomationElement> Buttons);
 
+	// an element that went away while it was read: UI Automation says so with ElementNotAvailableException, or - while a
+	// window is being destroyed - with a raw COM error (xLODGen's options window closing after Generate threw E_UNEXPECTED
+	// at the real-MO2 trial of 2026-10-27 20:26, and the step failed on it)
+	// - only the COM errors that mean "that window / element is gone"; any other provider failure is a real fault and is reported
+	public static bool Gone(Exception a_e) => a_e is ElementNotAvailableException ||
+		a_e is System.Runtime.InteropServices.COMException c && GoneCodes.Contains(unchecked((uint)c.HResult));
+
+	// E_UNEXPECTED (seen), UIA_E_ELEMENTNOTAVAILABLE, RPC_E_DISCONNECTED, RPC_S_SERVER_UNAVAILABLE, RPC_S_CALL_FAILED
+	static readonly HashSet<uint> GoneCodes = [0x8000FFFF, 0x80040201, 0x80010108, 0x800706BA, 0x800706BE];
+
 	public static AutomationElement? FromHandle(nint a_hwnd)
 	{
 		try {
 			return AutomationElement.FromHandle(a_hwnd);
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return null;
 		} catch (ArgumentException) {
 			return null;
@@ -23,7 +33,7 @@ public static class Uia
 	{
 		try {
 			return a_e.Current.Name ?? "";
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return "";
 		}
 	}
@@ -32,7 +42,7 @@ public static class Uia
 	{
 		try {
 			return a_e.Current.ClassName ?? "";
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return "";
 		}
 	}
@@ -41,7 +51,7 @@ public static class Uia
 	{
 		try {
 			return a_e.Current.AutomationId ?? "";
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return "";
 		}
 	}
@@ -50,7 +60,7 @@ public static class Uia
 	{
 		try {
 			return a_e.Current.ControlType;
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return null;
 		}
 	}
@@ -60,7 +70,7 @@ public static class Uia
 		try {
 			var cond = a_type == null ? Condition.TrueCondition : new PropertyCondition(AutomationElement.ControlTypeProperty, a_type);
 			return a_root.FindAll(TreeScope.Descendants, cond).Cast<AutomationElement>().ToList();
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return [];
 		}
 	}
@@ -69,7 +79,7 @@ public static class Uia
 	{
 		try {
 			return a_root.FindAll(TreeScope.Children, Condition.TrueCondition).Cast<AutomationElement>().ToList();
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return [];
 		}
 	}
@@ -79,7 +89,7 @@ public static class Uia
 		try {
 			var parent = TreeWalker.ControlViewWalker.GetParent(a_e);
 			return parent != null && Type(parent) == ControlType.TitleBar;
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return false;
 		}
 	}
@@ -114,7 +124,7 @@ public static class Uia
 	{
 		try {
 			return a_e.Current.IsEnabled && !a_e.Current.IsOffscreen;
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return false;
 		}
 	}
@@ -127,7 +137,7 @@ public static class Uia
 				Native.PostMessage(h, Native.BM_CLICK, 0, 0);
 				return true;
 			}
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return false;
 		}
 		try {
@@ -135,7 +145,7 @@ public static class Uia
 				((InvokePattern)p).Invoke();
 				return true;
 			}
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 			return false;
 		} catch (InvalidOperationException) {
 		}
@@ -145,7 +155,7 @@ public static class Uia
 				Native.PostMessage(h, Native.BM_CLICK, 0, 0);
 				return true;
 			}
-		} catch (ElementNotAvailableException) {
+		} catch (Exception gone) when (Gone(gone)) {
 		}
 		return false;
 	}
