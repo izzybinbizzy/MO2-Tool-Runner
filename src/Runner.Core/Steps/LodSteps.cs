@@ -176,12 +176,18 @@ public sealed class AcmosStep : IStep
 		var toolDir = Path.GetDirectoryName(exe)!;
 		var logs = Path.Combine(toolDir, "logs");
 		var before = Directory.Exists(logs) ? Directory.GetDirectories(logs).Select(Path.GetFileName).ToHashSet() : [];
-		// a trailing backslash inside -l:"..." would escape its closing quote
+		var mod = a_s.OutputMod!;
+		var modDir = a_ctx.Mo2.ModDir(mod);
 		var reads = a_s.Req("reads").TrimEnd('\\');
-		var roadsOut = reads.TrimEnd('\\') + " roads";
+		var lod = LodFolder(reads, modDir);
+		if (lod == null) {
+			throw new StepFailedException($"ACMOS: no terrain LOD to paint - neither {reads} nor the mod {mod} holds one");
+		}
+		var inMod = lod != reads;
+		var roadsOut = reads + " roads";
 		StepKit.ParkDir(a_ctx, roadsOut, "ACMOS roads");
 		var roads = a_s.Str("roads") ?? AcmosRoads(toolDir) ?? "Paths Only";
-		var cmd = $"{Mo2Control.Quote(exe)} -autorun -t:\"{roads}\" -l:\"{reads}\" -o:\"{roadsOut}\"";
+		var cmd = $"{Mo2Control.Quote(exe)} -autorun -t:\"{roads}\" -l:\"{lod}\" -o:\"{roadsOut}\"";
 		a_ctx.Activity(Key, "painting roads into the terrain LOD");
 		string body;
 		using (var desk = new HiddenDesktop()) {
@@ -205,12 +211,28 @@ public sealed class AcmosStep : IStep
 		}
 		var painted = Files.CountFiles(roadsOut);
 		a_ctx.Log.Detail($"ACMOS: All Done! ({painted} map texture(s) with roads)");
-		var mod = a_s.OutputMod!;
-		// the terrain LOD becomes the mod, then ACMOS's painted map textures replace their plain ones in it
-		StepKit.IntoMod(a_ctx, Key, reads, mod, a_s.Int("min_files", 100));
-		Files.MoveContents(roadsOut, a_ctx.Mo2.ModDir(mod));
+		// the terrain LOD becomes the mod (unless xLODGen put it there already), then ACMOS's painted map textures replace their
+		// plain ones in it
+		if (!inMod) {
+			StepKit.IntoMod(a_ctx, Key, reads, mod, a_s.Int("min_files", 100));
+		}
+		Files.MoveContents(roadsOut, modDir);
 		Directory.Delete(roadsOut, true);
 		a_ctx.SetAfter(mod);
+	}
+
+	// the terrain LOD ACMOS paints: the scratch folder xLODGen wrote, or - when xLODGen has its own output mod and moved it
+	// there already (the 2026-10-31 trial: "Invalid Path to LOD") - that mod; null when neither holds terrain LOD textures.
+	// No trailing backslash: inside -l:"..." it would escape the closing quote.
+	public static string? LodFolder(string a_reads, string a_modDir)
+	{
+		static bool HasLod(string a_dir) => Files.CountFiles(Path.Combine(a_dir, "textures", "terrain")) > 0;
+		var reads = a_reads.TrimEnd('\\');
+		if (HasLod(reads)) {
+			return reads;
+		}
+		var mod = a_modDir.TrimEnd('\\');
+		return HasLod(mod) ? mod : null;
 	}
 
 	// the road set the player last picked in ACMOS (its config.ini "roads = ...")

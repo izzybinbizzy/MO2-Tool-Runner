@@ -1174,6 +1174,27 @@ public static class Program
 		Equal(@"-o:""C:\New""", XLodGenStep.WithOutput("", @"C:\New"), "no arguments at all");
 	}
 
+	// the trial of 2026-10-31: xLODGen had moved its output into its own mod, so ACMOS read an empty scratch folder
+	// ("Invalid Path to LOD") - ACMOS paints the terrain LOD wherever it is
+	static void T_AcmosFindsTheTerrainLodWhereItIs()
+	{
+		var dir = Path.Combine(Path.GetTempPath(), "MO2TR acmos " + Guid.NewGuid().ToString("N"));
+		var scratch = Path.Combine(dir, "Terrain LOD");
+		var mod = Path.Combine(dir, "mods", "SSELODGen_Output - X");
+		try {
+			Equal(null, AcmosStep.LodFolder(scratch, mod), "neither holds terrain LOD");
+			Directory.CreateDirectory(Path.Combine(mod, "textures", "terrain", "tamriel"));
+			File.WriteAllText(Path.Combine(mod, "textures", "terrain", "tamriel", "a.dds"), "x");
+			Directory.CreateDirectory(scratch);
+			Equal(mod, AcmosStep.LodFolder(scratch + "\\", mod + "\\"), "an empty scratch: the mod xLODGen moved it into");
+			Directory.CreateDirectory(Path.Combine(scratch, "textures", "terrain"));
+			File.WriteAllText(Path.Combine(scratch, "textures", "terrain", "b.dds"), "x");
+			Equal(scratch, AcmosStep.LodFolder(scratch, mod), "the scratch folder first when it holds the LOD");
+		} finally {
+			Directory.Delete(dir, true);
+		}
+	}
+
 	// both trials of 2026-10-27 ticked xLODGen's LOD levels, the first list in its options, instead of its worldspaces
 	static void T_TheWorldspaceListIsTheOneWithNames()
 	{
