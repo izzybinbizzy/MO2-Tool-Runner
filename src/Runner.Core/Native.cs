@@ -324,6 +324,9 @@ public static class Procs
 			return false;
 		} catch (InvalidOperationException) {
 			return false;
+		} catch (Win32Exception) {
+			// a process this user may not open (a PID reused by a protected one): it exists
+			return true;
 		}
 	}
 

@@ -278,18 +278,20 @@ public sealed partial class MainViewModel : Observable
 			if (fs.Length == _logPos) {
 				return;
 			}
-			// a big old log: only its last 150 KB
+			// a big old log: only its last 150 KB, from the first whole line in them
+			var skipped = fs.Length - 150_000 > _logPos;
 			_logPos = Math.Max(_logPos, fs.Length - 150_000);
 			fs.Seek(_logPos, SeekOrigin.Begin);
 			var bytes = new byte[fs.Length - _logPos];
 			fs.ReadExactly(bytes);
+			var from = skipped ? Array.IndexOf(bytes, (byte)'\n') + 1 : 0;
 			// a line still being written (no newline yet) waits for the next look, so a UTF-8 letter is never cut in two
 			var end = Array.LastIndexOf(bytes, (byte)'\n') + 1;
-			if (end == 0) {
+			if (end == 0 || end <= from) {
 				return;
 			}
 			_logPos += end;
-			LogChanged?.Invoke(System.Text.Encoding.UTF8.GetString(bytes, 0, end), false);
+			LogChanged?.Invoke(System.Text.Encoding.UTF8.GetString(bytes, from, end - from), false);
 		} catch (IOException) {
 		}
 	}
@@ -488,20 +490,18 @@ public sealed partial class MainViewModel : Observable
 		Issues.Clear();
 		Say("Checking every tool and setting ...", "");
 		var setup = Setup;
-		List<ToolRunner.Steps.Issue> found;
 		try {
-			found = await Task.Run(() => Preflight.Run(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), setup.EnabledSteps.Select(s => s.Key).ToList()));
+			var found = await Task.Run(() => Preflight.Run(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), setup.EnabledSteps.Select(s => s.Key).ToList()));
+			foreach (var i in found) {
+				Issues.Add($"{(i.Blocking ? Theme.Glyph("IssueBlocks") : Theme.Glyph("IssueNote"))}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
+			}
+			var blocks = found.Count(i => i.Blocking);
+			Say(blocks > 0 ? $"{blocks} thing(s) would stop the run." : found.Count > 0 ? "Ready - with notes." : "Ready - everything checks out.", blocks > 0 ? "bad" : "good");
 		} catch (Exception e) {
 			Say("The check could not finish: " + e.Message, "bad");
+		} finally {
 			_checking = false;
-			return;
 		}
-		foreach (var i in found) {
-			Issues.Add($"{(i.Blocking ? Theme.Glyph("IssueBlocks") : Theme.Glyph("IssueNote"))}  {(i.Step == "" ? "" : StepCatalog.Name(i.Step) + ": ")}{i.Text}");
-		}
-		var blocks = found.Count(i => i.Blocking);
-		Say(blocks > 0 ? $"{blocks} thing(s) would stop the run." : found.Count > 0 ? "Ready - with notes." : "Ready - everything checks out.", blocks > 0 ? "bad" : "good");
-		_checking = false;
 	}
 
 	// a step switched on / off for the setup (saved at once)
@@ -553,8 +553,14 @@ public sealed partial class MainViewModel : Observable
 		if (j < 0 || j >= Steps.Count) {
 			return;
 		}
+		// the file's own places of the two steps (an entry the list does not show - no step name - keeps its place)
 		var items = arr.ToList();
-		(items[i], items[j]) = (items[j], items[i]);
+		int At(string a_key) => items.FindIndex(n => n is JsonObject o && Setup.Str(o, "step") == a_key);
+		var (fi, fj) = (At(Steps[i].Key), At(Steps[j].Key));
+		if (fi < 0 || fj < 0) {
+			return;
+		}
+		(items[fi], items[fj]) = (items[fj], items[fi]);
 		arr.Clear();
 		foreach (var it in items) {
 			arr.Add(it);

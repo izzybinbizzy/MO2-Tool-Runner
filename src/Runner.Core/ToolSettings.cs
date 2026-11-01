@@ -165,56 +165,43 @@ public static partial class ToolSettings
 	// the tool's own window, opened through Mod Organizer for the player; once they close it, every settings file it wrote is kept
 	public static Learned Learn(Setup a_setup, string a_step, RunLog a_log, CancellationToken a_ct)
 	{
-		using var mutex = new Mutex(false, Runner.MutexName, out _);
-		bool owned;
-		try {
-			owned = mutex.WaitOne(0);
-		} catch (AbandonedMutexException) {
-			owned = true;
+		using var hold = Runner.HoldIfFree() ?? throw new StepFailedException("a run is going - learn a tool's settings when it is done");
+		var s = new StepSettings(a_setup.StepSettings(a_step) ?? throw new StepFailedException("this setup has no such step"));
+		var mo2 = Mo2Instance.Load(a_setup.Mo2Exe, a_setup.Mo2Instance);
+		var title = s.Str("executable") ?? throw new StepFailedException("this step runs no window of its own (a command-line tool) - its settings are this setup's");
+		var exe = mo2.Executable(title)?.Binary ?? throw new StepFailedException($"Mod Organizer has no executable called \"{title}\"");
+		var image = s.Str("image") ?? Path.GetFileName(exe);
+		var tool = StepCatalog.Name(a_step);
+		// its program's folder (and below), MO2's overwrite (a tool inside a mod writes new files there), and any folder the
+		// setup names; never its output folder
+		var roots = new List<string> { Path.GetDirectoryName(exe)!, mo2.OverwriteDir };
+		roots.AddRange(s.List("settings_dirs"));
+		var skip = new[] { s.Str("output_dir") }.OfType<string>().ToList();
+		var before = Scan(roots, skip);
+		var opened = DateTime.UtcNow;
+		var control = new Mo2Control(mo2, a_setup.Profile, a_log);
+		control.Close(null, a_ct);
+		using var proc = control.RunExecutable(title, image, null, a_ct, TimeSpan.FromMinutes(5));
+		a_log.Say($"{tool} is open - set it up as you want it, save, and close it");
+		while (!proc.HasExited) {
+			a_ct.ThrowIfCancellationRequested();
+			Thread.Sleep(1000);
 		}
-		if (!owned) {
-			throw new StepFailedException("a run is going - learn a tool's settings when it is done");
+		// a packed tool keeps its window in a child after its launcher ends: wait for the launcher's whole tree
+		var root = proc.Id;
+		while (Procs.Tree(root).Any(pid => pid != root && Procs.StartTime(pid) != null)) {
+			a_ct.ThrowIfCancellationRequested();
+			Thread.Sleep(1000);
 		}
-		try {
-			var s = new StepSettings(a_setup.StepSettings(a_step) ?? throw new StepFailedException("this setup has no such step"));
-			var mo2 = Mo2Instance.Load(a_setup.Mo2Exe, a_setup.Mo2Instance);
-			var title = s.Str("executable") ?? throw new StepFailedException("this step runs no window of its own (a command-line tool) - its settings are this setup's");
-			var exe = mo2.Executable(title)?.Binary ?? throw new StepFailedException($"Mod Organizer has no executable called \"{title}\"");
-			var image = s.Str("image") ?? Path.GetFileName(exe);
-			var tool = StepCatalog.Name(a_step);
-			// its program's folder (and below), MO2's overwrite (a tool inside a mod writes new files there), and any folder the
-			// setup names; never its output folder
-			var roots = new List<string> { Path.GetDirectoryName(exe)!, mo2.OverwriteDir };
-			roots.AddRange(s.List("settings_dirs"));
-			var skip = new[] { s.Str("output_dir") }.OfType<string>().ToList();
-			var before = Scan(roots, skip);
-			var opened = DateTime.UtcNow;
-			var control = new Mo2Control(mo2, a_setup.Profile, a_log);
-			control.Close(null, a_ct);
-			using var proc = control.RunExecutable(title, image, null, a_ct, TimeSpan.FromMinutes(5));
-			a_log.Say($"{tool} is open - set it up as you want it, save, and close it");
-			while (!proc.HasExited) {
-				a_ct.ThrowIfCancellationRequested();
-				Thread.Sleep(1000);
-			}
-			// a packed tool keeps its window in a child after its launcher ends: wait for the launcher's whole tree
-			var root = proc.Id;
-			while (Procs.Tree(root).Any(pid => pid != root && Procs.StartTime(pid) != null)) {
-				a_ct.ThrowIfCancellationRequested();
-				Thread.Sleep(1000);
-			}
-			var changed = Changed(before, Scan(roots, skip)).Where(f => !f.EndsWith("_Debug_log.txt", StringComparison.OrdinalIgnoreCase)).ToList();
-			// a tool that keeps its window's values in no file (TexGen, DynDOLOD) still writes them into its debug log when it runs
-			var values = VarsLog(exe, a_step) is { } vl && File.GetLastWriteTimeUtc(vl) >= opened ? ReadVars(vl) : [];
-			if (changed.Count == 0 && values.Count == 0) {
-				throw new StepFailedException($"{tool} saved no settings file while it was open - change a setting (or change one and back), save, close it, and learn again");
-			}
-			var l = Keep(a_setup, a_step, tool, changed, values);
-			a_log.Say($"{tool}: {changed.Count} settings file(s) kept{(values.Count > 0 ? $", {values.Count} values of its window read off its log" : "")}");
-			return l;
-		} finally {
-			mutex.ReleaseMutex();
+		var changed = Changed(before, Scan(roots, skip)).Where(f => !f.EndsWith("_Debug_log.txt", StringComparison.OrdinalIgnoreCase)).ToList();
+		// a tool that keeps its window's values in no file (TexGen, DynDOLOD) still writes them into its debug log when it runs
+		var values = VarsLog(exe, a_step) is { } vl && File.GetLastWriteTimeUtc(vl) >= opened ? ReadVars(vl) : [];
+		if (changed.Count == 0 && values.Count == 0) {
+			throw new StepFailedException($"{tool} saved no settings file while it was open - change a setting (or change one and back), save, close it, and learn again");
 		}
+		var l = Keep(a_setup, a_step, tool, changed, values);
+		a_log.Say($"{tool}: {changed.Count} settings file(s) kept{(values.Count > 0 ? $", {values.Count} values of its window read off its log" : "")}");
+		return l;
 	}
 
 	// a run: the learned settings in place before the tool starts (each live file in the run record first, so a crash puts the

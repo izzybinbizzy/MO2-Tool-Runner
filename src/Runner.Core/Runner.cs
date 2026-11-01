@@ -198,12 +198,23 @@ public static class Runner
 				control.Close();
 			}
 			RecycleScratch(ctx, todo);
+			// the run has finished and the profile is back: what goes wrong from here is said, never a second put-back (and the
+			// after-run commands never run twice)
 			foreach (var cmd in setup.AfterRun) {
-				Hook(log, cmd, "after the run");
+				try {
+					Hook(log, cmd, "after the run");
+				} catch (StepFailedException e) {
+					log.Warn(e.Message);
+					journal.Notes.Add(e.Message);
+				}
 			}
 			ReportOverwrite(ctx);
 			PruneBackups(ctx);
-			ToolVersions.Remember(setup, mo2, journal.Steps.Where(r => r.State == StepState.Done).Select(r => r.Key));
+			try {
+				ToolVersions.Remember(setup, mo2, journal.Steps.Where(r => r.State == StepState.Done).Select(r => r.Key));
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				log.Warn("the tools' versions were not noted for the next run: " + e.Message);
+			}
 			journal.Verdict = $"finished: {todo.Count} step(s) in {total.Elapsed.TotalMinutes:0} min";
 			journal.Ended = DateTime.Now;
 			journal.Save();

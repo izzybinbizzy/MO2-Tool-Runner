@@ -59,7 +59,8 @@ public static class Preflight
 			var s = new StepSettings(a_setup.StepSettings(key) ?? []);
 			try {
 				outList.AddRange(step.Check(c, s));
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) {
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or FormatException) {
+				// a settings file that reads but holds a value of the wrong kind ("pglitemode": "yes") is the step's problem too
 				outList.Add(new Issue(key, true, "its check could not read a file: " + e.Message));
 			}
 			outList.AddRange(ToolVersions.Check(a_setup, a_mo2, key, s));

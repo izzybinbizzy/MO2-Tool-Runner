@@ -217,6 +217,12 @@ public static class Program
 		Equal(Path.Combine(f.Instance, "mods"), mo2.ModsDir, "mods folder");
 		Equal("Test", mo2.SelectedProfile, "selected profile");
 		Check(mo2.Executable("skse") != null, "executables found case-insensitively");
+		// an Executables entry's arguments as Qt escapes them: undone once (a share's \\ stays two backslashes)
+		var ini = Mo2Instance.ReadQtIni("""
+			[customExecutables]
+			1\arguments=-o:\"D:\\LOD\\\" -x \\\\srv\\share
+			""");
+		Equal(@"-o:""D:\LOD\"" -x \\srv\share", ini["customExecutables"]["1\\arguments"], "quotes and backslashes unescaped once");
 	}
 
 	// a real Mod Organizer, read only: MO2TR_REAL_MO2 = its ModOrganizer.exe, MO2TR_REAL_BASE = its instance folder (skipped
@@ -328,6 +334,9 @@ public static class Program
 		using var f = new FakeMo2();
 		var dep = ProfileOf(f).Dependents(["Output A"]);
 		Check(dep.ContainsKey("Output B") && dep.ContainsKey("Needs B"), "a mod needing OutA, and one needing that, go off too: " + string.Join(", ", dep.Keys));
+		// a setup that spells the mod otherwise than the list finds the same dependents
+		var spelt = ProfileOf(f).Dependents(["output a"]);
+		Check(spelt.ContainsKey("Output B") && spelt.ContainsKey("Needs B"), "the same dependents for another spelling: " + string.Join(", ", spelt.Keys));
 	}
 
 	static void T_DeactivatePluginsUnticksOnly()
@@ -1423,6 +1432,24 @@ public static class Program
 		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(40)), "seen again: its clock starts over");
 		Check(!SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(69)), "29 s later still not judged");
 		Check(SynthesisStep.StillBlocked(ref since, true, t.AddSeconds(70)), "30 s without a break: the step fails");
+	}
+
+	// a run that finished stays finished when an after-run command fails: said in its notes, the profile put back once, the
+	// command run once
+	static void T_AfterRunCommandFailingKeepsTheRunFinished()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => WriteOutput(ctx, "snowfixer", "Output A", "OutA.esp")));
+		var s = f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		var marker = Path.Combine(f.Root, "after ran.txt");
+		s.Root["afterRun"] = new JsonArray($"echo ran>>\"{marker}\" & exit /b 5");
+		s.Save();
+		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, "finished: " + r.Verdict);
+		var j = Journal.All(Runner.RunsDir(f.Data)).First();
+		Check(j.Notes.Any(n => n.Contains("exit code 5", StringComparison.Ordinal)), "the failed command is in the run's notes: " + string.Join("; ", j.Notes));
+		Equal(1, File.ReadAllLines(marker).Length, "the after-run command ran once");
+		Check(ProfileOf(f).IsOn("Output A"), "the built output on");
 	}
 
 	static void T_BeforeRunCommandMustSucceed()

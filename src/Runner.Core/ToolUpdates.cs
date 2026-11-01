@@ -140,7 +140,9 @@ public static partial class ToolUpdates
 		using var r = await a_http.PostAsJsonAsync("https://api.nexusmods.com/v2/graphql", query, a_ct).ConfigureAwait(false);
 		r.EnsureSuccessStatusCode();
 		var o = await r.Content.ReadFromJsonAsync<JsonObject>(a_ct).ConfigureAwait(false);
-		return o?["data"]?["legacyModsByDomain"]?["nodes"]?[0]?["version"]?.ToString() ?? throw new InvalidOperationException("Nexus gave no version");
+		// a mod number Nexus does not know answers with no nodes at all (an index into them would end the whole check)
+		var nodes = o?["data"]?["legacyModsByDomain"]?["nodes"] as JsonArray;
+		return (nodes is { Count: > 0 } ? nodes[0]?["version"]?.ToString() : null) ?? throw new InvalidOperationException($"Nexus has no mod {modId} (or gave no version)");
 	}
 
 	static async Task<string> GitHub(HttpClient a_http, string a_repo, CancellationToken a_ct)

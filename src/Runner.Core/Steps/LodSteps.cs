@@ -27,7 +27,7 @@ public sealed class XLodGenStep : IStep
 			try {
 				// xLODGen writes where its -o: says - and that is in Mod Organizer's entry for it, not here: the step puts its own
 				// output folder into the arguments it starts xLODGen with (the trial of 2026-10-27 21:36 wrote into another folder)
-				var args = a_s.Str("args") ?? WithOutput(Mo2Instance.Unescape(a_ctx.Mo2.Executable(a_s.Req("executable"))?.Arguments ?? ""), outDir);
+				var args = a_s.Str("args") ?? WithOutput(a_ctx.Mo2.Executable(a_s.Req("executable"))?.Arguments ?? "", outDir);
 				a_ctx.Log.Detail("xLODGen's arguments: " + args);
 				var proc = a_ctx.Control.RunExecutable(a_s.Req("executable"), image, args, a_ctx.Cancel);
 				var main = StepKit.WaitWindow(a_ctx, image, t => t.Contains("LODGen", StringComparison.Ordinal), TimeSpan.FromMinutes(10), "xLODGen's window");

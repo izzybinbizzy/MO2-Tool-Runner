@@ -388,7 +388,8 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 						}
 						mastersCache[full] = ms;
 					}
-					var hit = ms.FirstOrDefault(m => gone.TryGetValue(m, out var g) && owner.TryGetValue(m, out var o) && o == g);
+					// the setup may spell a mod otherwise than the list ("output a" / "Output A"): one mod
+					var hit = ms.FirstOrDefault(m => gone.TryGetValue(m, out var g) && owner.TryGetValue(m, out var o) && string.Equals(o, g, StringComparison.OrdinalIgnoreCase));
 					if (hit != null) {
 						extra[name] = $"{p} needs {hit} from {gone[hit]}";
 						off.Add(name);

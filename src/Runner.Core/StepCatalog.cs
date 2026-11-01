@@ -8,7 +8,7 @@ public static class StepCatalog
 {
 	public static readonly IReadOnlyList<StepInfo> All = [
 		new("shaders", "Shader caches", "The game compiles each shader mod's cache at its main menu (Community Shaders and its forks).", InGame: true),
-		new("cleansave", "Clean save", "DynDOLOD's clean save: deactivated in game, into a house, saved; outputs off; load, save; load, save.", InGame: true),
+		new("cleansave", "Clean save", "DynDOLOD's clean save: switched off in game, your place noted, to QASmoke, saved; the old outputs off; loaded, saved.", InGame: true),
 		new("wryebash", "Wrye Bash", "Builds the Bashed Patch - guided: Wrye Bash has no unattended mode, so you build it and press Done."),
 		new("synthesis", "Synthesis", "Runs the saved Synthesis pipeline."),
 		new("snowfixer", "SnowFixer", "Patches every snow mesh and record into one plugin."),
@@ -22,7 +22,7 @@ public static class StepCatalog
 		new("dyndolod", "DynDOLOD", "Object, tree and grass LOD."),
 		new("anvillod", "AnvilLOD", "Object, tree and grass LOD in place of DynDOLOD.", NeedsMo2: false),
 		new("pandora", "Pandora Behaviour Engine+", "Behaviour files for animation mods."),
-		new("playsave", "Save to play", "The newest clean save loaded with every new output on, saved again.", InGame: true),
+		new("playsave", "Save to play", "The clean save loaded with every new output on, you taken back to your place, DynDOLOD on again, saved.", InGame: true),
 	];
 
 	public static readonly IReadOnlyList<string> DefaultOrder = All.Select(s => s.Key).ToList();
