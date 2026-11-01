@@ -278,11 +278,12 @@ public sealed partial class MainViewModel : Observable
 			if (fs.Length == _logPos) {
 				return;
 			}
-			// a big old log: only its last 150 KB, from the first whole line in them
+			// a big old log: only its last 150 KB, from the first whole line in them - read from one byte before, so a window that
+			// starts right at a line's start keeps that line (the byte before it is its newline)
 			var skipped = fs.Length - 150_000 > _logPos;
-			_logPos = Math.Max(_logPos, fs.Length - 150_000);
-			fs.Seek(_logPos, SeekOrigin.Begin);
-			var bytes = new byte[fs.Length - _logPos];
+			var readFrom = skipped ? fs.Length - 150_000 - 1 : _logPos;
+			fs.Seek(readFrom, SeekOrigin.Begin);
+			var bytes = new byte[fs.Length - readFrom];
 			fs.ReadExactly(bytes);
 			var from = skipped ? Array.IndexOf(bytes, (byte)'\n') + 1 : 0;
 			// a line still being written (no newline yet) waits for the next look, so a UTF-8 letter is never cut in two
@@ -290,7 +291,7 @@ public sealed partial class MainViewModel : Observable
 			if (end == 0 || end <= from) {
 				return;
 			}
-			_logPos += end;
+			_logPos = readFrom + end;
 			LogChanged?.Invoke(System.Text.Encoding.UTF8.GetString(bytes, from, end - from), false);
 		} catch (IOException) {
 		}
@@ -553,13 +554,14 @@ public sealed partial class MainViewModel : Observable
 		if (j < 0 || j >= Steps.Count) {
 			return;
 		}
-		// the file's own places of the two steps (an entry the list does not show - no step name - keeps its place)
+		// the file's own places of the rows, in the list's order (the list shows exactly the entries that name a step; one that
+		// names none keeps its place, and a step listed twice moves the very entry its row shows)
 		var items = arr.ToList();
-		int At(string a_key) => items.FindIndex(n => n is JsonObject o && Setup.Str(o, "step") == a_key);
-		var (fi, fj) = (At(Steps[i].Key), At(Steps[j].Key));
-		if (fi < 0 || fj < 0) {
+		var shown = Enumerable.Range(0, items.Count).Where(x => items[x] is JsonObject o && Setup.Str(o, "step") != null).ToList();
+		if (shown.Count != Steps.Count) {
 			return;
 		}
+		var (fi, fj) = (shown[i], shown[j]);
 		(items[fi], items[fj]) = (items[fj], items[fi]);
 		arr.Clear();
 		foreach (var it in items) {

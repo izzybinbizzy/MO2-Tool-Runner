@@ -352,14 +352,18 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 	{
 		var st = States();
 		var off = new HashSet<string>(a_turningOff, StringComparer.OrdinalIgnoreCase);
-		var owner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		// every ticked mod that ships each plugin, and the game's own Data folder: a master goes missing only when every copy of
+		// it goes off (a second mod's copy, or the game's, keeps it there)
+		var providers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+		var data = Path.Combine(Mo2.GameDir, "Data");
+		var inData = Directory.Exists(data) ? Directory.GetFiles(data).Select(Path.GetFileName).OfType<string>().Where(Plugins.IsPlugin).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
 		// each mod folder listed once (the loop below repeats until nothing more goes off)
 		var inModCache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 		List<string> InMod(string a_mod) => inModCache.TryGetValue(a_mod, out var l) ? l : inModCache[a_mod] = Plugins.InMod(Mo2.ModDir(a_mod));
 		foreach (var (name, flag) in st) {
 			if (flag == '+') {
 				foreach (var p in InMod(name)) {
-					owner.TryAdd(p, name);
+					(providers.TryGetValue(p, out var ps) ? ps : providers[p] = []).Add(name);
 				}
 			}
 		}
@@ -388,8 +392,8 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 						}
 						mastersCache[full] = ms;
 					}
-					// the setup may spell a mod otherwise than the list ("output a" / "Output A"): one mod
-					var hit = ms.FirstOrDefault(m => gone.TryGetValue(m, out var g) && owner.TryGetValue(m, out var o) && string.Equals(o, g, StringComparison.OrdinalIgnoreCase));
+					// (the off set ignores case: the setup may spell a mod otherwise than the list - "output a" / "Output A")
+					var hit = ms.FirstOrDefault(m => gone.ContainsKey(m) && !inData.Contains(m) && providers.TryGetValue(m, out var ps) && ps.All(off.Contains));
 					if (hit != null) {
 						extra[name] = $"{p} needs {hit} from {gone[hit]}";
 						off.Add(name);

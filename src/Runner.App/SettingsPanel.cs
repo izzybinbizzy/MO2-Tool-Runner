@@ -262,7 +262,10 @@ public static class SettingsPanel
 					updRows.Children.Add(row);
 				}
 				var newer = res.Count(r => r.Newer);
+				// a row that could not be asked is never counted as up to date
+				var notChecked = res.Count(r => r.Problem != null);
 				updNote.Text = newer > 0 ? $"{newer} tool(s) have a newer version - download it from its page (Mod Manager Download), then open the tool once and learn its settings again." :
+					notChecked > 0 ? $"{notChecked} tool(s) could not be checked - see their rows; the others are up to date." :
 					"Every tool is up to date.";
 			} catch (Exception e) {
 				updNote.Text = "Could not check: " + e.Message;

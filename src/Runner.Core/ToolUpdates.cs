@@ -140,9 +140,15 @@ public static partial class ToolUpdates
 		using var r = await a_http.PostAsJsonAsync("https://api.nexusmods.com/v2/graphql", query, a_ct).ConfigureAwait(false);
 		r.EnsureSuccessStatusCode();
 		var o = await r.Content.ReadFromJsonAsync<JsonObject>(a_ct).ConfigureAwait(false);
-		// a mod number Nexus does not know answers with no nodes at all (an index into them would end the whole check)
+		// a mod number Nexus does not know answers with no nodes at all (an index into them would end the whole check); a service
+		// error answers with its own "errors" - said as that, never as a missing mod
 		var nodes = o?["data"]?["legacyModsByDomain"]?["nodes"] as JsonArray;
-		return (nodes is { Count: > 0 } ? nodes[0]?["version"]?.ToString() : null) ?? throw new InvalidOperationException($"Nexus has no mod {modId} (or gave no version)");
+		if (nodes is not { Count: > 0 }) {
+			var errors = o?["errors"] as JsonArray;
+			var detail = errors is { Count: > 0 } ? errors[0]?["message"]?.ToString() : null;
+			throw new InvalidOperationException(detail != null ? "Nexus error: " + detail : $"Nexus has no mod {modId}");
+		}
+		return nodes[0]?["version"]?.ToString() ?? throw new InvalidOperationException($"Nexus gave no version for mod {modId}");
 	}
 
 	static async Task<string> GitHub(HttpClient a_http, string a_repo, CancellationToken a_ct)

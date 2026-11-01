@@ -337,6 +337,12 @@ public static class Program
 		// a setup that spells the mod otherwise than the list finds the same dependents
 		var spelt = ProfileOf(f).Dependents(["output a"]);
 		Check(spelt.ContainsKey("Output B") && spelt.ContainsKey("Needs B"), "the same dependents for another spelling: " + string.Join(", ", spelt.Keys));
+		// a second ticked mod that ships the same master keeps it there: nothing needs to go off with the first
+		f.Mod("Copy A", ("OutA.esp", false, []));
+		var list = Path.Combine(f.ProfileDir, "modlist.txt");
+		File.WriteAllText(list, File.ReadAllText(list).Replace("+Base Mod", "+Copy A\r\n+Base Mod", StringComparison.Ordinal));
+		Equal(0, ProfileOf(f).Dependents(["Output A"]).Count, "another copy of its master stays on");
+		Check(ProfileOf(f).Dependents(["Output A", "Copy A"]).ContainsKey("Output B"), "every copy going off takes it along");
 	}
 
 	static void T_DeactivatePluginsUnticksOnly()
@@ -1442,13 +1448,13 @@ public static class Program
 		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => WriteOutput(ctx, "snowfixer", "Output A", "OutA.esp")));
 		var s = f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
 		var marker = Path.Combine(f.Root, "after ran.txt");
-		s.Root["afterRun"] = new JsonArray($"echo ran>>\"{marker}\" & exit /b 5");
+		s.Root["afterRun"] = new JsonArray($"echo ran>>\"{marker}\" & exit /b 5", $"echo next>>\"{marker}\"");
 		s.Save();
 		var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
 		Equal(RunState.Finished, r.State, "finished: " + r.Verdict);
 		var j = Journal.All(Runner.RunsDir(f.Data)).First();
 		Check(j.Notes.Any(n => n.Contains("exit code 5", StringComparison.Ordinal)), "the failed command is in the run's notes: " + string.Join("; ", j.Notes));
-		Equal(1, File.ReadAllLines(marker).Length, "the after-run command ran once");
+		Equal("ran|next", string.Join("|", File.ReadAllLines(marker).Select(l => l.Trim())), "each command ran once, and the one after the failed one too");
 		Check(ProfileOf(f).IsOn("Output A"), "the built output on");
 	}
 
