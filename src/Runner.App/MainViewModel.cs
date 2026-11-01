@@ -610,8 +610,8 @@ public sealed partial class MainViewModel : Observable
 		IsRunning = true;
 		Message = "";
 		var current = a_waiting ? "cleansave" : a_frame >= 6 ? "acmos" : "xlodgen";
+		// a setup without that step shows nothing running (never another step under its text)
 		var cur = Steps.ToList().FindIndex(s => s.Key == current);
-		cur = cur >= 0 ? cur : Math.Min(1, Steps.Count - 1);
 		double Usual(StepRow a_s) => DemoMinutes.GetValueOrDefault(a_s.Key, 5);
 		var start = new DateTime(2026, 10, 27, 21, 2, 10);
 		var log = new List<string>();
@@ -654,8 +654,8 @@ public sealed partial class MainViewModel : Observable
 		}
 		NowTitle = cur >= 0 ? Steps[cur].Name : "Getting ready";
 		Waiting = a_waiting ? "Load your newest save, wait until you can move, then press Done here." : "";
-		NowActivity = a_waiting ? "" : current == "xlodgen" ? "generating terrain LOD" : "painting roads into the terrain LOD";
-		ProgressKnown = !a_waiting;
+		NowActivity = a_waiting || cur < 0 ? "" : current == "xlodgen" ? "generating terrain LOD" : "painting roads into the terrain LOD";
+		ProgressKnown = !a_waiting && cur >= 0;
 		Progress = current == "xlodgen" ? Math.Min(0.97, now / 17.5) : Math.Min(0.95, now / 1.5);
 		Clock = Long(TimeSpan.FromMinutes(spent));
 		Left = $"about {Long(TimeSpan.FromMinutes(left))} left";

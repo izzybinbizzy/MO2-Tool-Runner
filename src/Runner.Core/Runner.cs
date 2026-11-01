@@ -37,20 +37,32 @@ public static class Runner
 
 	public static RunOutcome Run(RunRequest a_req, Func<Journal, IGuide>? a_guide = null)
 	{
-		using var mutex = new Mutex(false, MutexName, out _);
-		bool owned;
+		using var hold = HoldIfFree();
+		return hold == null ? new RunOutcome(RunState.Failed, "another run is going - wait for it, or stop it in the window", null) : RunLocked(a_req, a_guide);
+	}
+
+	// the run lock, for a run, a put-back, or a moment's work that must not overlap one (a look at what MO2 changed); null while
+	// another holds it. Released by the thread that took it.
+	public static IDisposable? HoldIfFree()
+	{
+		var m = new Mutex(false, MutexName, out _);
 		try {
-			owned = mutex.WaitOne(0);
+			if (m.WaitOne(0)) {
+				return new Held(m);
+			}
 		} catch (AbandonedMutexException) {
-			owned = true;
+			return new Held(m);
 		}
-		if (!owned) {
-			return new RunOutcome(RunState.Failed, "another run is going - wait for it, or stop it in the window", null);
-		}
-		try {
-			return RunLocked(a_req, a_guide);
-		} finally {
-			mutex.ReleaseMutex();
+		m.Dispose();
+		return null;
+	}
+
+	sealed class Held(Mutex a_m) : IDisposable
+	{
+		public void Dispose()
+		{
+			a_m.ReleaseMutex();
+			a_m.Dispose();
 		}
 	}
 
@@ -120,11 +132,15 @@ public static class Runner
 		Dictionary<string, byte[]>? snap0 = null;
 		var total = Stopwatch.StartNew();
 		try {
+			// what changed outside the runner is looked at before the setup's own before-run commands can change anything (Mod
+			// Organizer may still be open: its files as saved); what those commands change, and Mod Organizer's last save as it
+			// closes, is the run's (MO2 is closed only after them - one may be the claim that makes closing it safe)
+			NoteChanges(mo2, a_req.DataDir, Mo2Changes.Outside, log);
 			foreach (var cmd in setup.BeforeRun) {
 				Hook(log, cmd, "before the run");
 			}
 			control.Close();
-			NoteChanges(mo2, a_req.DataDir, Mo2Changes.Outside, log);
+			NoteChanges(mo2, a_req.DataDir, RunWho(journal), log);
 			BackupProfile(ctx);
 			foreach (var s in todo) {
 				if (new StepSettings(s.Settings).OutputMod is { } om) {
@@ -560,21 +576,8 @@ public static class Runner
 			return new RunOutcome(a_j.State, "that run is still going", a_j.Folder);
 		}
 		// one put-back at a time, never beside a run
-		using var mutex = new Mutex(false, MutexName, out _);
-		bool owned;
-		try {
-			owned = mutex.WaitOne(0);
-		} catch (AbandonedMutexException) {
-			owned = true;
-		}
-		if (!owned) {
-			return new RunOutcome(a_j.State, "a run or another put-back is going - try again when it is done", a_j.Folder);
-		}
-		try {
-			return RestoreLocked(a_j);
-		} finally {
-			mutex.ReleaseMutex();
-		}
+		using var hold = HoldIfFree();
+		return hold == null ? new RunOutcome(a_j.State, "a run or another put-back is going - try again when it is done", a_j.Folder) : RestoreLocked(a_j);
 	}
 
 	static RunOutcome RestoreLocked(Journal a_j)
@@ -593,6 +596,12 @@ public static class Runner
 			Cancel = CancellationToken.None, BackupFolder = a_j.BackupDir,
 		};
 		log.Say("RESTORE: putting the profile back after the run that did not finish");
+		// the run folder is <data>\Runs\<run>. What changed since the last look (the cut-off run's own changes, and anything
+		// done after it) is noted first under a neutral name, so the put-back's look holds only the put-back
+		var data = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(a_j.Folder)));
+		if (data != null) {
+			NoteChanges(mo2, data, "seen before putting back " + RunWho(a_j), log);
+		}
 		List<string> notBack;
 		List<string> filesNotBack;
 		try {
@@ -604,8 +613,7 @@ public static class Runner
 			log.Error("restore failed: " + Plain(e));
 			return new RunOutcome(RunState.Failed, "could not put the profile back: " + Plain(e), a_j.Folder);
 		}
-		// the run folder is <data>\Runs\<run>
-		if (Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(a_j.Folder))) is { } data) {
+		if (data != null) {
 			NoteChanges(mo2, data, "putting back " + RunWho(a_j), log);
 		}
 		if (notBack.Count > 0 || filesNotBack.Count > 0) {

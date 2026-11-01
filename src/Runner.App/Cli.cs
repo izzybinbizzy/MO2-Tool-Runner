@@ -139,11 +139,11 @@ public static class Cli
 		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
 		var dir = Mo2Changes.Dir(AppPaths.Data, mo2);
 		if (a_args.Contains("--look")) {
-			if (Engine.Active() != null || Journal.Interrupted(AppPaths.Runs) != null) {
+			if (Mo2Changes.RecordOutside(mo2, AppPaths.Data) is not { } n) {
 				Console.WriteLine("not looked: a run is going or did not finish - its changes would read as made outside the runner");
 				return 1;
 			}
-			Console.WriteLine($"{Mo2Changes.Record(mo2, AppPaths.Data, Mo2Changes.Outside).Count} new change(s)");
+			Console.WriteLine($"{n} new change(s)");
 		}
 		var since = Mo2Changes.WatchedSince(dir);
 		Console.WriteLine(since == null ? "not watched yet - a run or a look starts it" : $"watched since {since.Value.ToString("yyyy-MM-dd HH:mm", InvariantCulture)}");

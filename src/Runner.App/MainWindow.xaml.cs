@@ -290,20 +290,20 @@ public partial class MainWindow : Window
 		async void Load(bool a_look)
 		{
 			look.IsEnabled = false;
-			// a run's changes in the middle of it (or of one that did not finish) are never noted as made outside the runner
-			var busy = _vm.IsRunning || _vm.Interrupted != "" || Engine.Active() != null;
-			note.Text = a_look && !busy ? "Looking at Mod Organizer ..." : "Reading ...";
+			note.Text = a_look ? "Looking at Mod Organizer ..." : "Reading ...";
 			try {
 				var (shown, since, found) = await Task.Run(() => {
 					var mo2 = Mo2Instance.Load(setup!.Mo2Exe, setup.Mo2Instance);
 					var dir = Mo2Changes.Dir(AppPaths.Data, mo2);
-					var n = a_look && !busy ? Mo2Changes.Record(mo2, AppPaths.Data, Mo2Changes.Outside).Count : -1;
+					// a run's changes in the middle of it (or of one that did not finish) are never noted as made outside the runner:
+					// the look holds the run lock from its check to its end (null = a run goes or did not finish)
+					var n = a_look ? Mo2Changes.RecordOutside(mo2, AppPaths.Data) : -1;
 					return (Mo2Changes.Shown(Mo2Changes.Read(dir), setup.ChangesHideProfiles, setup.ChangesHideMods), Mo2Changes.WatchedSince(dir), n);
 				});
 				Show(shown);
 				note.Text = (since == null ? "Not watched yet: the first look starts it." : $"Watched since {since.Value.ToString("MMM d, yyyy HH:mm", InvariantCulture)}.") +
 					" A change made outside the runner shows with the time it was noticed - when this view opens, on Look now, or when a run starts." +
-					(found > 0 ? $" {found} new." : found == 0 ? " Nothing new." : busy && a_look ? " No new look while a run is going or did not finish." : "") +
+					(found > 0 ? $" {found} new." : found == 0 ? " Nothing new." : found == null ? " No new look while a run is going or did not finish." : "") +
 					(rows.Count == 0 && since != null ? " No changes noted yet." : "");
 				Fill();
 			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) {

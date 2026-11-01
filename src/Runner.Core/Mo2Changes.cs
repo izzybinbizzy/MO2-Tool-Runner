@@ -78,11 +78,27 @@ public static class Mo2Changes
 		foreach (var p in a_mo2.Profiles()) {
 			var file = Path.Combine(a_mo2.ProfileDir(p), "modlist.txt");
 			if (File.Exists(file)) {
-				look.Profiles[p] = Pane(Files.ReadSharedText(file).Split('\n'));
+				look.Profiles[p] = Pane(Files.DecodeText(ReadWhole(file, p)).Split('\n'));
 			}
 		}
 		look.Since = look.Taken;
 		return look;
+	}
+
+	// a mod list read while something rewrites it would report its missing mods as removed (and the next look as added): it
+	// counts only when two reads in a row agree and it is not empty (MO2 always writes its first line) - else no look at all
+	static byte[] ReadWhole(string a_file, string a_profile)
+	{
+		var last = Files.ReadShared(a_file);
+		for (var i = 0; i < 5; ++i) {
+			Thread.Sleep(i == 0 ? 0 : 200);
+			var again = Files.ReadShared(a_file);
+			if (again.AsSpan().SequenceEqual(last) && again.Length > 0) {
+				return again;
+			}
+			last = again;
+		}
+		throw new IOException($"profile {a_profile}'s mod list was being changed (or was empty) while it was read - nothing noted this time");
 	}
 
 	// one profile's pane before and now -> (mod, what changed)
@@ -162,7 +178,8 @@ public static class Mo2Changes
 		rows.AddRange(a_old.Mods.Where(m => !a_new.Mods.Contains(m)).Select(m => new Change(when, a_who, m, "removed from Mod Organizer", [])));
 		rows.AddRange(a_new.Profiles.Keys.Where(p => !a_old.Profiles.ContainsKey(p)).Order(Names).Select(p => new Change(when, a_who, p, "profile added", [p])));
 		rows.AddRange(a_old.Profiles.Keys.Where(p => !a_new.Profiles.ContainsKey(p)).Order(Names).Select(p => new Change(when, a_who, p, "profile removed", [p])));
-		var grouped = new Dictionary<(string Mod, string What), List<string>>();
+		// a mod spelt "PG Patch" in one profile and "PG patch" in another is one mod (one row, the first spelling)
+		var grouped = new Dictionary<(string Mod, string What), List<string>>(new ModAndWhat());
 		foreach (var (p, now) in a_new.Profiles.OrderBy(p => p.Key, Names)) {
 			if (!a_old.Profiles.TryGetValue(p, out var before)) {
 				continue;
@@ -186,19 +203,52 @@ public static class Mo2Changes
 		Directory.CreateDirectory(dir);
 		using var gate = Gate.Take(dir);
 		var lookFile = Path.Combine(dir, "last look.json");
+		var nextFile = Path.Combine(dir, "next look.json");
+		Settle(dir, lookFile, nextFile);
 		var old = ReadLook(lookFile);
 		var now = Take(a_mo2);
-		var rows = old == null ? [] : Between(old, now, a_who);
 		if (old != null) {
+			// a profile of the last look whose folder is there but whose mod list is not (MO2 replacing it) is not "removed"
+			if (old.Profiles.Keys.FirstOrDefault(p => !now.Profiles.ContainsKey(p) && Directory.Exists(a_mo2.ProfileDir(p))) is { } gone) {
+				throw new IOException($"profile {gone}'s mod list is missing for now - nothing noted this time");
+			}
 			now.Since = old.Since;
 		}
+		var rows = old == null ? [] : Between(old, now, a_who);
+		// one commit point: the next look first, then its rows, then the next look becomes the last one - stopped in between, the
+		// next look is finished (its rows were kept) or dropped (they were not) the next time, so no change is ever kept twice
+		Files.WriteAtomic(nextFile, LookJson(now).ToJsonString());
 		if (rows.Count > 0) {
-			var all = Read(dir);
+			var all = ReadKept(dir);
 			all.AddRange(rows);
 			WriteRows(dir, all.Count > KeepRows ? all[^KeepRows..] : all);
 		}
-		Files.WriteAtomic(lookFile, LookJson(now).ToJsonString());
+		File.Move(nextFile, lookFile, true);
 		return rows;
+	}
+
+	// a look named as made outside the runner - only while no run or put-back goes and none is left unfinished (their changes
+	// would read as made outside them): the run lock held from the check to the end of the look. Null = not looked.
+	public static int? RecordOutside(Mo2Instance a_mo2, string a_dataDir)
+	{
+		using var hold = Runner.HoldIfFree();
+		if (hold == null || Journal.Interrupted(Runner.RunsDir(a_dataDir)) != null) {
+			return null;
+		}
+		return Record(a_mo2, a_dataDir, Outside).Count;
+	}
+
+	static void Settle(string a_dir, string a_lookFile, string a_nextFile)
+	{
+		if (!File.Exists(a_nextFile)) {
+			return;
+		}
+		var next = ReadLook(a_nextFile);
+		if (next != null && Read(a_dir).Any(r => r.When == next.Taken)) {
+			File.Move(a_nextFile, a_lookFile, true);
+		} else {
+			File.Delete(a_nextFile);
+		}
 	}
 
 	// what is kept, oldest first; and since when MO2 is watched (null = never looked)
@@ -209,8 +259,27 @@ public static class Mo2Changes
 			return [];
 		}
 		try {
-			return (JsonNode.Parse(Files.ReadSharedText(file)) as JsonArray ?? new JsonArray()).OfType<JsonObject>().Select(RowOf).OfType<Change>().ToList();
-		} catch (JsonException) {
+			return ParseRows(Files.ReadSharedText(file));
+		} catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) {
+			return [];
+		}
+	}
+
+	static List<Change> ParseRows(string a_text) =>
+		(JsonNode.Parse(a_text) as JsonArray ?? new JsonArray()).OfType<JsonObject>().Select(RowOf).OfType<Change>().ToList();
+
+	// the rows to add to: a kept file that does not read is never written over - it is set aside under its own name and a new
+	// one starts
+	static List<Change> ReadKept(string a_dir)
+	{
+		var file = Path.Combine(a_dir, "changes.json");
+		if (!File.Exists(file)) {
+			return [];
+		}
+		try {
+			return ParseRows(Files.ReadSharedText(file));
+		} catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) {
+			File.Move(file, Path.Combine(a_dir, $"changes unreadable {DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss", InvariantCulture)}.json"));
 			return [];
 		}
 	}
@@ -218,13 +287,14 @@ public static class Mo2Changes
 	public static DateTime? WatchedSince(string a_dir) => ReadLook(Path.Combine(a_dir, "last look.json"))?.Since;
 
 	// the rows a player wants: profiles left out are taken off each row (a row left with none of its profiles is dropped), and
-	// a mod whose name starts with a text left out is dropped
+	// a mod whose name starts with a text left out is dropped (a profile's own row is left to the profiles left out)
 	public static List<Change> Shown(IEnumerable<Change> a_rows, IReadOnlyCollection<string> a_hideProfiles, IReadOnlyCollection<string> a_hideModsStarting)
 	{
 		var hide = new HashSet<string>(a_hideProfiles, Names);
 		var shown = new List<Change>();
 		foreach (var r in a_rows) {
-			if (a_hideModsStarting.Any(s => s != "" && r.Mod.StartsWith(s, StringComparison.OrdinalIgnoreCase))) {
+			var profileRow = r.What is "profile added" or "profile removed";
+			if (!profileRow && a_hideModsStarting.Any(s => s != "" && r.Mod.StartsWith(s, StringComparison.OrdinalIgnoreCase))) {
 				continue;
 			}
 			if (r.Profiles.Count == 0) {
@@ -253,7 +323,7 @@ public static class Mo2Changes
 		var arr = new JsonArray();
 		foreach (var r in a_rows) {
 			arr.Add(new JsonObject {
-				["when"] = r.When.ToString("s", InvariantCulture), ["who"] = r.Who, ["mod"] = r.Mod, ["what"] = r.What,
+				["when"] = r.When.ToString("o", InvariantCulture), ["who"] = r.Who, ["mod"] = r.Mod, ["what"] = r.What,
 				["profiles"] = new JsonArray(r.Profiles.Select(p => (JsonNode)JsonValue.Create(p)).ToArray()),
 			});
 		}
@@ -266,8 +336,9 @@ public static class Mo2Changes
 		foreach (var (p, pane) in a_l.Profiles) {
 			profiles[p] = new JsonArray(pane.Select(m => (JsonNode)new JsonArray(m.Name, m.On, m.Section)).ToArray());
 		}
+		// to the tick: a look's time is the name its rows carry (Settle tells two looks of one second apart)
 		return new JsonObject {
-			["taken"] = a_l.Taken.ToString("s", InvariantCulture), ["since"] = a_l.Since.ToString("s", InvariantCulture),
+			["taken"] = a_l.Taken.ToString("o", InvariantCulture), ["since"] = a_l.Since.ToString("o", InvariantCulture),
 			["mods"] = new JsonArray(a_l.Mods.Select(m => (JsonNode)JsonValue.Create(m)).ToArray()), ["profiles"] = profiles,
 		};
 	}
@@ -296,6 +367,12 @@ public static class Mo2Changes
 		} catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) {
 			return null;
 		}
+	}
+
+	sealed class ModAndWhat : IEqualityComparer<(string Mod, string What)>
+	{
+		public bool Equals((string Mod, string What) a_x, (string Mod, string What) a_y) => Names.Equals(a_x.Mod, a_y.Mod) && a_x.What == a_y.What;
+		public int GetHashCode((string Mod, string What) a_k) => HashCode.Combine(Names.GetHashCode(a_k.Mod), a_k.What.GetHashCode(StringComparison.Ordinal));
 	}
 
 	// the window and a command-line run may look at once: one at a time per instance

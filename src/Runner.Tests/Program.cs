@@ -17,6 +17,9 @@ public static class Program
 
 	public static int Main(string[] a_args)
 	{
+		if (a_args.Length > 0 && a_args[0] == "-autorun") {
+			return FakeAcmos(a_args);
+		}
 		var filter = a_args.Length > 0 ? a_args[0] : "";
 		// a game another session runs on this PC is not this test's business
 		Preflight.GameCheck = () => [];
@@ -671,10 +674,85 @@ public static class Program
 		Check(shown.Any(r => r.Mod == "Base Mod" && r.Profiles.SequenceEqual(["Test"])), "Second taken off the shared row");
 		Check(!shown.Any(r => r.Mod == "Replaced"), "a row only of Second dropped");
 		Check(!shown.Any(r => r.Mod.StartsWith("TEST", StringComparison.Ordinal)) && shown.Any(r => r.Mod == "Fresh Mod"), "test mods left out, Mod Organizer's rows kept");
+		// a profile's own row is never dropped by a mod-name filter (only by the profiles left out)
+		var p3 = Path.Combine(f.Instance, "profiles", "TEST Profile");
+		Directory.CreateDirectory(p3);
+		File.Copy(Path.Combine(f.ProfileDir, "modlist.txt"), Path.Combine(p3, "modlist.txt"));
+		var added = Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		Check(Mo2Changes.Shown(added, [], ["TEST "]).Any(r => r.What == "profile added" && r.Mod == "TEST Profile"), "a profile named like a hidden mod still shows");
+		// one mod spelt two ways in two profiles is ONE row
+		File.WriteAllText(Path.Combine(f.ProfileDir, "modlist.txt"), File.ReadAllText(Path.Combine(f.ProfileDir, "modlist.txt")).Replace("+Master Mod", "-Master Mod", StringComparison.Ordinal));
+		File.WriteAllText(Path.Combine(second, "modlist.txt"), File.ReadAllText(Path.Combine(second, "modlist.txt")).Replace("+Master Mod", "-master mod", StringComparison.Ordinal));
+		var cased = Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		Equal(1, cased.Count(r => r.What == "unticked" && r.Mod.Equals("Master Mod", StringComparison.OrdinalIgnoreCase)), "one row for both spellings: " + string.Join("; ", cased.Select(r => $"{r.Mod} {r.What} [{string.Join(",", r.Profiles)}]")));
+		// a mod list read half-written (empty here) or missing for a known profile: no look at all, nothing written
+		var lookBytes = File.ReadAllBytes(Path.Combine(dir, "last look.json"));
+		var rowsBytes = File.ReadAllBytes(Path.Combine(dir, "changes.json"));
+		var secondList = Path.Combine(second, "modlist.txt");
+		var keepList = File.ReadAllBytes(secondList);
+		File.WriteAllBytes(secondList, []);
+		Throws<IOException>(() => Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside), "an empty mod list is not a look");
+		File.Delete(secondList);
+		Throws<IOException>(() => Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside), "a known profile's missing mod list is not a removed profile");
+		Check(File.ReadAllBytes(Path.Combine(dir, "last look.json")).AsSpan().SequenceEqual(lookBytes) && File.ReadAllBytes(Path.Combine(dir, "changes.json")).AsSpan().SequenceEqual(rowsBytes), "nothing written by a look that did not read");
+		File.WriteAllBytes(secondList, keepList);
+		// a look stopped between its rows and its own file: finished next time, its rows kept once
+		File.WriteAllText(f.ProfileDir + "\\modlist.txt", File.ReadAllText(f.ProfileDir + "\\modlist.txt").Replace("+Output A", "-Output A", StringComparison.Ordinal));
+		var lastLook = File.ReadAllBytes(Path.Combine(dir, "last look.json"));
+		var once = Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		Check(once.Any(r => r.Mod == "Output A"), "the change seen");
+		File.Copy(Path.Combine(dir, "last look.json"), Path.Combine(dir, "next look.json"));
+		File.WriteAllBytes(Path.Combine(dir, "last look.json"), lastLook);
+		var total = Mo2Changes.Read(dir).Count;
+		Equal(0, Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count, "the stopped look finished, not seen again");
+		Equal(total, Mo2Changes.Read(dir).Count, "no row kept twice");
+		Check(!File.Exists(Path.Combine(dir, "next look.json")), "the next look became the last one");
+		// stopped before its rows were kept (no row carries its time): dropped, and the change it saw is found again
+		File.WriteAllText(f.ProfileDir + "\\modlist.txt", File.ReadAllText(f.ProfileDir + "\\modlist.txt").Replace("+Output B", "-Output B", StringComparison.Ordinal));
+		var unkept = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "last look.json")))!.AsObject();
+		unkept["taken"] = "2001-01-01T00:00:00.0000000";
+		foreach (var m in unkept["profiles"]!["Test"]!.AsArray().OfType<JsonArray>().Where(m => m[0]!.ToString() == "Output B")) {
+			m[1] = false;
+		}
+		File.WriteAllText(Path.Combine(dir, "next look.json"), unkept.ToJsonString());
+		Check(Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Any(r => r.Mod == "Output B" && r.What == "unticked"), "a look whose rows were never kept is dropped: the change is found");
+		// a damaged history is never written over: set aside whole, and a new one starts
+		var history = Path.Combine(dir, "changes.json");
+		File.WriteAllText(history, "[ { not json");
+		File.WriteAllText(f.ProfileDir + "\\modlist.txt", File.ReadAllText(f.ProfileDir + "\\modlist.txt").Replace("-Base Mod", "+Base Mod", StringComparison.Ordinal));
+		Check(Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count > 0, "(a change to keep)");
+		var aside = Directory.GetFiles(dir, "changes unreadable *.json");
+		Check(aside.Length == 1 && File.ReadAllText(aside[0]) == "[ { not json", "the damaged history kept as it was, beside the new one");
+		Check(Mo2Changes.Read(dir).Count > 0, "the new history reads");
 		// a damaged last look starts the watch again - never a failure
+		var keptNow = Mo2Changes.Read(dir).Count;
 		File.WriteAllText(Path.Combine(dir, "last look.json"), "{ not json");
 		Equal(0, Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside).Count, "a damaged look starts over");
-		Equal(kept.Count, Mo2Changes.Read(dir).Count, "the rows already kept stay");
+		Equal(keptNow, Mo2Changes.Read(dir).Count, "the rows already kept stay");
+	}
+
+	// "Look now" and the command line's --look hold the run lock from their check to their end: never beside a run
+	static void T_OutsideLookNeverBesideARun()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		using var taken = new ManualResetEventSlim();
+		using var release = new ManualResetEventSlim();
+		var t = new Thread(() => {
+			using var hold = Runner.HoldIfFree();
+			taken.Set();
+			release.Wait();
+		});
+		t.Start();
+		taken.Wait();
+		try {
+			Equal<int?>(null, Mo2Changes.RecordOutside(mo2, f.Data), "no look while a run holds the lock");
+			Check(!Directory.Exists(Mo2Changes.Dir(f.Data, mo2)) || Directory.GetFiles(Mo2Changes.Dir(f.Data, mo2)).Length == 0, "nothing written");
+		} finally {
+			release.Set();
+			t.Join();
+		}
+		Equal<int?>(0, Mo2Changes.RecordOutside(mo2, f.Data), "free again: the look is taken");
 	}
 
 	static void T_RunNotesWhatItChangedApartFromWhatWasChangedOutside()
@@ -695,6 +773,43 @@ public static class Program
 		Check(rows.Any(x => x.Mod == "New Output" && x.What == "added to Mod Organizer" && x.Who.StartsWith("the run of", StringComparison.Ordinal)), "the run's new mod, as the run's: " + text);
 		Check(rows.Any(x => x.Mod == "New Output" && x.What.StartsWith("added (ticked", StringComparison.Ordinal) && x.Who.StartsWith("the run of", StringComparison.Ordinal)), "ticked in the profile by the run: " + text);
 		Check(!rows.Any(x => x.Mod is "Output A" or "Output B"), "outputs switched off and back on during the run are no net change: " + text);
+
+		// the setup's own before-run command changes MO2: the run's change, not one made outside it
+		var changed = Path.Combine(f.Root, "modlist changed.txt");
+		File.WriteAllText(changed, File.ReadAllText(list).Replace("+Master Mod", "-Master Mod", StringComparison.Ordinal));
+		var s = Setup.Load(f.SetupFile);
+		s.Root["beforeRun"] = new JsonArray($"copy /y \"{changed}\" \"{list}\" >nul");
+		s.Save();
+		r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+		Equal(RunState.Finished, r.State, "finished: " + r.Verdict);
+		rows = Mo2Changes.Read(Mo2Changes.Dir(f.Data, mo2));
+		text = string.Join("; ", rows.Select(x => $"{x.Mod} {x.What} ({x.Who})"));
+		Check(rows.Any(x => x.Mod == "Master Mod" && x.What == "unticked" && x.Who.StartsWith("the run of", StringComparison.Ordinal)), "the before-run command's change is the run's: " + text);
+		Check(!rows.Any(x => x.Mod == "Master Mod" && x.Who == Mo2Changes.Outside), "never as made outside the runner: " + text);
+	}
+
+	// a put-back after a crash: what changed before it (the cut-off run, the player since) is noted apart from the put-back's own
+	static void T_PutBackNotesOnlyItsOwnChanges()
+	{
+		using var f = new FakeMo2();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => {
+			ctx.Journal.Pid = 999999;
+			ctx.Journal.Save();
+			throw new CrashForTest();
+		}));
+		f.WriteSetup(("snowfixer", new JsonObject { ["output_mod"] = "Output A" }));
+		try {
+			RunUntilCrash(f);
+		} catch (CrashForTest) {
+		}
+		Equal(RunState.Restored, Runner.Restore(Journal.Interrupted(Runner.RunsDir(f.Data))!).State, "restored");
+		var rows = Mo2Changes.Read(Mo2Changes.Dir(f.Data, mo2));
+		var text = string.Join("; ", rows.Select(x => $"{x.Mod} {x.What} ({x.Who})"));
+		Check(rows.Any(x => x.Mod == "Output A" && x.What == "unticked" && x.Who.StartsWith("seen before putting back", StringComparison.Ordinal)), "the cut-off run's change noted before the put-back: " + text);
+		Check(rows.Any(x => x.Mod == "Output A" && x.What == "ticked" && x.Who.StartsWith("putting back", StringComparison.Ordinal)), "the put-back's own change: " + text);
+		Check(!rows.Any(x => x.What == "unticked" && x.Who.StartsWith("putting back", StringComparison.Ordinal)), "nothing from before it named as the put-back's: " + text);
 	}
 
 	static void T_FailedStepPutsItsOldOutputBack()
@@ -1188,11 +1303,104 @@ public static class Program
 			Directory.CreateDirectory(scratch);
 			Equal(mod, AcmosStep.LodFolder(scratch + "\\", mod + "\\"), "an empty scratch: the mod xLODGen moved it into");
 			Directory.CreateDirectory(Path.Combine(scratch, "textures", "terrain"));
+			File.WriteAllText(Path.Combine(scratch, "textures", "terrain", "readme.txt"), "x");
+			Equal(mod, AcmosStep.LodFolder(scratch, mod), "a stray file in the scratch is no terrain LOD");
 			File.WriteAllText(Path.Combine(scratch, "textures", "terrain", "b.dds"), "x");
 			Equal(scratch, AcmosStep.LodFolder(scratch, mod), "the scratch folder first when it holds the LOD");
 		} finally {
 			Directory.Delete(dir, true);
 		}
+	}
+
+	// ACMOS itself, with this test program standing in for it (Main's -autorun): the LOD already in the mod is painted THERE
+	// (never moved into itself), a move that fails half way puts the plain textures back, and a "reads" in MO2's folders is refused
+	static void T_AcmosPaintsTheLodInTheModItIsIn()
+	{
+		using var f = new FakeMo2();
+		var keepDesktop = HiddenDesktop.OnPlayersDesktop;
+		HiddenDesktop.OnPlayersDesktop = _ => [];
+		var logs = Path.Combine(AppContext.BaseDirectory, "logs");
+		var hadLogs = Directory.Exists(logs);
+		try {
+			var scratch = Path.Combine(f.Root, "Terrain LOD");
+			Directory.CreateDirectory(scratch);
+			f.Mod("Terrain LOD Mod");
+			var tex = Path.Combine(f.Mods, "Terrain LOD Mod", "textures", "terrain", "tamriel");
+			Directory.CreateDirectory(tex);
+			foreach (var n in new[] { "a.dds", "c.dds" }) {
+				File.WriteAllText(Path.Combine(tex, n), "plain");
+			}
+			// this test program itself (its apphost beside it, however the tests are started)
+			var standIn = Path.Combine(AppContext.BaseDirectory, Path.GetFileNameWithoutExtension(typeof(Program).Assembly.Location) + ".exe");
+			var settings = new JsonObject { ["exe"] = standIn, ["output_mod"] = "Terrain LOD Mod", ["reads"] = scratch, ["min_files"] = 1, ["roads"] = "Paths Only" };
+			f.WriteSetup(("acmos", settings));
+			var ctx = StepContext(f, "acmos");
+			new AcmosStep().Run(ctx, new StepSettings(settings));
+			Equal("painted", File.ReadAllText(Path.Combine(tex, "a.dds")), "painted in the mod");
+			Equal(0, Directory.GetFileSystemEntries(scratch).Length, "the empty scratch was never moved into the mod");
+			var told = Directory.GetDirectories(logs).Order(StringComparer.Ordinal).Select(d => Path.Combine(d, "log.log")).Where(File.Exists).Select(File.ReadAllText).Last();
+			Check(told.Contains(Path.Combine(f.Mods, "Terrain LOD Mod"), StringComparison.OrdinalIgnoreCase), "ACMOS was given the mod's LOD: " + told);
+			Check(ctx.Journal.Kept.All(k => k.Done), "the plain textures are never put back over the painted ones");
+			Check(ctx.PendingEnable.Contains("Terrain LOD Mod"), "the mod goes on after the step");
+			ctx.Log.Dispose();
+
+			// the move fails half way (c.dds held open): the plain textures come back where they could
+			foreach (var n in new[] { "a.dds", "c.dds" }) {
+				File.WriteAllText(Path.Combine(tex, n), "plain");
+			}
+			var ctx2 = StepContext(f, "acmos");
+			using (new FileStream(Path.Combine(tex, "c.dds"), FileMode.Open, FileAccess.Read, FileShare.Read)) {
+				Throws<StepFailedException>(() => new AcmosStep().Run(ctx2, new StepSettings(settings)), "a failed move fails the step");
+			}
+			Equal("plain", File.ReadAllText(Path.Combine(tex, "a.dds")), "a texture already replaced is put back");
+			Equal("plain", File.ReadAllText(Path.Combine(tex, "c.dds")), "the one that could not be replaced stays plain");
+			ctx2.Log.Dispose();
+
+			// "reads" inside MO2's mods folder: refused before a run
+			var bad = new JsonObject { ["exe"] = standIn, ["output_mod"] = "Terrain LOD Mod", ["reads"] = Path.Combine(f.Mods, "Terrain LOD Mod") };
+			var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+			var c = new CheckContext { Setup = Setup.Load(f.SetupFile), Mo2 = mo2, Profile = ProfileOf(f) };
+			Check(new AcmosStep().Check(c, new StepSettings(bad)).Any(i => i.Blocking && i.Text.Contains("mods folder", StringComparison.Ordinal)), "the mod as its own source is refused");
+		} finally {
+			HiddenDesktop.OnPlayersDesktop = keepDesktop;
+			if (!hadLogs && Directory.Exists(logs)) {
+				Directory.Delete(logs, true);
+			}
+		}
+	}
+
+	// a step run on its own, as a run would (its record, log, backup folder and MO2 control)
+	static RunContext StepContext(FakeMo2 a_f, string a_step)
+	{
+		var s = Setup.Load(a_f.SetupFile);
+		var mo2 = Mo2Instance.Load(s.Mo2Exe, s.Mo2Instance);
+		var id = Guid.NewGuid().ToString("N")[..8];
+		var j = new Journal { Id = id, Folder = Path.Combine(Runner.RunsDir(a_f.Data), id), SetupFile = Path.GetFullPath(a_f.SetupFile), SetupName = "Test", Profile = "Test",
+			Mo2Exe = s.Mo2Exe, Mo2Instance = s.Mo2Instance, BackupDir = Path.Combine(a_f.Backups, id), Started = DateTime.Now, State = RunState.Running,
+			Steps = [new StepRecord { Key = a_step, State = StepState.Running }] };
+		Directory.CreateDirectory(j.Folder);
+		j.Save();
+		var log = new RunLog(j.Folder);
+		return new RunContext { Setup = s, Mo2 = mo2, Profile = new Profile(mo2, "Test", () => false), Control = new Mo2Control(mo2, "Test", log), Log = log,
+			Journal = j, Cancel = CancellationToken.None, BackupFolder = j.BackupDir };
+	}
+
+	// the stand-in for ACMOS Road Generator: every terrain texture of -l: painted into -o:, and the log ACMOS writes beside itself
+	// (naming the folder it was given)
+	static int FakeAcmos(string[] a_args)
+	{
+		string Arg(string a_p) => a_args.First(a => a.StartsWith(a_p, StringComparison.Ordinal))[a_p.Length..];
+		var lod = Arg("-l:");
+		var outDir = Arg("-o:");
+		foreach (var t in Directory.EnumerateFiles(Path.Combine(lod, "textures", "terrain"), "*.dds", SearchOption.AllDirectories)) {
+			var dst = Path.Combine(outDir, Path.GetRelativePath(lod, t));
+			Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+			File.WriteAllText(dst, "painted");
+		}
+		var log = Path.Combine(AppContext.BaseDirectory, "logs", DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss-fffffff", System.Globalization.CultureInfo.InvariantCulture));
+		Directory.CreateDirectory(log);
+		File.WriteAllText(Path.Combine(log, "log.log"), $"read {lod}\nAll Done!\n");
+		return 0;
 	}
 
 	// both trials of 2026-10-27 ticked xLODGen's LOD levels, the first list in its options, instead of its worldspaces

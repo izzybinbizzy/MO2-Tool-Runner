@@ -99,7 +99,13 @@ public partial class App : Application
 		var w = new MainWindow { ShowActivated = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -30000, Top = -30000 };
 		w.Show();
 		Pump(w, 2500);
-		var name = (w.DataContext as MainViewModel)?.SelectedSetup?.Name ?? "My Profile";
+		// the pictures show a setup's steps: with none in the data folder they would be empty
+		if ((w.DataContext as MainViewModel)?.SelectedSetup == null) {
+			w.Close();
+			Console.Error.WriteLine("no setup in the data folder - make one (New setup), then draw the pictures again");
+			return 1;
+		}
+		var name = (w.DataContext as MainViewModel)!.SelectedSetup!.Name;
 		w.DemoReady();
 		Pump(w, 600);
 		Picture(w, a_dir, "1 the steps");
