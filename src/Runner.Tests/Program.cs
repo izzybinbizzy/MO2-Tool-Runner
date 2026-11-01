@@ -343,6 +343,11 @@ public static class Program
 		File.WriteAllText(list, File.ReadAllText(list).Replace("+Base Mod", "+Copy A\r\n+Base Mod", StringComparison.Ordinal));
 		Equal(0, ProfileOf(f).Dependents(["Output A"]).Count, "another copy of its master stays on");
 		Check(ProfileOf(f).Dependents(["Output A", "Copy A"]).ContainsKey("Output B"), "every copy going off takes it along");
+		// a master the game's own Data folder ships too is never missing when the only mod that also ships it goes off
+		f.Mod("Output C", ("Skyrim.esm", true, []));
+		f.Mod("Needs Sky", ("NeedsSky.esp", false, ["Skyrim.esm"]));
+		File.WriteAllText(list, File.ReadAllText(list).Replace("+Base Mod", "+Output C\r\n+Needs Sky\r\n+Base Mod", StringComparison.Ordinal));
+		Equal(0, ProfileOf(f).Dependents(["Output C"]).Count, "the game's own copy of the master keeps its dependent on");
 	}
 
 	static void T_DeactivatePluginsUnticksOnly()
@@ -1092,6 +1097,12 @@ public static class Program
 		Check(!ToolUpdates.IsNewer("", "1.0"), "no version of ours: never called newer");
 		Check(ToolUpdates.IsNewer("1.9.2", "2.0"), "2.0 (its zero trimmed) is newer than 1.9.2");
 		Check(!ToolUpdates.IsNewer("2.1.0", "2.0"), "2.0 is not newer than 2.1.0");
+		// the line under the rows counts every tool a row names (TexGen and DynDOLOD share one row)
+		var both = new ToolUpdates.Result("texgen", "TexGen / DynDOLOD", "3.0", "", false, "page", "could not ask its page: x", 2);
+		var one = new ToolUpdates.Result("pgpatcher", "PGPatcher", "1.0", "1.0", false, "page2", null);
+		Check(ToolUpdates.Summary([both, one]).StartsWith("2 tool(s) could not be checked", StringComparison.Ordinal), "a shared row's two tools both counted: " + ToolUpdates.Summary([both, one]));
+		Check(ToolUpdates.Summary([both with { Problem = null, Newer = true }, one]).StartsWith("2 tool(s) have a newer version", StringComparison.Ordinal), "both tools of a shared row newer");
+		Equal("Every tool is up to date.", ToolUpdates.Summary([one]), "nothing newer, nothing unchecked");
 	}
 
 	// the settings a tool's own window wrote: found, kept, put in place for a run and put back after

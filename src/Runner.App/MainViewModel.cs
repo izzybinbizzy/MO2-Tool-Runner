@@ -528,15 +528,16 @@ public sealed partial class MainViewModel : Observable
 	// the order the setup would have after moving a step; the warnings it would break (empty = fine)
 	public List<string> WarningsIfMoved(StepRow a_row, int a_delta)
 	{
-		var keys = Steps.Select(s => s.Key).ToList();
-		var i = keys.IndexOf(a_row.Key);
+		// each row keeps its own tick: a step listed twice is two rows, and the moved one is this very row
+		var rows = Steps.Select(s => (s.Key, s.On)).ToList();
+		var i = Steps.IndexOf(a_row);
 		var j = i + a_delta;
-		if (j < 0 || j >= keys.Count) {
+		if (i < 0 || j < 0 || j >= rows.Count) {
 			return [];
 		}
-		var before = StepCatalog.OrderWarnings(keys.Where((k, x) => Steps[x].On).ToList()).ToHashSet();
-		(keys[i], keys[j]) = (keys[j], keys[i]);
-		var on = keys.Where(k => Steps.First(s => s.Key == k).On).ToList();
+		var before = StepCatalog.OrderWarnings(rows.Where(r => r.On).Select(r => r.Key).ToList()).ToHashSet();
+		(rows[i], rows[j]) = (rows[j], rows[i]);
+		var on = rows.Where(r => r.On).Select(r => r.Key).ToList();
 		return StepCatalog.OrderWarnings(on).Where(w => !before.Contains(w)).ToList();
 	}
 
