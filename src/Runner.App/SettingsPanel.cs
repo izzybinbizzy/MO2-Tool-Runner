@@ -91,6 +91,10 @@ public static class SettingsPanel
 				return (LodGuide.Docs.GetValueOrDefault(a_step, []).ToList(), (string?)null);
 			}
 		}).ContinueWith(t => {
+			// a read that failed some other way leaves the block without its pages (never an error box over the settings)
+			if (!t.IsCompletedSuccessfully) {
+				return;
+			}
 			foreach (var (title, url) in t.Result.Item1) {
 				docs.Children.Add(Link(a_w, title, url));
 			}
@@ -173,7 +177,6 @@ public static class SettingsPanel
 		Field(stack, apply, "What MO2 changed - profiles left out of the view (one per line)", changes, "hideProfiles", JsonValueKind.Array);
 		Field(stack, apply, "What MO2 changed - mods left out whose name starts with (one per line)", changes, "hideModsStartingWith", JsonValueKind.Array);
 
-		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
 		// the window's look for every setup (his ask 2026-10-27: themes his design agent makes from "Theme template.json")
 		Head("THE WINDOW'S LOOK");
 		var themeNote = new TextBlock { Text = "A theme is a copy of \"Theme template.json\" (in the Themes folder) with new values. It applies at once.",
@@ -231,6 +234,7 @@ public static class SettingsPanel
 		stack.Children.Add(themeNote);
 		stack.Children.Add(themeRow);
 
+		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
 		Head("TOOL UPDATES");
 		var updNote = new TextBlock { Text = "Asks each tool's own page (Nexus, GitHub) for its newest version - only when you press this.",
 			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
@@ -258,7 +262,10 @@ public static class SettingsPanel
 					updRows.Children.Add(row);
 				}
 				var newer = res.Count(r => r.Newer);
+				// a row that could not be asked is never counted as up to date
+				var notChecked = res.Count(r => r.Problem != null);
 				updNote.Text = newer > 0 ? $"{newer} tool(s) have a newer version - download it from its page (Mod Manager Download), then open the tool once and learn its settings again." :
+					notChecked > 0 ? $"{notChecked} tool(s) could not be checked - see their rows; the others are up to date." :
 					"Every tool is up to date.";
 			} catch (Exception e) {
 				updNote.Text = "Could not check: " + e.Message;

@@ -117,8 +117,6 @@ public static class Uia
 	public static List<AutomationElement> RealButtons(AutomationElement a_root) =>
 		All(a_root, ControlType.Button).Where(b => !InTitleBar(b) && Name(b).Trim() != "").ToList();
 
-	// a Win32 button gets a posted click message (Invoke can wait inside a click handler that runs a modal loop, and is refused
-	// on a hidden desktop - measured 2026-10-27); any other button Invoke, else the message. Never the real mouse.
 	// enabled and on screen (a collapsed group's button is neither)
 	public static bool Usable(AutomationElement a_e)
 	{
@@ -129,6 +127,8 @@ public static class Uia
 		}
 	}
 
+	// a Win32 button gets a posted click message (Invoke can wait inside a click handler that runs a modal loop, and is refused
+	// on a hidden desktop - measured 2026-10-27); any other button Invoke, else the message. Never the real mouse.
 	public static bool Press(AutomationElement a_e)
 	{
 		try {

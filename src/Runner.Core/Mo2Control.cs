@@ -36,11 +36,11 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		return Convert.ToInt32(outParams["ProcessId"], InvariantCulture);
 	}
 
-	// one argument for a Windows command line (the CommandLineToArgvW rules): backslashes before a quote and at the end doubled,
-	// so "D:\LOD\" does not swallow the next argument
 	// a global instance named on every command line (else MO2 opens the instance it used last)
 	string Instance => Mo2.GlobalName is { } n ? " -i " + Quote(n) : "";
 
+	// one argument for a Windows command line (the CommandLineToArgvW rules): backslashes before a quote and at the end doubled,
+	// so "D:\LOD\" does not swallow the next argument
 	public static string Quote(string a)
 	{
 		if (a.Length > 0 && a.IndexOfAny([' ', '\t', '"']) < 0) {

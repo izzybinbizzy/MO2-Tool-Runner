@@ -324,6 +324,10 @@ public static class Procs
 			return false;
 		} catch (InvalidOperationException) {
 			return false;
+		} catch (Win32Exception) {
+			// a process this user may not open is never one of ours (a PID reused by a protected one): not ours alive - a leak
+			// guard that kept following it would read that stranger's children as the tool's
+			return false;
 		}
 	}
 

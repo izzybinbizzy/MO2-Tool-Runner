@@ -85,25 +85,29 @@ public sealed partial class HiddenDesktop : IDisposable
 	public static TimeSpan GuardPoll { get; set; } = TimeSpan.FromMilliseconds(500);
 
 	readonly CancellationTokenSource _stop = new();
-	Thread? _guard;
+	readonly List<Thread> _guards = [];
 
 	void Watch(int a_root)
 	{
 		var t = new Thread(() => {
 			while (!_stop.IsCancellationRequested && Procs.Alive(a_root)) {
-				var tree = Procs.Tree(a_root);
-				var shown = OnPlayersDesktop(tree);
-				if (shown.Count > 0) {
-					Leak = "a window of the tool opened on the player's screen (" + string.Join(", ", shown.Select(h => "'" + Native.WindowText(h) + "'")) + ") - the tool was ended";
-					foreach (var pid in tree.AsEnumerable().Reverse()) {
-						Procs.KillTree(pid);
+				// a look that fails (a process gone mid-read) is tried again next time: an exception here would end the program
+				try {
+					var tree = Procs.Tree(a_root);
+					var shown = OnPlayersDesktop(tree);
+					if (shown.Count > 0) {
+						Leak = "a window of the tool opened on the player's screen (" + string.Join(", ", shown.Select(h => "'" + Native.WindowText(h) + "'")) + ") - the tool was ended";
+						foreach (var pid in tree.AsEnumerable().Reverse()) {
+							Procs.KillTree(pid);
+						}
+						return;
 					}
-					return;
+				} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException) {
 				}
 				_stop.Token.WaitHandle.WaitOne(GuardPoll);
 			}
 		}) { IsBackground = true, Name = "hidden desktop leak guard" };
-		_guard = t;
+		_guards.Add(t);
 		t.Start();
 	}
 
@@ -151,11 +155,13 @@ public sealed partial class HiddenDesktop : IDisposable
 		return result!;
 	}
 
-	// the guard thread is waited for before its token and the desktop go (it may be mid-look)
+	// every guard thread (one per tool started here) is waited for before its token and the desktop go (it may be mid-look)
 	public void Dispose()
 	{
 		_stop.Cancel();
-		_guard?.Join(TimeSpan.FromSeconds(10));
+		foreach (var g in _guards) {
+			g.Join(TimeSpan.FromSeconds(10));
+		}
 		_stop.Dispose();
 		CloseDesktop(_desk);
 	}

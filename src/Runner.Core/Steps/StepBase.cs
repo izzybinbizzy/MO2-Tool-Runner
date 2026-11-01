@@ -198,15 +198,16 @@ public static class StepKit
 		// only what this run started, and the children of it (a packed program runs its window in a child)
 		List<int> Ours()
 		{
-			var snap = Procs.Snapshot();
 			var mine = new HashSet<int>(a_ctx.Control.Started);
 			foreach (var root in a_ctx.Control.Started) {
 				foreach (var c in Procs.Tree(root)) {
 					mine.Add(c);
 				}
 			}
-			_ = snap;
-			return Procs.ByImage(a_image).Select(p => p.Id).Where(mine.Contains).ToList();
+			var procs = Procs.ByImage(a_image);
+			var ours = procs.Select(p => p.Id).Where(mine.Contains).ToList();
+			procs.ForEach(p => p.Dispose());
+			return ours;
 		}
 		var left = Ours();
 		if (left.Count == 0) {

@@ -147,6 +147,7 @@ public sealed partial class Mo2Instance
 		return sections;
 	}
 
+	// Qt's escapes undone once, in one pass (a second pass turned an argument's \\server into \server)
 	static string QtValue(string a_v)
 	{
 		var m = ByteArray().Match(a_v);
@@ -154,7 +155,7 @@ public sealed partial class Mo2Instance
 		if (v.Length >= 2 && v[0] == '"' && v[^1] == '"') {
 			v = v[1..^1];
 		}
-		return v.Replace("\\\\", "\\");
+		return Unescape(v);
 	}
 
 	[GeneratedRegex(@"^@ByteArray\((.*)\)$")]

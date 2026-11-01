@@ -61,6 +61,9 @@ public static class Preflight
 				outList.AddRange(step.Check(c, s));
 			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) {
 				outList.Add(new Issue(key, true, "its check could not read a file: " + e.Message));
+			} catch (Exception e) when (e is InvalidOperationException or FormatException) {
+				// a settings file that reads but holds a value of the wrong kind ("pglitemode": "yes") is the step's problem too
+				outList.Add(new Issue(key, true, "its check found a setting of the wrong kind: " + e.Message));
 			}
 			outList.AddRange(ToolVersions.Check(a_setup, a_mo2, key, s));
 			// the settings learned from the tool's own window: a tool updated since may have changed what they mean
