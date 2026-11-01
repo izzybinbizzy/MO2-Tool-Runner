@@ -122,4 +122,7 @@ public static class Files
 		var r = Path.GetFullPath(a_root).TrimEnd('\\') + "\\";
 		return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
 	}
+
+	public static bool SamePath(string a_a, string a_b) =>
+		string.Equals(Path.GetFullPath(a_a).TrimEnd('\\'), Path.GetFullPath(a_b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
 }

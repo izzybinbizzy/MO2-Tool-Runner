@@ -116,6 +116,18 @@ public static class StepKit
 		return failed;
 	}
 
+	// files kept only while a step changed them in place: the change is complete, so they are never put back
+	public static void Settled(RunContext a_ctx, IReadOnlyCollection<string> a_paths)
+	{
+		if (a_paths.Count == 0) {
+			return;
+		}
+		foreach (var k in a_ctx.Journal.Kept.Where(k => !k.Done && a_paths.Contains(k.Path, StringComparer.OrdinalIgnoreCase))) {
+			k.Done = true;
+		}
+		a_ctx.Journal.Save();
+	}
+
 	// an output mod made mid-run (the shader caches' mods): its line is recorded at once, so a Restore after a crash keeps it
 	public static void EnsureOutput(RunContext a_ctx, string a_mod)
 	{
@@ -127,7 +139,7 @@ public static class StepKit
 	}
 
 	// a tool's output folder may not be one of MO2's own folders or the game's (a mod there would be moved into the backup)
-	public static IEnumerable<Issue> CheckOutputDir(CheckContext a_c, string a_step, string? a_dir)
+	public static IEnumerable<Issue> CheckOutputDir(CheckContext a_c, string a_step, string? a_dir, string a_label = "its output folder")
 	{
 		if (string.IsNullOrWhiteSpace(a_dir)) {
 			yield break;
@@ -135,7 +147,7 @@ public static class StepKit
 		foreach (var (root, what) in new[] { (a_c.Mo2.ModsDir, "Mod Organizer's mods folder"), (a_c.Mo2.OverwriteDir, "Mod Organizer's overwrite folder"),
 			         (a_c.Mo2.ProfilesDir, "Mod Organizer's profiles folder"), (a_c.Mo2.GameDir, "the game's folder") }) {
 			if (!string.IsNullOrEmpty(root) && (Files.IsUnder(a_dir, root) || Files.IsUnder(root, a_dir))) {
-				yield return new Issue(a_step, true, $"its output folder {a_dir} is in (or holds) {what} - use an empty folder of its own");
+				yield return new Issue(a_step, true, $"{a_label} {a_dir} is in (or holds) {what} - use an empty folder of its own");
 			}
 		}
 	}

@@ -34,7 +34,7 @@ public partial class MainWindow : Window
 			}
 		};
 		_timer.Start();
-		Footer.Text = $"Ctrl+Enter start  ·  F5 check  ·  Ctrl+H history  ·  Ctrl+, settings  ·  Alt+Up / Down move a step   ·   version {AppVersion}";
+		Footer.Text = $"Ctrl+Enter start  ·  F5 check  ·  Ctrl+H history  ·  Ctrl+M MO2 changes  ·  Ctrl+, settings  ·  Alt+Up / Down move a step   ·   version {AppVersion}";
 		Footer.ToolTip = "Data folder: " + AppPaths.Data;
 		PreviewKeyDown += OnKeys;
 		if (_vm.Setups.Count == 0) {
@@ -50,6 +50,9 @@ public partial class MainWindow : Window
 			a_e.Handled = true;
 		} else if (ctrl && a_e.Key == Key.H) {
 			ShowPanel("history");
+			a_e.Handled = true;
+		} else if (ctrl && a_e.Key == Key.M) {
+			ShowPanel("changes");
 			a_e.Handled = true;
 		} else if (ctrl && a_e.Key == Key.OemComma) {
 			ShowPanel("settings");
@@ -192,12 +195,21 @@ public partial class MainWindow : Window
 		_panel != "settings" || !SettingsPanel.HasChanges ||
 		Ask.Show(this, "Settings not saved", "You changed settings and did not press Save. Leave without saving them?", "Leave without saving", "Keep editing");
 
-	// the off-screen pictures only: the live view stops and a made-up run is shown
-	public void Demo(bool a_waiting)
+	// the off-screen pictures only: the live view stops and a made-up run is shown (a_frame moves it on a minute a frame)
+	public void Demo(bool a_waiting, int a_frame = 0)
 	{
 		_timer.Stop();
-		_vm.Demo(a_waiting);
+		_vm.Demo(a_waiting, a_frame);
 	}
+
+	// the page's pictures only: the dashboard with nothing running, and past runs of the made-up setup
+	public void DemoReady()
+	{
+		_timer.Stop();
+		_vm.DemoReady();
+	}
+
+	public void DemoHistory(IEnumerable<HistoryRow> a_rows) => _vm.DemoHistory(a_rows);
 
 	// a_fresh: rebuild an open drawer (Save, Undo changes); otherwise pressing Settings again keeps what is typed
 	public void ShowPanel(string a_which, bool a_fresh = false)
@@ -209,9 +221,114 @@ public partial class MainWindow : Window
 			return;
 		}
 		_panel = a_which;
-		DrawerTitle.Text = a_which == "history" ? "PAST RUNS" : "SETTINGS";
-		DrawerBody.Content = a_which == "history" ? HistoryPanel() : SettingsPanel.Build(this, _vm);
+		DrawerTitle.Text = a_which switch { "history" => "PAST RUNS", "changes" => "WHAT MO2 CHANGED", _ => "SETTINGS" };
+		DrawerBody.Content = a_which switch {
+			"history" => WithSwitch(HistoryPanel(), a_which),
+			"changes" => WithSwitch(ChangesPanel(null), a_which),
+			_ => SettingsPanel.Build(this, _vm),
+		};
 		Drawer.Visibility = Shade.Visibility = Visibility.Visible;
+	}
+
+	// the off-screen pictures only: the changes view filled with made-up rows (nothing read or written)
+	public void ShowChangesDemo(IReadOnlyList<Mo2Changes.Change> a_rows)
+	{
+		ShowPanel("history");
+		_panel = "changes";
+		DrawerTitle.Text = "WHAT MO2 CHANGED";
+		DrawerBody.Content = WithSwitch(ChangesPanel(a_rows), "changes");
+	}
+
+	// the history drawer's two views: the past runs and their logs, and what Mod Organizer changed
+	FrameworkElement WithSwitch(FrameworkElement a_body, string a_which)
+	{
+		var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+		foreach (var (key, text, tip) in new[] { ("history", "Past runs", "Ctrl+H"), ("changes", "What MO2 changed", "Ctrl+M") }) {
+			var b = new Button { Content = text, Style = (Style)FindResource(key == a_which ? "Primary" : "Ghost"), Margin = new Thickness(0, 0, 8, 0), ToolTip = tip };
+			b.Click += (_, _) => ShowPanel(key);
+			bar.Children.Add(b);
+		}
+		var dock = new DockPanel();
+		DockPanel.SetDock(bar, Dock.Top);
+		dock.Children.Add(bar);
+		dock.Children.Add(a_body);
+		return dock;
+	}
+
+	// what Mod Organizer changed (mods added, removed, ticked, unticked, moved - per profile), newest first; opening it looks at
+	// Mod Organizer, unless a run is going or did not finish (its changes would read as made outside the runner)
+	FrameworkElement ChangesPanel(IReadOnlyList<Mo2Changes.Change>? a_demo)
+	{
+		var setup = _vm.Setup;
+		if (setup == null && a_demo == null) {
+			return new TextBlock { Text = "Make or pick a setup first.", TextWrapping = TextWrapping.Wrap };
+		}
+		var note = new TextBlock { Style = (Style)FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
+		var filter = new TextBox { MinWidth = 240, Margin = new Thickness(0, 0, 10, 0), VerticalContentAlignment = VerticalAlignment.Center };
+		AutomationPropertiesName(filter, "Find a mod or a profile");
+		var look = new Button { Content = "Look now", Style = (Style)FindResource("Ghost"), ToolTip = "Notes what changed in Mod Organizer since the last look" };
+		var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+		tools.Children.Add(new TextBlock { Text = "Find", Foreground = Brushes2.Get("Muted"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+		tools.Children.Add(filter);
+		tools.Children.Add(look);
+		var list = new ListBox { Background = Brushes2.Get("Panel2"), BorderBrush = Brushes2.Get("Line") };
+		ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+		AutomationPropertiesName(list, "What MO2 changed");
+		list.ItemTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
+			"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><StackPanel Margin='2,4'>" +
+			"<TextBlock TextWrapping='Wrap'><Run Text='{Binding Mod, Mode=OneWay}' FontWeight='SemiBold'/><Run Text='   '/><Run Text='{Binding What, Mode=OneWay}'/></TextBlock>" +
+			"<TextBlock Text='{Binding Detail}' TextWrapping='Wrap' Opacity='0.8' FontSize='12.5'/></StackPanel></DataTemplate>");
+		var rows = new List<ChangeRow>();
+		void Fill()
+		{
+			var f = filter.Text.Trim();
+			list.ItemsSource = f == "" ? rows : rows.Where(r => r.Mod.Contains(f, StringComparison.OrdinalIgnoreCase) || r.Detail.Contains(f, StringComparison.OrdinalIgnoreCase)).ToList();
+		}
+		void Show(IEnumerable<Mo2Changes.Change> a_shown) =>
+			rows = a_shown.Reverse().Select(r => new ChangeRow(r.Mod, r.What,
+				$"{r.When.ToString("MMM d, HH:mm", InvariantCulture)}   ·   {(r.Profiles.Count == 0 ? "Mod Organizer's mods" : string.Join(", ", r.Profiles))}   ·   {r.Who}")).ToList();
+		async void Load(bool a_look)
+		{
+			look.IsEnabled = false;
+			note.Text = a_look ? "Looking at Mod Organizer ..." : "Reading ...";
+			try {
+				var (shown, since, found) = await Task.Run(() => {
+					var mo2 = Mo2Instance.Load(setup!.Mo2Exe, setup.Mo2Instance);
+					var dir = Mo2Changes.Dir(AppPaths.Data, mo2);
+					// a run's changes in the middle of it (or of one that did not finish) are never noted as made outside the runner:
+					// the look holds the run lock from its check to its end (null = a run goes or did not finish)
+					var n = a_look ? Mo2Changes.RecordOutside(mo2, AppPaths.Data) : -1;
+					return (Mo2Changes.Shown(Mo2Changes.Read(dir), setup.ChangesHideProfiles, setup.ChangesHideMods), Mo2Changes.WatchedSince(dir), n);
+				});
+				Show(shown);
+				note.Text = (since == null ? "Not watched yet: the first look starts it." : $"Watched since {since.Value.ToString("MMM d, yyyy HH:mm", InvariantCulture)}.") +
+					" A change made outside the runner shows with the time it was noticed - when this view opens, on Look now, or when a run starts." +
+					(found > 0 ? $" {found} new." : found == 0 ? " Nothing new." : found == null ? " No new look while a run is going or did not finish." : "") +
+					(rows.Count == 0 && since != null ? " No changes noted yet." : "");
+				Fill();
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) {
+				note.Text = "Could not read Mod Organizer: " + e.Message;
+			} finally {
+				look.IsEnabled = a_demo == null;
+			}
+		}
+		look.Click += (_, _) => Load(true);
+		filter.TextChanged += (_, _) => Fill();
+		if (a_demo != null) {
+			Show(a_demo);
+			note.Text = "Watched since Oct 20, 2026 18:00. A change made outside the runner shows with the time it was noticed - when this view opens, on Look now, or when a run starts.";
+			Fill();
+			look.IsEnabled = false;
+		} else {
+			Load(true);
+		}
+		var dock = new DockPanel();
+		DockPanel.SetDock(note, Dock.Top);
+		DockPanel.SetDock(tools, Dock.Top);
+		dock.Children.Add(note);
+		dock.Children.Add(tools);
+		dock.Children.Add(list);
+		return dock;
 	}
 
 	FrameworkElement HistoryPanel()
@@ -221,6 +338,8 @@ public partial class MainWindow : Window
 		grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star) });
 		var list = new ListBox { ItemsSource = _vm.History, Background = Brushes2.Get("Panel2"), BorderBrush = Brushes2.Get("Line") };
+		// a long verdict wraps instead of running off the right edge
+		ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
 		AutomationPropertiesName(list, "Past runs");
 		list.ItemTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
 			"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><StackPanel Margin='2,4'>" +
@@ -316,6 +435,8 @@ public partial class MainWindow : Window
 		base.OnClosed(a_e);
 	}
 }
+
+public sealed record ChangeRow(string Mod, string What, string Detail);
 
 // a themed yes / no window (never a plain system box)
 public static class Ask

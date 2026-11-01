@@ -150,6 +150,15 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
+	void ShowReady()
+	{
+		IsRunning = false;
+		NowTitle = "Ready";
+		var on = Steps.Count(s => s.On);
+		NowActivity = SelectedSetup == null ? "Make a setup first (New setup)." :
+			$"Press START to run the {on} ticked step(s){(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
+	}
+
 	public void Say(string a_text, string a_kind = "")
 	{
 		Message = a_text;
@@ -190,11 +199,7 @@ public sealed partial class MainViewModel : Observable
 		var interrupted = Engine.Interrupted(runs);
 		Interrupted = interrupted == null ? "" : $"The run of {interrupted.Started:ddd HH:mm} ({interrupted.SetupName}) did not finish - your profile may still have outputs switched off.";
 		if (_run == null) {
-			IsRunning = false;
-			NowTitle = "Ready";
-			var on = Steps.Count(s => s.On);
-			NowActivity = SelectedSetup == null ? "Make a setup first (New setup)." :
-				$"Press START to run the {on} ticked step(s){(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
+			ShowReady();
 			return;
 		}
 		IsRunning = _run.Unfinished && _run.OwnerAlive;
@@ -591,38 +596,103 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
-	// a made-up run for the off-screen pictures (--snapshot): what a run in progress and a guided step look like
-	public void Demo(bool a_waiting)
+	// each step's usual minutes (the old updater's own logs, 30 Sep - 26 Oct 2026) - the made-up run of the pictures only
+	internal static readonly Dictionary<string, double> DemoMinutes = new() {
+		["shaders"] = 28, ["cleansave"] = 7.5, ["wryebash"] = 3, ["synthesis"] = 1.3, ["snowfixer"] = 1, ["autoblend"] = 8, ["pgpatcher"] = 4,
+		["xlodgen"] = 17.5, ["acmos"] = 1.5, ["grass"] = 0.8, ["treelodgen"] = 2.3, ["texgen"] = 5.5, ["dyndolod"] = 24, ["anvillod"] = 24,
+		["pandora"] = 0.5, ["playsave"] = 7,
+	};
+
+	// a made-up run for the off-screen pictures (--snapshot, --page): a guided in-game step, or a run in progress that a_frame
+	// moves on a minute at a time (xLODGen working; from frame 6 it is done and ACMOS works)
+	public void Demo(bool a_waiting, int a_frame = 0)
 	{
 		IsRunning = true;
 		Message = "";
-		var cur = Math.Min(a_waiting ? 1 : 6, Steps.Count - 1);
+		var current = a_waiting ? "cleansave" : a_frame >= 6 ? "acmos" : "xlodgen";
+		// a setup without that step shows nothing running (never another step under its text)
+		var cur = Steps.ToList().FindIndex(s => s.Key == current);
+		double Usual(StepRow a_s) => DemoMinutes.GetValueOrDefault(a_s.Key, 5);
+		var start = new DateTime(2026, 10, 27, 21, 2, 10);
+		var log = new List<string>();
+		void Line(double a_min, string a_text) => log.Add($"{start.AddMinutes(a_min).ToString("HH:mm:ss", InvariantCulture)}  {a_text}");
+		Line(0, $"MO2 Tool Runner - {SelectedSetup?.Name} (profile {Setup?.Profile}), {Steps.Count(s => s.On)} steps");
+		Line(0.1, "every output switched off - each back on once its tool rebuilt it");
+		double spent = 0.2, now = 0, left = 0;
 		for (var i = 0; i < Steps.Count; i++) {
-			Steps[i].State = i < cur ? StepState.Done : i == cur ? StepState.Running : StepState.Pending;
-			Steps[i].Elapsed = i < cur ? $"{3 + i * 2}m" : i == cur ? "6m" : "";
-			Steps[i].Usual = $"{4 + i * 2}m";
-			Steps[i].Note = "";
-		}
-		if (Steps.Count > 1) {
-			Steps[0].State = StepState.Skipped;
-			Steps[0].Elapsed = "";
-			Steps[0].Note = "skipped: the shader mod did not change";
+			var s = Steps[i];
+			s.Usual = Short(TimeSpan.FromMinutes(Usual(s)));
+			s.Note = "";
+			s.Elapsed = "";
+			if (s.Key == "shaders") {
+				s.State = StepState.Skipped;
+				s.Note = "skipped: the shader mods and their settings did not change";
+				Line(spent, "=== Shader caches === skipped: the shader mods did not change");
+			} else if (i < cur) {
+				var took = s.Key == "xlodgen" ? 17.2 : Usual(s);
+				s.State = StepState.Done;
+				s.Elapsed = Short(TimeSpan.FromMinutes(took));
+				Line(spent, $"=== {s.Name} ===");
+				spent += took;
+				Line(spent, $"=== {s.Name} done in {took.ToString("0.0", InvariantCulture)} min ===");
+			} else if (i == cur) {
+				now = a_waiting ? 1.2 : current == "xlodgen" ? 9 + a_frame : 0.3 + (a_frame - 6) * 0.5;
+				s.State = StepState.Running;
+				s.Elapsed = Short(TimeSpan.FromMinutes(now));
+				Line(spent, $"=== {(a_waiting ? "the clean save, first half: to QASmoke with the profile as it is" : s.Name)} ===");
+				if (current == "xlodgen") {
+					Line(spent + 0.2, "    running xLODGenx64 through Mod Organizer");
+					Line(spent + 0.8, "    the worldspace list: 17 worldspace(s) offered");
+					Line(spent + 0.9, "    worldspaces: 17 of 17 ticked");
+				}
+				left += Math.Max(0.5, Usual(s) - now);
+				spent += now;
+			} else {
+				s.State = StepState.Pending;
+				left += s.On ? Usual(s) : 0;
+			}
 		}
 		NowTitle = cur >= 0 ? Steps[cur].Name : "Getting ready";
 		Waiting = a_waiting ? "Load your newest save, wait until you can move, then press Done here." : "";
-		NowActivity = a_waiting ? "" : "Tamriel - terrain LOD, level 8 (2 of 5 worldspaces)";
-		ProgressKnown = !a_waiting;
-		Progress = 0.42;
-		Clock = "38 min";
-		Left = "about 1 h 12 min left";
+		NowActivity = a_waiting || cur < 0 ? "" : current == "xlodgen" ? "generating terrain LOD" : "painting roads into the terrain LOD";
+		ProgressKnown = !a_waiting && cur >= 0;
+		Progress = current == "xlodgen" ? Math.Min(0.97, now / 17.5) : Math.Min(0.95, now / 1.5);
+		Clock = Long(TimeSpan.FromMinutes(spent));
+		Left = $"about {Long(TimeSpan.FromMinutes(left))} left";
 		Verdict = "";
-		LogChanged?.Invoke(string.Join("\n",
-			$"12:01:04  START  {Steps.Count(s => s.On)} steps, setup \"{SelectedSetup?.Name}\"",
-			"12:01:05  every output switched off (14 mods), the order files kept",
-			"12:01:40  Shader caches: skipped - the shader mod did not change",
-			"12:09:12  Synthesis: done in 2 min, \"Synthesis Output\" switched on",
-			"12:34:50  PGPatcher: done in 4 min",
-			"12:35:02  xLODGen: started through Mod Organizer") + "\n", true);
+		Mo2Open = a_waiting || current == "xlodgen";
+		GameRunning = a_waiting;
+		LogChanged?.Invoke(string.Join("\n", log) + "\n", true);
+	}
+
+	// the page's pictures (--page): the dashboard with real-looking usual times, nothing running
+	public void DemoReady()
+	{
+		_usual = Steps.ToDictionary(s => s.Key, s => TimeSpan.FromMinutes(DemoMinutes.GetValueOrDefault(s.Key, 5)));
+		foreach (var s in Steps) {
+			s.Usual = Short(_usual[s.Key]);
+			s.State = null;
+			s.Elapsed = "";
+			s.Note = "";
+		}
+		Estimate();
+		ShowReady();
+		Waiting = "";
+		Clock = Left = Verdict = "";
+		Progress = 0;
+		Mo2Open = false;
+		GameRunning = false;
+		Message = "";
+		LogChanged?.Invoke("", true);
+	}
+
+	// the page's pictures (--page): past runs of a made-up setup; their logs are written by the caller into each Folder
+	public void DemoHistory(IEnumerable<HistoryRow> a_rows)
+	{
+		History.Clear();
+		foreach (var r in a_rows) {
+			History.Add(r);
+		}
 	}
 
 	public static void OpenFolder(string a_dir)

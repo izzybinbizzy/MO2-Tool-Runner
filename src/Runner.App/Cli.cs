@@ -8,10 +8,11 @@ namespace ToolRunner.App;
 //   "MO2 Tool Runner.exe" restore [--setup <file>]                                              put back an interrupted run
 //   "MO2 Tool Runner.exe" stop | stop-after                                                     ask the running run to stop
 //   "MO2 Tool Runner.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
+//   "MO2 Tool Runner.exe" changes --setup <file> [--look]                                       what Mod Organizer changed, newest first
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
-	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "preview" or "lod" or "restore" or "stop" or "stop-after" or "import" or "updates" or "--help" or "-h" or "/?";
+	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "preview" or "lod" or "restore" or "stop" or "stop-after" or "import" or "updates" or "changes" or "--help" or "-h" or "/?";
 
 	static string? Opt(string[] a_args, string a_name)
 	{
@@ -32,6 +33,7 @@ public static class Cli
 				"stop" or "stop-after" => Stop(a_args[0]),
 				"import" => Import(a_args),
 				"updates" => Updates(a_args),
+				"changes" => Changes(a_args),
 				_ => Help(),
 			};
 		} catch (Exception e) when (e is ArgumentException or IOException or InvalidDataException) {
@@ -47,7 +49,7 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("MO2 Tool Runner - run | check | preview | lod | restore | stop | stop-after | updates   (see the readme)");
+		Console.WriteLine("MO2 Tool Runner - run | check | preview | lod | restore | stop | stop-after | updates | changes   (see the readme)");
 		return 0;
 	}
 
@@ -128,6 +130,27 @@ public static class Cli
 			Console.WriteLine($"{(r.Newer ? "NEWER " : "      ")}  {r.Tool}: yours {r.Yours}, its page {r.Newest}{(r.Problem == null ? "" : " - " + r.Problem)}  {r.Page}");
 		}
 		return res.Any(r => r.Newer) ? 4 : 0;
+	}
+
+	// --look notes what changed since the last look first (refused while a run goes: its changes would read as made outside it)
+	static int Changes(string[] a_args)
+	{
+		var setup = Setup.Load(SetupArg(a_args));
+		var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+		var dir = Mo2Changes.Dir(AppPaths.Data, mo2);
+		if (a_args.Contains("--look")) {
+			if (Mo2Changes.RecordOutside(mo2, AppPaths.Data) is not { } n) {
+				Console.WriteLine("not looked: a run is going or did not finish - its changes would read as made outside the runner");
+				return 1;
+			}
+			Console.WriteLine($"{n} new change(s)");
+		}
+		var since = Mo2Changes.WatchedSince(dir);
+		Console.WriteLine(since == null ? "not watched yet - a run or a look starts it" : $"watched since {since.Value.ToString("yyyy-MM-dd HH:mm", InvariantCulture)}");
+		foreach (var r in Enumerable.Reverse(Mo2Changes.Shown(Mo2Changes.Read(dir), setup.ChangesHideProfiles, setup.ChangesHideMods))) {
+			Console.WriteLine($"{r.When.ToString("yyyy-MM-dd HH:mm", InvariantCulture)}  {r.Mod}: {r.What}  [{(r.Profiles.Count == 0 ? "Mod Organizer" : string.Join(", ", r.Profiles))}]  {r.Who}");
+		}
+		return 0;
 	}
 
 	static int RestoreCmd(string[] a_args)

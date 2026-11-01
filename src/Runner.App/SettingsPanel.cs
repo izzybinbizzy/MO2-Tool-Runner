@@ -168,6 +168,10 @@ public static class SettingsPanel
 		Field(stack, apply, "Backups kept: the last runs' (0 = all; older are deleted)", work, "keepBackups", JsonValueKind.Number);
 		Field(stack, apply, "Commands before a run (one per line, each must succeed)", work, "beforeRun", JsonValueKind.Array);
 		Field(stack, apply, "Commands after a run (one per line)", work, "afterRun", JsonValueKind.Array);
+		// History > What MO2 changed: a profile only tests use, or test mods, can be left out of the view (nothing is lost)
+		var changes = work["changes"] as JsonObject ?? (JsonObject)(work["changes"] = new JsonObject());
+		Field(stack, apply, "What MO2 changed - profiles left out of the view (one per line)", changes, "hideProfiles", JsonValueKind.Array);
+		Field(stack, apply, "What MO2 changed - mods left out whose name starts with (one per line)", changes, "hideModsStartingWith", JsonValueKind.Array);
 
 		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
 		// the window's look for every setup (his ask 2026-10-27: themes his design agent makes from "Theme template.json")
