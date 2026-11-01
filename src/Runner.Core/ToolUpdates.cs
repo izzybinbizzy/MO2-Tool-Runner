@@ -31,7 +31,18 @@ public static partial class ToolUpdates
 		["synthesis"] = new(null, "Mutagen-Modding/Synthesis", "https://github.com/Mutagen-Modding/Synthesis/releases"),
 	};
 
-	public sealed record Result(string Step, string Tool, string Yours, string Newest, bool Newer, string Page, string? Problem);
+	// Tools = how many steps' tools the row names (TexGen and DynDOLOD share one download, so one row)
+	public sealed record Result(string Step, string Tool, string Yours, string Newest, bool Newer, string Page, string? Problem, int Tools = 1);
+
+	// the line under the rows: every tool a row names is counted, and a row that could not be asked never counts as up to date
+	public static string Summary(IReadOnlyCollection<Result> a_res)
+	{
+		var newer = a_res.Where(r => r.Newer).Sum(r => r.Tools);
+		var notChecked = a_res.Where(r => r.Problem != null).Sum(r => r.Tools);
+		return newer > 0 ? $"{newer} tool(s) have a newer version - download it from its page (Mod Manager Download), then open the tool once and learn its settings again." :
+			notChecked > 0 ? $"{notChecked} tool(s) could not be checked - see their rows; the others are up to date." :
+			"Every tool is up to date.";
+	}
 
 	// the player's copy of a step's tool: its program file and the version read off it (or off its MO2 mod's meta.ini)
 	public static (string? Exe, string Version) Yours(Mo2Instance a_mo2, StepSettings a_s)
@@ -112,7 +123,7 @@ public static partial class ToolUpdates
 			// two steps of one download (TexGen and DynDOLOD): one row naming both
 			var same = outList.FindIndex(r => r.Page == src.Page && r.Yours == (yours == "" ? "?" : yours));
 			if (same >= 0) {
-				outList[same] = outList[same] with { Tool = outList[same].Tool + " / " + tool };
+				outList[same] = outList[same] with { Tool = outList[same].Tool + " / " + tool, Tools = outList[same].Tools + 1 };
 				continue;
 			}
 			try {
