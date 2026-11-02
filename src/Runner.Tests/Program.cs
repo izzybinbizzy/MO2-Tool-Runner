@@ -433,6 +433,75 @@ public static class Program
 		Equal<string?>(null, DevBench.DecideBox("Delete your save?", ["Yes", "No"], 2).Answer, "an unknown question is not answered");
 	}
 
+	static void T_FollowersAreLivingTeammates()
+	{
+		var reply = JsonNode.Parse("""
+			{ "refs": [
+				{ "formId": "0x00000014", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": "0x000A2C94", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": 2228229, "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": "0x00033333", "actor": { "playerTeammate": true } },
+				{ "formId": "0x000A2C94", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": "0x0001A694", "actor": { "playerTeammate": false, "alive": true } },
+				{ "formId": "0x0001B07F", "actor": { "playerTeammate": true, "alive": false } },
+				{ "formId": "0x00012345" },
+				{ "formId": "0x00054321", "actor": { "playerTeammate": "yes" } }
+			] }
+			""")!.AsObject();
+		Equal("0x000A2C94,0x00220005", string.Join(",", InGame.Teammates(reply)), "living teammates only, never the player, once each");
+		Equal(0, InGame.Teammates([]).Count, "no list = no followers");
+	}
+
+	// a teleport reads who is with the player first, then moves, waits for the new place and moves each living follower over
+	static void T_FollowersFollowATeleport()
+	{
+		using var f = new FakeMo2();
+		var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+		probe.Start();
+		var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+		probe.Stop();
+		using var http = new System.Net.HttpListener();
+		http.Prefixes.Add($"http://localhost:{port}/");
+		http.Start();
+		var order = new List<string>();
+		var moved = new List<string>();
+		var serve = Task.Run(() => {
+			while (http.IsListening) {
+				System.Net.HttpListenerContext c;
+				try {
+					c = http.GetContext();
+				} catch (Exception e) when (e is System.Net.HttpListenerException or ObjectDisposedException or InvalidOperationException) {
+					return;
+				}
+				using var reader = new StreamReader(c.Request.InputStream);
+				var body = JsonNode.Parse(reader.ReadToEnd()) as JsonObject ?? [];
+				string reply;
+				if (c.Request.Url!.AbsolutePath.EndsWith("/inspect", StringComparison.Ordinal)) {
+					lock (order) {
+						order.Add("read");
+					}
+					reply = """{"result":{"refs":[{"formId":"0x00000014","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x000A2C94","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x0001B07F","actor":{"playerTeammate":true,"alive":false}}]}}""";
+				} else {
+					lock (moved) {
+						moved.Add($"{body["self"]?["form"]} {body["function"]} {(body["args"] as JsonArray)?[0]?["form"]}");
+					}
+					reply = """{"result":{"called":true,"returned":null}}""";
+				}
+				var bytes = Encoding.UTF8.GetBytes(reply);
+				c.Response.ContentType = "application/json";
+				c.Response.OutputStream.Write(bytes);
+				c.Response.Close();
+			}
+		});
+		f.WriteSetup(("cleansave", new JsonObject()));
+		var ctx = StepContext(f, "cleansave", new DevBench($"http://localhost:{port}/api/tool/"));
+		InGame.MoveWithFollowers(ctx, () => { lock (order) { order.Add("move"); } }, () => { lock (order) { order.Add("wait"); } });
+		http.Stop();
+		serve.Wait(TimeSpan.FromSeconds(5));
+		Equal("read,move,wait", string.Join(",", order), "followers read before the move, moved after the new place");
+		Equal("0x000A2C94 MoveTo 0x00000014", string.Join(";", moved), "the living follower moved to the player, nobody else");
+	}
+
 	static void T_CompilingSignals()
 	{
 		using var f = new FakeMo2();
@@ -1396,7 +1465,7 @@ public static class Program
 	}
 
 	// a step run on its own, as a run would (its record, log, backup folder and MO2 control)
-	static RunContext StepContext(FakeMo2 a_f, string a_step)
+	static RunContext StepContext(FakeMo2 a_f, string a_step, DevBench? a_devBench = null)
 	{
 		var s = Setup.Load(a_f.SetupFile);
 		var mo2 = Mo2Instance.Load(s.Mo2Exe, s.Mo2Instance);
@@ -1408,7 +1477,7 @@ public static class Program
 		j.Save();
 		var log = new RunLog(j.Folder);
 		return new RunContext { Setup = s, Mo2 = mo2, Profile = new Profile(mo2, "Test", () => false), Control = new Mo2Control(mo2, "Test", log), Log = log,
-			Journal = j, Cancel = CancellationToken.None, BackupFolder = j.BackupDir };
+			Journal = j, Cancel = CancellationToken.None, BackupFolder = j.BackupDir, DevBench = a_devBench ?? new() };
 	}
 
 	// the stand-in for ACMOS Road Generator: every terrain texture of -l: painted into -o:, and the log ACMOS writes beside itself
