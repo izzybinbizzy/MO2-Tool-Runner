@@ -482,6 +482,9 @@ public static class Program
 					}
 					reply = """{"result":{"refs":[{"formId":"0x00000014","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x000A2C94","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x0001B07F","actor":{"playerTeammate":true,"alive":false}}]}}""";
 				} else {
+					lock (order) {
+						order.Add("follow");
+					}
 					lock (moved) {
 						moved.Add($"{body["self"]?["form"]} {body["function"]} {(body["args"] as JsonArray)?[0]?["form"]}");
 					}
@@ -496,9 +499,10 @@ public static class Program
 		f.WriteSetup(("cleansave", new JsonObject()));
 		var ctx = StepContext(f, "cleansave", new DevBench($"http://localhost:{port}/api/tool/"));
 		InGame.MoveWithFollowers(ctx, () => { lock (order) { order.Add("move"); } }, () => { lock (order) { order.Add("wait"); } });
+		ctx.Log.Dispose();
 		http.Stop();
 		serve.Wait(TimeSpan.FromSeconds(5));
-		Equal("read,move,wait", string.Join(",", order), "followers read before the move, moved after the new place");
+		Equal("read,move,wait,follow", string.Join(",", order), "followers read before the move, moved after the new place");
 		Equal("0x000A2C94 MoveTo 0x00000014", string.Join(";", moved), "the living follower moved to the player, nobody else");
 	}
 
