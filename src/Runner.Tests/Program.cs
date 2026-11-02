@@ -455,7 +455,24 @@ public static class Program
 	// a teleport reads who is with the player first, then moves, waits for the new place and moves each living follower over
 	static void T_FollowersFollowATeleport()
 	{
+		var (order, moved) = Teleport(false);
+		Equal("read,move,wait,follow", order, "followers read before the move, moved after the new place");
+		Equal("0x000A2C94 MoveTo 0x00000014", moved, "the living follower moved to the player, nobody else");
+	}
+
+	// a Stop that lands while the followers are read: no teleport, nobody moved
+	static void T_StopDuringTheFollowerReadMovesNobody()
+	{
+		var (order, moved) = Teleport(true);
+		Equal("read", order, "no move after a stop during the follower read");
+		Equal("", moved, "no follower moved");
+	}
+
+	// the teleport against a local stand-in for DevBench (its actor list and its Papyrus calls) -> the call order and the moves
+	static (string Order, string Moved) Teleport(bool a_stopAfterRead)
+	{
 		using var f = new FakeMo2();
+		using var cts = new CancellationTokenSource();
 		var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
 		probe.Start();
 		var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
@@ -480,6 +497,9 @@ public static class Program
 					lock (order) {
 						order.Add("read");
 					}
+					if (a_stopAfterRead) {
+						cts.Cancel();
+					}
 					reply = """{"result":{"refs":[{"formId":"0x00000014","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x000A2C94","actor":{"playerTeammate":true,"alive":true}},{"formId":"0x0001B07F","actor":{"playerTeammate":true,"alive":false}}]}}""";
 				} else {
 					lock (order) {
@@ -497,13 +517,19 @@ public static class Program
 			}
 		});
 		f.WriteSetup(("cleansave", new JsonObject()));
-		var ctx = StepContext(f, "cleansave", new DevBench($"http://localhost:{port}/api/tool/"));
-		InGame.MoveWithFollowers(ctx, () => { lock (order) { order.Add("move"); } }, () => { lock (order) { order.Add("wait"); } });
+		var ctx = StepContext(f, "cleansave", new DevBench($"http://localhost:{port}/api/tool/"), cts.Token);
+		Action teleport = () => InGame.MoveWithFollowers(ctx, () => { lock (order) { order.Add("move"); } }, () => { lock (order) { order.Add("wait"); } });
+		if (a_stopAfterRead) {
+			Throws<OperationCanceledException>(teleport, "a stop during the follower read ends the teleport");
+		} else {
+			teleport();
+		}
 		ctx.Log.Dispose();
 		http.Stop();
 		serve.Wait(TimeSpan.FromSeconds(5));
-		Equal("read,move,wait,follow", string.Join(",", order), "followers read before the move, moved after the new place");
-		Equal("0x000A2C94 MoveTo 0x00000014", string.Join(";", moved), "the living follower moved to the player, nobody else");
+		lock (order) {
+			return (string.Join(",", order), string.Join(";", moved));
+		}
 	}
 
 	static void T_CompilingSignals()
@@ -1469,7 +1495,7 @@ public static class Program
 	}
 
 	// a step run on its own, as a run would (its record, log, backup folder and MO2 control)
-	static RunContext StepContext(FakeMo2 a_f, string a_step, DevBench? a_devBench = null)
+	static RunContext StepContext(FakeMo2 a_f, string a_step, DevBench? a_devBench = null, CancellationToken a_cancel = default)
 	{
 		var s = Setup.Load(a_f.SetupFile);
 		var mo2 = Mo2Instance.Load(s.Mo2Exe, s.Mo2Instance);
@@ -1481,7 +1507,7 @@ public static class Program
 		j.Save();
 		var log = new RunLog(j.Folder);
 		return new RunContext { Setup = s, Mo2 = mo2, Profile = new Profile(mo2, "Test", () => false), Control = new Mo2Control(mo2, "Test", log), Log = log,
-			Journal = j, Cancel = CancellationToken.None, BackupFolder = j.BackupDir, DevBench = a_devBench ?? new() };
+			Journal = j, Cancel = a_cancel, BackupFolder = j.BackupDir, DevBench = a_devBench ?? new() };
 	}
 
 	// the stand-in for ACMOS Road Generator: every terrain texture of -l: painted into -o:, and the log ACMOS writes beside itself
