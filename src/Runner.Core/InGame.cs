@@ -310,6 +310,46 @@ public static partial class InGame
 		}
 	}
 
+	static bool IsTrue(JsonNode? a_n) => a_n is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+
+	// the player's followers in a DevBench actor list: every living teammate loaded near them, never the player (his addition 4,
+	// "followers come along" - the game's follow package can leave one behind after a coc / MoveTo)
+	public static List<string> Teammates(JsonObject a_refs) =>
+		(a_refs["refs"] as JsonArray ?? []).OfType<JsonObject>()
+			.Where(r => r["actor"] is JsonObject a && IsTrue(a["playerTeammate"]) && !(a["alive"] is JsonValue al && al.TryGetValue<bool>(out var alive) && !alive))
+			.Select(r => DevBench.FormKey(r["formId"])).OfType<string>().Where(k => k != Player).Distinct().ToList();
+
+	static List<string> FindFollowers(RunContext a_ctx)
+	{
+		try {
+			var found = Teammates(a_ctx.DevBench.Call("inspect", new { kind = "refs", formType = "Actor", radius = 4096, limit = 300 }, 20));
+			if (found.Count > 0) {
+				a_ctx.Log.Detail($"{found.Count} follower(s) with you: {string.Join(", ", found)}");
+			}
+			return found;
+		} catch (Exception e) when (Helps(a_ctx, e)) {
+			a_ctx.Log.Warn("your followers could not be read before the teleport: " + e.Message);
+			return [];
+		}
+	}
+
+	// after a teleport: each follower moved to the player, a step behind and side by side so no two stand on one spot
+	static void BringFollowers(RunContext a_ctx, List<string> a_followers)
+	{
+		var moved = 0;
+		foreach (var (f, i) in a_followers.Select((f, i) => (f, i))) {
+			try {
+				a_ctx.DevBench.PapyrusOn(f, "ObjectReference", "MoveTo", new { form = Player }, (i % 3 - 1) * 70.0, -90.0 - i / 3 * 70.0, 0.0, true);
+				++moved;
+			} catch (Exception e) when (Helps(a_ctx, e)) {
+				a_ctx.Log.Warn($"follower {f} was not moved to you: " + e.Message);
+			}
+		}
+		if (moved > 0) {
+			a_ctx.Log.Detail($"{moved} follower(s) brought along");
+		}
+	}
+
 	public static string? NewestSave(Profile a_profile, DateTime? a_after = null)
 	{
 		var d = SavesDir(a_profile);
@@ -529,7 +569,7 @@ public static partial class InGame
 		if (!Auto(a_ctx)) {
 			a_ctx.CleanSaveName = GuidedSave(a_ctx, "cleansave", a_s, "In the game: load your newest save and wait a full minute. " +
 				(dyn ? "Open DynDOLOD's menu (MCM), switch DynDOLOD off, and wait half a minute. " : "") +
-				$"Note exactly where you are standing (you go back there at the end). Open the console and type: coc {cell} - once you are there, save.");
+				$"Note exactly where you are standing (you go back there at the end). Open the console and type: coc {cell} - once you are there (a follower left behind: click them in the console and type moveto player), save.");
 			return;
 		}
 		var save = a_s.Str("save") is { Length: > 0 } named ? named : NewestPlayerSave(a_ctx.Profile, OurRuns(a_ctx)) ?? throw new StepFailedException("the profile has no save of yours to load");
@@ -561,8 +601,10 @@ public static partial class InGame
 			} else {
 				a_ctx.Log.Warn("your place could not be recorded - the save to play will leave you in " + cell);
 			}
+			var followers = FindFollowers(a_ctx);
 			a_ctx.DevBench.Console("coc " + cell);
 			WaitPlace(a_ctx);
+			BringFollowers(a_ctx, followers);
 			Thread.Sleep(TimeSpan.FromSeconds(a_s.Int("settle_s", 10)));
 			if (dyn && a_ctx.DevBench.Papyrus(cls, "GetMyActive")?.GetValue<bool>() == true) {
 				throw new StepFailedException($"DynDOLOD switched itself back on in {cell}");
@@ -620,7 +662,7 @@ public static partial class InGame
 		a_ctx.Control.Close();
 		if (!Auto(a_ctx)) {
 			GuidedSave(a_ctx, "playsave", a_s, $"In the game: load \"{from}\" and wait a full minute. Go back to the place you noted at the start" +
-				" (the console: coc <that place>), check DynDOLOD is on in its menu (MCM), and save.");
+				" (the console: coc <that place>; a follower left behind: click them and type moveto player), check DynDOLOD is on in its menu (MCM), and save.");
 			return;
 		}
 		try {
@@ -632,8 +674,10 @@ public static partial class InGame
 			Settle(a_ctx, "playsave", a_s.Int("wait_s", 60), "letting the save settle for a minute");
 			if (marker != null) {
 				ReadyToMove(a_ctx);
+				var followers = FindFollowers(a_ctx);
 				a_ctx.DevBench.PapyrusOn(Player, "ObjectReference", "MoveTo", new { form = marker }, 0.0, 0.0, 0.0, true);
 				WaitPlace(a_ctx);
+				BringFollowers(a_ctx, followers);
 				Settle(a_ctx, "playsave", a_s.Int("settle_s", 10), "back at your place");
 				try {
 					a_ctx.DevBench.PapyrusOn(marker, "ObjectReference", "Delete");

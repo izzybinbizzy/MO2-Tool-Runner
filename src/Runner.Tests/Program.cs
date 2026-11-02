@@ -433,6 +433,24 @@ public static class Program
 		Equal<string?>(null, DevBench.DecideBox("Delete your save?", ["Yes", "No"], 2).Answer, "an unknown question is not answered");
 	}
 
+	static void T_FollowersAreLivingTeammates()
+	{
+		var reply = JsonNode.Parse("""
+			{ "refs": [
+				{ "formId": "0x00000014", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": "0x000A2C94", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": 2228229, "actor": { "playerTeammate": true } },
+				{ "formId": "0x000A2C94", "actor": { "playerTeammate": true, "alive": true } },
+				{ "formId": "0x0001A694", "actor": { "playerTeammate": false, "alive": true } },
+				{ "formId": "0x0001B07F", "actor": { "playerTeammate": true, "alive": false } },
+				{ "formId": "0x00012345" },
+				{ "formId": "0x00054321", "actor": { "playerTeammate": "yes" } }
+			] }
+			""")!.AsObject();
+		Equal("0x000A2C94,0x00220005", string.Join(",", InGame.Teammates(reply)), "living teammates only, never the player, once each");
+		Equal(0, InGame.Teammates([]).Count, "no list = no followers");
+	}
+
 	static void T_CompilingSignals()
 	{
 		using var f = new FakeMo2();
