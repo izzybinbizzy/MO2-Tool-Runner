@@ -16,6 +16,9 @@ public sealed partial class StepRow : Observable
 	public bool IsCurrent { get; set => Set(ref field, value); }
 	public string Note { get; set => Set(ref field, value); } = "";
 	public int Number { get; set => Set(ref field, value); }
+	// ticked, but left out of every run: the setup is set to a new game and this is a save step
+	public bool LeftOut { get; set => Set(ref field, value); }
+	public bool Runs => On && !LeftOut;
 
 	public string Glyph => State switch {
 		StepState.Running => Theme.Glyph("Running"),
@@ -75,7 +78,7 @@ public sealed partial class MainViewModel : Observable
 	Task RunRestore() => Restore();
 	Task RunCheck() => Check();
 
-	public Setup? Setup { get; private set { field = value; OnPropertyChanged(nameof(CanStart)); } }
+	public Setup? Setup { get; private set { field = value; OnPropertyChanged(nameof(CanStart)); OnPropertyChanged(nameof(NewGame)); } }
 	public event Action<string, string>? Alert;
 	// new log text (and true when the box must be emptied first: another run's log)
 	public event Action<string, bool>? LogChanged;
@@ -125,14 +128,48 @@ public sealed partial class MainViewModel : Observable
 			Steps.Add(new StepRow { Key = s.Key, Name = info.Name, About = info.About, On = s.On, Number = ++n,
 				Usual = _usual.TryGetValue(s.Key, out var t) ? Short(t) : "" });
 		}
+		MarkLeftOut();
 		Estimate();
 		LoadHistory();
 	}
 
+	// a new game (the dashboard's tick beside START, kept in the setup): no save of the player's to keep clean, so the clean
+	// save and the save to play are left out of every run while it is on
+	public bool NewGame { get => Setup?.NewGame ?? false; set => SetNewGame(value); }
+
+	void SetNewGame(bool a_on)
+	{
+		if (Setup == null || a_on == Setup.NewGame) {
+			return;
+		}
+		if (IsRunning || SetupInUse) {
+			Say("Not changed: a run is using this setup right now.", "bad");
+		} else {
+			Setup.Root["newGame"] = a_on;
+			if (!SaveSetup()) {
+				Setup.Root["newGame"] = !a_on;
+			}
+			MarkLeftOut();
+			Estimate();
+			// the last check's findings were for the other set of steps
+			Issues.Clear();
+			ShowReady();
+		}
+		OnPropertyChanged(nameof(NewGame));
+	}
+
+	void MarkLeftOut()
+	{
+		foreach (var s in Steps) {
+			s.LeftOut = Setup?.LeftOutForNewGame(s.Key) == true;
+		}
+		OnPropertyChanged(nameof(NewGame));
+	}
+
 	void Estimate()
 	{
-		var total = Steps.Where(s => s.On).Select(s => _usual.TryGetValue(s.Key, out var t) ? t : TimeSpan.Zero).Aggregate(TimeSpan.Zero, (a, b) => a + b);
-		var unknown = Steps.Count(s => s.On && !_usual.ContainsKey(s.Key));
+		var total = Steps.Where(s => s.Runs).Select(s => _usual.TryGetValue(s.Key, out var t) ? t : TimeSpan.Zero).Aggregate(TimeSpan.Zero, (a, b) => a + b);
+		var unknown = Steps.Count(s => s.Runs && !_usual.ContainsKey(s.Key));
 		EstimateText = total == TimeSpan.Zero ? "" : $"about {Long(total)}{(unknown > 0 ? $" + {unknown} step(s) never timed" : "")}";
 	}
 
@@ -154,9 +191,9 @@ public sealed partial class MainViewModel : Observable
 	{
 		IsRunning = false;
 		NowTitle = "Ready";
-		var on = Steps.Count(s => s.On);
+		var on = Steps.Count(s => s.Runs);
 		NowActivity = SelectedSetup == null ? "Make a setup first (New setup)." :
-			$"Press START to run the {on} ticked step(s){(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
+			$"Press START to run the {on} step(s) that will run{(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
 	}
 
 	public void Say(string a_text, string a_kind = "")
@@ -506,7 +543,8 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	// a step switched on / off for the setup (saved at once)
-	public bool SetupInUse => Setup != null && Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase);
+	// a start asked for and not yet in its run record counts too: the engine reads the setup in that gap
+	public bool SetupInUse => Setup != null && (_startAsked != null || (Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase)));
 
 	public void SetOn(StepRow a_row, bool a_on)
 	{
