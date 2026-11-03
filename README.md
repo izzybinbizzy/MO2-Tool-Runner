@@ -72,9 +72,9 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 "MO2 Tool Runner.exe" preview --setup <file>
 "MO2 Tool Runner.exe" lod --setup <file> --step <step>
 "MO2 Tool Runner.exe" updates --setup <file>
-"MO2 Tool Runner.exe" restore
+"MO2 Tool Runner.exe" restore [--setup <file>]
 "MO2 Tool Runner.exe" stop | stop-after
-"MO2 Tool Runner.exe" changes [--look]
+"MO2 Tool Runner.exe" changes --setup <file> [--look]
 ```
 
 | exit code | meaning |
