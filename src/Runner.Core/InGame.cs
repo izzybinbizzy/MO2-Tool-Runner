@@ -355,6 +355,7 @@ public static partial class InGame
 	public static void MoveWithFollowers(RunContext a_ctx, Action a_move, Action a_waitPlace)
 	{
 		var followers = FindFollowers(a_ctx);
+		a_ctx.Cancel.ThrowIfCancellationRequested();
 		a_move();
 		a_waitPlace();
 		BringFollowers(a_ctx, followers);
