@@ -17,7 +17,7 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 - **Mod Organizer's own snags handled.** Steam started when the game needs it, a second Mod Organizer's "already running" box answered, a crash reporter left in the virtual folder waited for, a finished download stuck as "unfinished" not taken for a download, SKSE's "plugin failed to load" box and mods' in-game boxes answered.
 - **Hands off.** It notices a finished or stuck tool within 2 minutes. It stops on a question it does not know and shows it to you, and it never brings a window to the front.
 - **The tools keep their own settings.** "Learn its settings" opens a tool in its own window; you set it up and close it, and every run uses those settings. The runner never copies another author's window.
-- **In-game steps.** With DevBench the clean save and the save to play run by themselves. Without it they are guided step by step.
+- **In-game steps.** With DevBench the clean save and the save to play run by themselves. Without it they are guided step by step. Starting a new character? Tick **New game** beside START and both are left out.
 - **A preview before a run** shows the tools in order, every mod switched off and why, when the game starts, and about how long it takes.
 - **Also:**
   - tool update checks (Nexus and GitHub)

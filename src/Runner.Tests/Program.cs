@@ -407,6 +407,29 @@ public static class Program
 		Throws<ArgumentException>(() => Runner.Plan(s, "dyndolod", null, null), "a step the setup does not have");
 	}
 
+	// his ask 2026-11-03: a new game has no save to keep clean - the clean save and the save to play are left out while it is on
+	static void T_NewGameLeavesOutTheSaveSteps()
+	{
+		using var f = new FakeMo2();
+		var s = f.WriteSetup(("cleansave", []), ("snowfixer", []), ("autoblend", []), ("playsave", []));
+		Equal("cleansave,snowfixer,autoblend,playsave", string.Join(",", Runner.Plan(s, null, null, null).Select(x => x.Key)), "an existing save: every step");
+		s.Root["newGame"] = true;
+		s.Save();
+		var ng = Setup.Load(f.SetupFile);
+		Check(ng.NewGame, "the tick is kept in the setup");
+		Equal("snowfixer,autoblend", string.Join(",", Runner.Plan(ng, null, null, null).Select(x => x.Key)), "a new game: the save steps left out");
+		Equal("snowfixer,autoblend", string.Join(",", ng.EnabledSteps.Select(x => x.Key)), "the check and the run see the same steps");
+		Throws<ArgumentException>(() => Runner.Plan(ng, "cleansave", null, null), "only the clean save on a new game is refused, said why");
+		Equal(0, Preflight.Run(ng, Mo2Instance.Load(f.Exe, f.Instance), ng.EnabledSteps.Select(x => x.Key).ToList()).Count(i => i.Step is "cleansave" or "playsave"),
+			"no save step asks for a save");
+		var lines = RunPreview.Build(ng, Mo2Instance.Load(f.Exe, f.Instance), Runner.Plan(ng, null, null, null)).Lines(_ => null);
+		Check(lines.Any(l => l.Contains("new game", StringComparison.Ordinal) && l.Contains("Clean save", StringComparison.Ordinal) && l.Contains("Save to play", StringComparison.Ordinal)),
+			"the preview says what is left out: " + string.Join(" | ", lines));
+		Check(!lines.Any(l => l.StartsWith("The game starts", StringComparison.Ordinal)), "and that the game does not start");
+		ng.Root["steps"]!.AsArray().OfType<JsonObject>().Where(o => Setup.Str(o, "step") is "snowfixer" or "autoblend").ToList().ForEach(o => o["on"] = false);
+		Check(ng.Problems().Any(p => p.Contains("new game", StringComparison.Ordinal)), "only save steps on, on a new game: said plainly");
+	}
+
 	static void T_SetupProblems()
 	{
 		var s = Setup.FromJson(new JsonObject { ["steps"] = new JsonArray(new JsonObject { ["step"] = "nonsense" }) });

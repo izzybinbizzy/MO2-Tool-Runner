@@ -60,7 +60,15 @@ public sealed class Setup
 		(Root["steps"] as JsonArray)?.OfType<JsonObject>().Select(o => new StepEntry(Str(o, "step") ?? "", Bool(o, "on") ?? true,
 			o["settings"] as JsonObject ?? new JsonObject())).Where(s => s.Key != "").ToList() ?? [];
 
-	public List<StepEntry> EnabledSteps => Steps.Where(s => s.On).ToList();
+	// a new game (the player starts a new character after the run): there is no save of theirs to keep clean or to bring
+	// back, so the clean save and the save to play are left out of every run while it is on (dyndolod.info/Help/Clean-Save)
+	public bool NewGame => Bool(Root, "newGame") ?? false;
+
+	public static readonly IReadOnlyList<string> SaveSteps = ["cleansave", "playsave"];
+
+	public bool LeftOutForNewGame(string a_key) => NewGame && SaveSteps.Contains(a_key);
+
+	public List<StepEntry> EnabledSteps => Steps.Where(s => s.On && !LeftOutForNewGame(s.Key)).ToList();
 
 	public JsonObject? StepSettings(string a_key) => Steps.FirstOrDefault(s => s.Key == a_key)?.Settings;
 
@@ -122,7 +130,7 @@ public sealed class Setup
 			}
 		}
 		if (Steps.Count == 0) p.Add("no steps");
-		if (EnabledSteps.Count == 0) p.Add("every step is switched off");
+		if (EnabledSteps.Count == 0) p.Add(Steps.Any(s => s.On) ? "only the save steps are switched on, and they are left out for a new game" : "every step is switched off");
 		var dup = Steps.GroupBy(s => s.Key).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
 		if (dup.Count > 0) p.Add("a step is listed twice: " + string.Join(", ", dup));
 		var unknown = Steps.Where(s => !StepCatalog.Known(s.Key)).Select(s => s.Key).ToList();

@@ -14,6 +14,8 @@ public sealed class RunPreview
 	public List<string> ReplacedForGood { get; } = [];
 	public List<string> StartsTheGame { get; } = [];
 	public bool ClosesMo2 { get; private init; }
+	// the ticked save steps a new game leaves out
+	public List<string> LeftOutForNewGame { get; } = [];
 
 	public static RunPreview Build(Setup a_setup, Mo2Instance a_mo2, IReadOnlyList<Setup.StepEntry> a_todo)
 	{
@@ -21,6 +23,7 @@ public sealed class RunPreview
 		var profile = new Profile(a_mo2, a_setup.Profile, () => control.Running);
 		var st = profile.States();
 		var p = new RunPreview { ClosesMo2 = control.Running };
+		p.LeftOutForNewGame.AddRange(a_setup.Steps.Where(s => s.On && a_setup.LeftOutForNewGame(s.Key)).Select(s => StepCatalog.Name(s.Key)));
 		foreach (var s in a_todo) {
 			var ss = new StepSettings(s.Settings);
 			p.Steps.Add(new StepLine(s.Key, StepCatalog.Name(s.Key), ss.OutputMod, ss.OutputMod is { } om && !st.ContainsKey(om)));
@@ -67,6 +70,10 @@ public sealed class RunPreview
 			l.Add("");
 			l.Add("Kept off after the run (replaced by what it makes):");
 			l.AddRange(ReplacedForGood.Select(m => "  - " + m));
+		}
+		if (LeftOutForNewGame.Count > 0) {
+			l.Add("");
+			l.Add("Left out - this setup is set to a new game, so there is no save to keep clean: " + string.Join(", ", LeftOutForNewGame) + ".");
 		}
 		if (StartsTheGame.Count > 0) {
 			l.Add("");

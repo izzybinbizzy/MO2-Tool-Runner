@@ -106,6 +106,10 @@ public partial class MainWindow : Window
 			_vm.Say($"{a_row.Name} is switched off in this setup - tick it first.", "bad");
 			return;
 		}
+		if (a_row.LeftOut) {
+			_vm.Say($"{a_row.Name} is left out for a new game - untick \"New game\" to run it.", "bad");
+			return;
+		}
 		_ = _vm.StartWith(a_how == "only" ? a_row.Key : null, a_how == "from" ? a_row.Key : null, a_how == "until" ? a_row.Key : null);
 	}
 

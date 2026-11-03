@@ -20,6 +20,9 @@ public static class Runner
 	{
 		var order = a_setup.EnabledSteps;
 		foreach (var k in new[] { a_only, a_from, a_until }.OfType<string>()) {
+			if (a_setup.LeftOutForNewGame(k) && a_setup.Steps.Any(s => s.Key == k && s.On)) {
+				throw new ArgumentException($"{StepCatalog.Name(k)} is left out: this setup is set to a new game (untick \"New game\" to run it)");
+			}
 			if (order.All(s => s.Key != k)) {
 				throw new ArgumentException($"\"{k}\" is not a step of this setup - its steps: {string.Join(", ", order.Select(s => s.Key))}");
 			}
