@@ -1720,6 +1720,230 @@ public static class Program
 		Equal(1, launches, "a request with no box is not sent again");
 	});
 
+	// two MO2 starts in the same second: the loser's "already running" box is answered OK, and MO2 is then ready
+	// only within a minute of a start this run sent; a box of a copy the player started is left alone (and named on time-out)
+	static void T_AlreadyRunningBoxIsAnswered() => FastReady(() => {
+		using var f = new FakeMo2();
+		var pressed = 0;
+		string? box = "An instance of Mod Organizer is already running";
+		var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			RunningProbe = () => false,
+			LeftoverProbe = () => [],
+			Launch = (_, _) => 1,
+			ReadyProbe = () => new(true, true, TimeSpan.Zero, box),
+			PressBoxProbe = _ => { ++pressed; box = null; },
+		};
+		c.Start(default);
+		Equal(1, pressed, "boxes answered after our own start");
+		Mo2Control.ReadyLimit = TimeSpan.FromSeconds(1);
+		var notOurs = 0;
+		var theirs = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			ReadyProbe = () => new(true, true, TimeSpan.Zero, "An instance of Mod Organizer is already running"),
+			PressBoxProbe = _ => ++notOurs,
+		};
+		Throws<StepFailedException>(() => theirs.WaitReady(default), "a box we did not cause keeps MO2 not ready");
+		Equal(0, notOurs, "a box of a copy the player started was pressed");
+	});
+
+	// a box that stays open after OK cannot hold the ready wait past its limit
+	static void T_ABoxThatStaysOpenEndsTheWait() => FastReady(() => {
+		using var f = new FakeMo2();
+		Mo2Control.ReadyLimit = TimeSpan.FromSeconds(1);
+		var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			ReadyProbe = () => new(true, true, TimeSpan.Zero, "failed to receive data from secondary process"),
+			PressBoxProbe = _ => { },
+		};
+		var sw = Stopwatch.StartNew();
+		Throws<StepFailedException>(() => c.WaitReady(default), "an endless box");
+		Check(sw.Elapsed < TimeSpan.FromSeconds(4), $"the wait ran {sw.Elapsed.TotalSeconds:0.0} s past a 1 s limit");
+	});
+
+	// Start itself waits for the leftover before it launches MO2
+	static void T_StartWaitsForTheLeftoverFirst() => FastReady(() => {
+		using var f = new FakeMo2();
+		var keep = Mo2Control.LeftoverWait;
+		Mo2Control.LeftoverWait = TimeSpan.FromSeconds(3);
+		try {
+			int probes = 0, probesAtLaunch = -1;
+			var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				RunningProbe = () => false,
+				LeftoverProbe = () => ++probes < 3 ? [(99003, "TheWatcherDump.exe")] : [],
+				Launch = (_, _) => { probesAtLaunch = probes; return 1; },
+				ReadyProbe = () => new(true, true, TimeSpan.Zero, null),
+			};
+			c.Start(default);
+			Equal(3, probesAtLaunch, "probe calls when MO2 was launched (only after the leftover was gone)");
+		} finally {
+			Mo2Control.LeftoverWait = keep;
+		}
+	});
+
+	// a finished download MO2 left as "<file>.unfinished" beside the same bytes is no download in progress; a real one still is
+	static void T_StaleUnfinishedDownloadIsNotInProgress()
+	{
+		var d = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", "dl " + Guid.NewGuid().ToString("N")[..8]);
+		Directory.CreateDirectory(d);
+		try {
+			File.WriteAllText(Path.Combine(d, "Done.zip"), "same bytes");
+			File.WriteAllText(Path.Combine(d, "Done.zip.unfinished"), "same bytes");
+			File.WriteAllText(Path.Combine(d, "Going.zip.unfinished"), "part");
+			File.WriteAllText(Path.Combine(d, "Diff.zip"), "the whole file");
+			File.WriteAllText(Path.Combine(d, "Diff.zip.unfinished"), "the whole fil?");
+			var (active, stale) = Mo2Control.Downloads(d);
+			Equal("Diff.zip.unfinished, Going.zip.unfinished", string.Join(", ", active.Order()), "still downloading");
+			Equal("Done.zip.unfinished", string.Join(", ", stale), "finished, left behind");
+		} finally {
+			Directory.Delete(d, true);
+		}
+	}
+
+	// a program still running from MO2's folders (a dead game's crash dumper) holds MO2's start: waited for, then named
+	static void T_LeftoverFromMo2FoldersHoldsTheStart()
+	{
+		using var f = new FakeMo2();
+		var keep = Mo2Control.LeftoverWait;
+		Mo2Control.LeftoverWait = TimeSpan.FromMilliseconds(400);
+		try {
+			var calls = 0;
+			var ends = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				LeftoverProbe = () => ++calls < 3 ? [(99001, "TheWatcherDump.exe")] : [],
+			};
+			ends.WaitForLeftovers(default);
+			Check(calls >= 3, "the start went on while the leftover still ran");
+			var stays = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				LeftoverProbe = () => [(99002, "SkyrimDiagHelper.exe")],
+			};
+			try {
+				stays.WaitForLeftovers(default);
+				Check(false, "MO2 would start beside a leftover program");
+			} catch (StepFailedException e) {
+				Check(e.Message.Contains("SkyrimDiagHelper.exe (process 99002)", StringComparison.Ordinal), e.Message);
+			}
+		} finally {
+			Mo2Control.LeftoverWait = keep;
+		}
+	}
+
+	// a Steam copy of the game: Steam started first when it is not running; a GOG copy, or Steam already up, starts nothing
+	static void T_SteamStartedBeforeTheGame() => FastReady(() => {
+		using var f = new FakeMo2();
+		var keep = Mo2Control.SteamSettle;
+		Mo2Control.SteamSettle = TimeSpan.Zero;
+		try {
+			const string steamGame = @"D:\SteamLibrary\steamapps\common\Skyrim Special Edition";
+			Check(Mo2Control.IsSteamGame(steamGame), "a Steam library path");
+			Check(!Mo2Control.IsSteamGame(@"C:\GOG Games\Skyrim Anniversary Edition"), "a GOG path");
+			Check(!Mo2Control.IsSteamGame(f.Game), "a copied game folder with no Steam library");
+			File.WriteAllText(Path.Combine(f.Game, "steam_api64.dll"), "");
+			Check(Mo2Control.IsSteamGame(f.Game), "a Steam copy moved out of steamapps (a modlist's Stock Game)");
+			var up = false;
+			var cmds = new List<string>();
+			var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				SteamRunningProbe = () => up,
+				SteamExeProbe = () => @"C:\Program Files (x86)\Steam\steam.exe",
+				Launch = (cmd, _) => { cmds.Add(cmd); up = true; return 1; },
+			};
+			c.EnsureSteam(@"C:\GOG Games\Skyrim Anniversary Edition", default);
+			Equal(0, cmds.Count, "nothing started for a GOG game");
+			c.EnsureSteam(steamGame, default);
+			Equal(1, cmds.Count, "Steam started once");
+			Check(cmds[0].Contains("steam.exe\" -silent", StringComparison.OrdinalIgnoreCase), cmds[0]);
+			c.EnsureSteam(steamGame, default);
+			Equal(1, cmds.Count, "Steam already up - not started again");
+			var none = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) { SteamRunningProbe = () => false, SteamExeProbe = () => null };
+			Throws<StepFailedException>(() => none.EnsureSteam(steamGame, default), "no Steam to start");
+		} finally {
+			Mo2Control.SteamSettle = keep;
+		}
+	});
+
+	// LaunchGame starts Steam BEFORE it asks MO2 for the game
+	static void T_LaunchGameStartsSteamFirst() => FastReady(() => {
+		using var f = new FakeMo2();
+		var keep = Mo2Control.SteamSettle;
+		Mo2Control.SteamSettle = TimeSpan.Zero;
+		try {
+			File.WriteAllText(Path.Combine(f.Game, "steam_api64.dll"), "");
+			bool steam = false, mo2 = false;
+			var cmds = new List<string>();
+			var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				RunningProbe = () => mo2,
+				LeftoverProbe = () => [],
+				SteamRunningProbe = () => steam,
+				SteamExeProbe = () => @"C:\Program Files (x86)\Steam\steam.exe",
+				ReadyProbe = () => new(true, true, TimeSpan.Zero, null),
+				Launch = (cmd, _) => {
+					cmds.Add(cmd);
+					steam |= cmd.Contains("steam.exe", StringComparison.OrdinalIgnoreCase);
+					mo2 |= cmd.Contains("ModOrganizer.exe", StringComparison.OrdinalIgnoreCase);
+					return 1;
+				},
+			};
+			var pid = c.LaunchGame("SKSE", () => cmds.Any(x => x.Contains("run -e", StringComparison.Ordinal)) ? 4243 : 0, default);
+			Equal(4243, pid, "the game's process");
+			var s = cmds.FindIndex(x => x.Contains("steam.exe\" -silent", StringComparison.OrdinalIgnoreCase));
+			var g = cmds.FindIndex(x => x.Contains("run -e", StringComparison.Ordinal));
+			Check(s >= 0 && g > s, $"Steam at {s}, the game start at {g}: " + string.Join(" | ", cmds));
+			Check(cmds.All(x => x.Contains("steam.exe", StringComparison.OrdinalIgnoreCase) || x.Contains(f.Exe, StringComparison.OrdinalIgnoreCase)),
+				"a start outside the fake MO2: " + string.Join(" | ", cmds));
+		} finally {
+			Mo2Control.SteamSettle = keep;
+		}
+	});
+
+	// the start wait answers each box through its own press: the plugin error's No, a notice's button; an unknown one stops it
+	static void T_NativeBoxesArePressedByTheirVerdict()
+	{
+		var pressed = new List<string>();
+		InGame.AnswerNativeBoxes([
+			new InGame.NativeBox("Plugin error", "SKSE plugin X.dll failed to load. Continue running?", ["Yes", "No"], l => pressed.Add("1:" + l)),
+			new InGame.NativeBox("Notice", "Settings reset.", ["OK"], l => pressed.Add("2:" + l)),
+		], RunLog.Null);
+		Equal("1:No, 2:OK", string.Join(", ", pressed), "buttons pressed");
+		pressed.Clear();
+		Throws<StepFailedException>(() => InGame.AnswerNativeBoxes([
+			new InGame.NativeBox("Question", "Overwrite your settings?", ["Yes", "No"], l => pressed.Add("3:" + l))], RunLog.Null), "an unknown box");
+		Equal(0, pressed.Count, "an unknown box was pressed");
+	}
+
+	// a Windows box of the game before DevBench answers: SKSE's plugin error -> No, a notice -> its button, anything else stops
+	static void T_GameWindowsBoxesBeforeDevBench()
+	{
+		var (press, note) = InGame.NativeBoxVerdict("Plugin error",
+			"SKSE plugin ENBWorldspaceWeatherlists.dll failed to load. Continue running the game?", ["&Yes", "&No"]);
+		Equal("No", press, "SKSE's plugin error");
+		Check(note.Contains("ENBWorldspaceWeatherlists.dll", StringComparison.Ordinal), note);
+		Equal("OK", InGame.NativeBoxVerdict("Notice", "Your settings were reset.", ["OK"]).Press, "a one-button notice");
+		Equal<string?>(null, InGame.NativeBoxVerdict("Question", "Overwrite your settings?", ["Yes", "No"]).Press, "an unknown question");
+	}
+
+	// a mod's box that promises a second one (perks being reset) keeps the settle going; an ordinary notice does not
+	static void T_BoxThatPromisesAnotherIsWaitedFor()
+	{
+		Check(InGame.PromisesBox("Ordinator: perk reset in progress. A message box will appear when the process is complete."), "the promise");
+		Check(!InGame.PromisesBox("Sacrosanct: scripts modified by another mod were found."), "a plain notice");
+		Check(!InGame.PromisesBox("Your new settings will appear after you reload."), "'will appear' about something else");
+		var t0 = new DateTime(2026, 11, 2, 20, 0, 0, DateTimeKind.Utc);
+		var plain = t0.AddSeconds(60);
+		Equal(t0.AddMinutes(10), InGame.SettleUntil(plain, t0, "A message box will appear when the process is complete."), "the promise holds 10 minutes");
+		Equal(t0.AddSeconds(80), InGame.SettleUntil(plain, t0.AddSeconds(70), "Perks reset."), "the promised box ends the hold (10 s more)");
+		Equal(plain, InGame.SettleUntil(plain, t0.AddSeconds(5), "A notice."), "an early notice keeps the plain minute");
+	}
+
+	// Bottled Shaders' "[DDC]" line ends the compile watch on a warm start - unless a compile ("remaining=N" > 0) follows it
+	static void T_BootPassOverEndsTheCompileWatch()
+	{
+		Check(InGame.BootPassOver(["[2026-10-28 19:33:10.000] [info] [ShaderTiming] x remaining=0", "[2026-10-28 19:33:54.000] [info] [DDC] 6651 entries, 0 trimmed"]),
+			"warm start: the trim line stands");
+		Check(!InGame.BootPassOver(["[19:33:54.000] [info] [DDC] 6651 entries", "[19:34:10.000] [info] [ShaderTiming] Very slow y remaining=41"]),
+			"a compile after the trim line");
+		Check(!InGame.BootPassOver(["[19:33:10.000] [info] [ShaderTiming] x remaining=12"]), "no trim line yet");
+		Check(!InGame.BootPassOver(["Open Shaders 2.19.0 loaded"]), "a shader mod that writes no trim line");
+		var start = new DateTime(2026, 11, 2, 19, 30, 0);
+		Check(!InGame.BootPassOver(["[2026-11-01 22:10:00.000] [info] [DDC] 6651 entries"], start), "an earlier session's trim line");
+		Check(InGame.BootPassOver(["[2026-11-02 19:30:40.000] [info] [DDC] 6651 entries"], start), "this start's trim line");
+	}
+
 	// the leak guard, both ways, with a harmless program (no window of any kind - the "player's screen" is the fake below)
 	static void T_LeakGuardEndsAToolThatShowsOnHisScreen()
 	{

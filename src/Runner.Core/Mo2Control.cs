@@ -108,14 +108,106 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 
 	public bool Running => IsRunning();
 
-	public List<string> DownloadsInProgress()
+	public List<string> DownloadsInProgress() => Downloads(Mo2.DownloadsDir).Active;
+
+	// a download MO2 finished but whose "<file>.unfinished" stayed beside it, byte for byte the same: MO2 cannot finish it and
+	// resumes it at every start, so it is no download in progress (one held a whole evening's game line, 2026-11-02) - named,
+	// never deleted (the player removes it, or its row in MO2's Downloads tab)
+	public static (List<string> Active, List<string> Stale) Downloads(string a_dir)
+	{
+		var active = new List<string>();
+		var stale = new List<string>();
+		try {
+			if (!Directory.Exists(a_dir)) {
+				return (active, stale);
+			}
+			foreach (var stub in Directory.GetFiles(a_dir, "*.unfinished")) {
+				var done = stub[..^".unfinished".Length];
+				(File.Exists(done) && SameBytes(stub, done) ? stale : active).Add(Path.GetFileName(stub));
+			}
+		} catch (IOException) {
+		} catch (UnauthorizedAccessException) {
+		}
+		return (active, stale);
+	}
+
+	// a pair compared once per (size, write time) of both files - Close() polls the downloads while it waits
+	static readonly System.Collections.Concurrent.ConcurrentDictionary<(string, long, DateTime, DateTime), bool> s_same = new();
+
+	static bool SameBytes(string a_a, string a_b)
 	{
 		try {
-			return Directory.Exists(Mo2.DownloadsDir) ?
-				Directory.GetFiles(Mo2.DownloadsDir, "*.unfinished").Select(Path.GetFileName).OfType<string>().ToList() : [];
+			FileInfo fa = new(a_a), fb = new(a_b);
+			if (fa.Length != fb.Length) {
+				return false;
+			}
+			return s_same.GetOrAdd((a_a.ToLowerInvariant(), fa.Length, fa.LastWriteTimeUtc, fb.LastWriteTimeUtc), _ => {
+				using var x = File.OpenRead(a_a);
+				using var y = File.OpenRead(a_b);
+				return System.Security.Cryptography.SHA256.HashData(x).AsSpan().SequenceEqual(System.Security.Cryptography.SHA256.HashData(y));
+			});
 		} catch (IOException) {
-			return [];
+			return false;
+		} catch (UnauthorizedAccessException) {
+			return false;
 		}
+	}
+
+	// a program still running from Mod Organizer's own folders while MO2 is closed (a crash dumper of a game that died, kept
+	// alive inside the virtual Data folder): MO2 started beside it can crash at once (measured 2026-10-06, three crashes) - so
+	// MO2 waits for it to end, then names it and refuses the start; it is never ended here (its PID may not be ours)
+	public Func<List<(int Pid, string Image)>>? LeftoverProbe { get; set; }
+	public static TimeSpan LeftoverWait { get; set; } = TimeSpan.FromMinutes(2);
+
+	// only a process still hooked into MO2's virtual folder (usvfs loaded) - a program that merely lives in a mod folder (a
+	// DevBench bridge, a tool kept there) and runs on its own is no leftover
+	List<(int Pid, string Image)> Leftovers()
+	{
+		var roots = new[] { Mo2.BaseDir, Path.GetDirectoryName(Mo2.Exe)!, Mo2.GameDir }.Select(Path.GetFullPath).ToList();
+		var outList = new List<(int, string)>();
+		foreach (var p in Process.GetProcesses()) {
+			using (p) {
+				if (p.Id == Environment.ProcessId || p.ProcessName.Equals("ModOrganizer", StringComparison.OrdinalIgnoreCase)) {
+					continue;
+				}
+				if (Procs.ExePath(p) is { } exe && roots.Any(r => Files.IsUnder(exe, r)) && InVfs(p)) {
+					outList.Add((p.Id, Path.GetFileName(exe)));
+				}
+			}
+		}
+		return outList;
+	}
+
+	static bool InVfs(Process a_p)
+	{
+		try {
+			return a_p.Modules.Cast<ProcessModule>().Any(m => m.ModuleName.StartsWith("usvfs", StringComparison.OrdinalIgnoreCase));
+		} catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
+			return false;
+		}
+	}
+
+	public void WaitForLeftovers(CancellationToken a_ct)
+	{
+		var probe = LeftoverProbe ?? Leftovers;
+		var left = probe();
+		if (left.Count == 0) {
+			return;
+		}
+		_log.Detail($"still running from Mod Organizer's folders: {string.Join(", ", left.Select(l => $"{l.Image} ({l.Pid})"))} - waiting for it to end before Mod Organizer starts");
+		var sw = Stopwatch.StartNew();
+		while (sw.Elapsed < LeftoverWait) {
+			a_ct.ThrowIfCancellationRequested();
+			Thread.Sleep(Poll);
+			if ((left = probe()).Count == 0) {
+				return;
+			}
+		}
+		if ((left = probe()).Count == 0) {
+			return;
+		}
+		throw new StepFailedException($"{string.Join(", ", left.Select(l => $"{l.Image} (process {l.Pid})"))} still runs from Mod Organizer's folders - " +
+			"left over from a game that closed? Let it finish or close it, then start again (Mod Organizer can crash when started beside it)");
 	}
 
 	public static readonly string[] GameImages = ["SkyrimSE.exe", "skse64_loader.exe"];
@@ -133,7 +225,9 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	public void Start(CancellationToken a_ct)
 	{
 		if (!Running) {
+			WaitForLeftovers(a_ct);
 			_log.Detail($"starting Mod Organizer (profile {ProfileName})");
+			_mo2LaunchedAt = DateTime.UtcNow;
 			Launch($"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)}", Path.GetDirectoryName(Mo2.Exe)!);
 		}
 		WaitReady(a_ct);
@@ -153,6 +247,12 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	public static TimeSpan Poll { get; set; } = TimeSpan.FromMilliseconds(500);
 	const double QuietShare = 0.16;
 	const string SecondaryBox = "secondary process";
+	// a second ModOrganizer.exe started in the same second as another (an nxm link, the player's click): its own box, OK ends it.
+	// Answered only within a minute of a start this run sent - a box of a copy the player started is left to the player
+	const string AlreadyBox = "already running";
+	DateTime? _mo2LaunchedAt;
+
+	bool WeJustLaunched() => _mo2LaunchedAt is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(1);
 
 	ReadySignals ReadNow()
 	{
@@ -187,9 +287,21 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 			a_ct.ThrowIfCancellationRequested();
 			var s = (ReadyProbe ?? ReadNow)();
 			var now = sw.Elapsed;
-			if (s.Box != null && s.Box.Contains(SecondaryBox, StringComparison.OrdinalIgnoreCase)) {
-				_log.Detail("Mod Organizer said it lost a request from a second copy of itself - answered OK");
+			var answer = s.Box != null && (s.Box.Contains(SecondaryBox, StringComparison.OrdinalIgnoreCase) ||
+				s.Box.Contains(AlreadyBox, StringComparison.OrdinalIgnoreCase) && WeJustLaunched());
+			if (answer && now > ReadyLimit) {
+				throw new StepFailedException($"Mod Organizer was not ready after {ReadyLimit.TotalMinutes:0.#} minutes - its box stays open after OK: " + Trim(s.Box!));
+			}
+			if (answer && s.Box!.Contains(AlreadyBox, StringComparison.OrdinalIgnoreCase)) {
+				_log.Detail("a second copy of Mod Organizer, started at the same moment, said one is already running - answered OK (it ends)");
 				PressBox(s.Box);
+				quietSince = null;
+				Thread.Sleep(Poll);
+				continue;
+			}
+			if (answer) {
+				_log.Detail("Mod Organizer said it lost a request from a second copy of itself - answered OK");
+				PressBox(s.Box!);
 				quietSince = null;
 				Thread.Sleep(Poll);
 				continue;
@@ -238,6 +350,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		var waited = Stopwatch.StartNew();
 		var told = false;
 		while (true) {
+			a_ct.ThrowIfCancellationRequested();
 			var dl = DownloadsInProgress();
 			var game = GameRunning();
 			var theirs = (ForeignProbe ?? (() => ForeignChildren(true)))();
@@ -348,6 +461,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	{
 		for (var attempt = 0; attempt < 3; ++attempt) {
 			WaitReady(a_ct);
+			_mo2LaunchedAt = DateTime.UtcNow;
 			Launch(a_cmd, Path.GetDirectoryName(Mo2.Exe)!);
 			var until = DateTime.UtcNow + a_limit;
 			var lost = false;
@@ -370,6 +484,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	// the game through MO2's executable (SKSE); returns the game's process id once it exists
 	public int LaunchGame(string a_title, Func<int> a_gamePid, CancellationToken a_ct)
 	{
+		EnsureSteam(a_ct);
 		Start(a_ct);
 		_log.Detail($"starting the game through Mod Organizer ({a_title})");
 		var pid = LaunchTool($"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)} run -e {Quote(a_title)}", a_gamePid, TimeSpan.FromMinutes(5), a_ct) ??
@@ -377,6 +492,71 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		// the run's own game: the only one it may close (a game the player starts is never touched)
 		Started.Add(pid);
 		return pid;
+	}
+
+	// a Steam copy of the game needs Steam running: without it Mod Organizer's game start stops on its own "start Steam?" question
+	// and waits there - so Steam is started first (silently, from the path it registered) and given time to sign in
+	public Func<bool>? SteamRunningProbe { get; set; }
+	public Func<string?>? SteamExeProbe { get; set; }
+	public static TimeSpan SteamWait { get; set; } = TimeSpan.FromMinutes(2);
+	public static TimeSpan SteamSettle { get; set; } = TimeSpan.FromSeconds(20);
+
+	// a Steam build ships steam_api64.dll wherever its folder was copied to (a modlist's "Stock Game"); a GOG build does not
+	public static bool IsSteamGame(string a_gameDir) =>
+		File.Exists(Path.Combine(a_gameDir, "steam_api64.dll")) || a_gameDir.Replace('/', '\\').Contains(@"\steamapps\", StringComparison.OrdinalIgnoreCase);
+
+	static string? SteamExe()
+	{
+		var p = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamExe", null) as string;
+		return string.IsNullOrEmpty(p) ? null : Path.GetFullPath(p.Replace('/', '\\'));
+	}
+
+	// a Steam of another Windows account on this PC does not serve this user's game
+	static bool SteamInMySession()
+	{
+		int session;
+		using (var self = Process.GetCurrentProcess()) {
+			session = self.SessionId;
+		}
+		var found = false;
+		foreach (var p in Procs.ByImage("steam.exe")) {
+			using (p) {
+				try {
+					found |= p.SessionId == session;
+				} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) {
+				}
+			}
+		}
+		return found;
+	}
+
+	public void EnsureSteam(CancellationToken a_ct) => EnsureSteam(Mo2.GameDir, a_ct);
+
+	public void EnsureSteam(string a_gameDir, CancellationToken a_ct)
+	{
+		if (!IsSteamGame(a_gameDir)) {
+			return;
+		}
+		bool Up() => SteamRunningProbe?.Invoke() ?? SteamInMySession();
+		if (Up()) {
+			return;
+		}
+		var exe = (SteamExeProbe ?? SteamExe)();
+		if (exe == null || (SteamExeProbe == null && !File.Exists(exe))) {
+			throw new StepFailedException("Steam is not running and its program could not be found - start Steam, then start the run again");
+		}
+		_log.Detail("Steam is not running - starting it (Mod Organizer waits for it before the game starts)");
+		Launch($"{Quote(exe)} -silent", Path.GetDirectoryName(exe)!);
+		var sw = Stopwatch.StartNew();
+		while (!Up()) {
+			a_ct.ThrowIfCancellationRequested();
+			if (sw.Elapsed > SteamWait) {
+				throw new StepFailedException($"Steam did not start within {SteamWait.TotalMinutes:0} minutes - start it, then start the run again");
+			}
+			Thread.Sleep(Poll);
+		}
+		a_ct.WaitHandle.WaitOne(SteamSettle);
+		a_ct.ThrowIfCancellationRequested();
 	}
 
 	// run an arbitrary program inside MO2's virtual folder (MO2 cannot start some tools straight - FasterNGIO ends at once); its
