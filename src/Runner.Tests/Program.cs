@@ -1721,16 +1721,61 @@ public static class Program
 	});
 
 	// two MO2 starts in the same second: the loser's "already running" box is answered OK, and MO2 is then ready
+	// only within a minute of a start this run sent; a box of a copy the player started is left alone (and named on time-out)
 	static void T_AlreadyRunningBoxIsAnswered() => FastReady(() => {
 		using var f = new FakeMo2();
 		var pressed = 0;
 		string? box = "An instance of Mod Organizer is already running";
 		var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			RunningProbe = () => false,
+			LeftoverProbe = () => [],
+			Launch = (_, _) => 1,
 			ReadyProbe = () => new(true, true, TimeSpan.Zero, box),
 			PressBoxProbe = _ => { ++pressed; box = null; },
 		};
-		c.WaitReady(default);
-		Equal(1, pressed, "boxes answered");
+		c.Start(default);
+		Equal(1, pressed, "boxes answered after our own start");
+		Mo2Control.ReadyLimit = TimeSpan.FromSeconds(1);
+		var notOurs = 0;
+		var theirs = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			ReadyProbe = () => new(true, true, TimeSpan.Zero, "An instance of Mod Organizer is already running"),
+			PressBoxProbe = _ => ++notOurs,
+		};
+		Throws<StepFailedException>(() => theirs.WaitReady(default), "a box we did not cause keeps MO2 not ready");
+		Equal(0, notOurs, "a box of a copy the player started was pressed");
+	});
+
+	// a box that stays open after OK cannot hold the ready wait past its limit
+	static void T_ABoxThatStaysOpenEndsTheWait() => FastReady(() => {
+		using var f = new FakeMo2();
+		Mo2Control.ReadyLimit = TimeSpan.FromSeconds(1);
+		var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+			ReadyProbe = () => new(true, true, TimeSpan.Zero, "failed to receive data from secondary process"),
+			PressBoxProbe = _ => { },
+		};
+		var sw = Stopwatch.StartNew();
+		Throws<StepFailedException>(() => c.WaitReady(default), "an endless box");
+		Check(sw.Elapsed < TimeSpan.FromSeconds(4), $"the wait ran {sw.Elapsed.TotalSeconds:0.0} s past a 1 s limit");
+	});
+
+	// Start itself waits for the leftover before it launches MO2
+	static void T_StartWaitsForTheLeftoverFirst() => FastReady(() => {
+		using var f = new FakeMo2();
+		var keep = Mo2Control.LeftoverWait;
+		Mo2Control.LeftoverWait = TimeSpan.FromSeconds(3);
+		try {
+			int probes = 0, probesAtLaunch = -1;
+			var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				RunningProbe = () => false,
+				LeftoverProbe = () => ++probes < 3 ? [(99003, "TheWatcherDump.exe")] : [],
+				Launch = (_, _) => { probesAtLaunch = probes; return 1; },
+				ReadyProbe = () => new(true, true, TimeSpan.Zero, null),
+			};
+			c.Start(default);
+			Equal(3, probesAtLaunch, "probe calls when MO2 was launched (only after the leftover was gone)");
+		} finally {
+			Mo2Control.LeftoverWait = keep;
+		}
 	});
 
 	// a finished download MO2 left as "<file>.unfinished" beside the same bytes is no download in progress; a real one still is
@@ -1811,6 +1856,55 @@ public static class Program
 			Mo2Control.SteamSettle = keep;
 		}
 	});
+
+	// LaunchGame starts Steam BEFORE it asks MO2 for the game
+	static void T_LaunchGameStartsSteamFirst() => FastReady(() => {
+		using var f = new FakeMo2();
+		var keep = Mo2Control.SteamSettle;
+		Mo2Control.SteamSettle = TimeSpan.Zero;
+		try {
+			File.WriteAllText(Path.Combine(f.Game, "steam_api64.dll"), "");
+			bool steam = false, mo2 = false;
+			var cmds = new List<string>();
+			var c = new Mo2Control(Mo2Instance.Load(f.Exe, f.Instance), "Test", RunLog.Null) {
+				RunningProbe = () => mo2,
+				LeftoverProbe = () => [],
+				SteamRunningProbe = () => steam,
+				SteamExeProbe = () => @"C:\Program Files (x86)\Steam\steam.exe",
+				ReadyProbe = () => new(true, true, TimeSpan.Zero, null),
+				Launch = (cmd, _) => {
+					cmds.Add(cmd);
+					steam |= cmd.Contains("steam.exe", StringComparison.OrdinalIgnoreCase);
+					mo2 |= cmd.Contains("ModOrganizer.exe", StringComparison.OrdinalIgnoreCase);
+					return 1;
+				},
+			};
+			var pid = c.LaunchGame("SKSE", () => cmds.Any(x => x.Contains("run -e", StringComparison.Ordinal)) ? 4243 : 0, default);
+			Equal(4243, pid, "the game's process");
+			var s = cmds.FindIndex(x => x.Contains("steam.exe\" -silent", StringComparison.OrdinalIgnoreCase));
+			var g = cmds.FindIndex(x => x.Contains("run -e", StringComparison.Ordinal));
+			Check(s >= 0 && g > s, $"Steam at {s}, the game start at {g}: " + string.Join(" | ", cmds));
+			Check(cmds.All(x => x.Contains("steam.exe", StringComparison.OrdinalIgnoreCase) || x.Contains(f.Exe, StringComparison.OrdinalIgnoreCase)),
+				"a start outside the fake MO2: " + string.Join(" | ", cmds));
+		} finally {
+			Mo2Control.SteamSettle = keep;
+		}
+	});
+
+	// the start wait answers each box through its own press: the plugin error's No, a notice's button; an unknown one stops it
+	static void T_NativeBoxesArePressedByTheirVerdict()
+	{
+		var pressed = new List<string>();
+		InGame.AnswerNativeBoxes([
+			new InGame.NativeBox("Plugin error", "SKSE plugin X.dll failed to load. Continue running?", ["Yes", "No"], l => pressed.Add("1:" + l)),
+			new InGame.NativeBox("Notice", "Settings reset.", ["OK"], l => pressed.Add("2:" + l)),
+		], RunLog.Null);
+		Equal("1:No, 2:OK", string.Join(", ", pressed), "buttons pressed");
+		pressed.Clear();
+		Throws<StepFailedException>(() => InGame.AnswerNativeBoxes([
+			new InGame.NativeBox("Question", "Overwrite your settings?", ["Yes", "No"], l => pressed.Add("3:" + l))], RunLog.Null), "an unknown box");
+		Equal(0, pressed.Count, "an unknown box was pressed");
+	}
 
 	// a Windows box of the game before DevBench answers: SKSE's plugin error -> No, a notice -> its button, anything else stops
 	static void T_GameWindowsBoxesBeforeDevBench()

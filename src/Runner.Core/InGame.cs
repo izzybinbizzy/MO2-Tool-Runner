@@ -359,28 +359,56 @@ public static partial class InGame
 		return (null, "the game shows a Windows box this step does not answer: " + text);
 	}
 
-	static void NativeBoxes(RunContext a_ctx)
+	// a Windows box as the start wait sees it: its title, text, button labels and a way to press one of them
+	public sealed record NativeBox(string Title, string Text, IReadOnlyList<string> Buttons, Action<string> Press);
+
+	// each box answered by its verdict and named in the log; one the step does not answer stops it
+	public static void AnswerNativeBoxes(IEnumerable<NativeBox> a_boxes, RunLog a_log)
 	{
-		var procs = Procs.ByImage(GameImage).Concat(Procs.ByImage("skse64_loader.exe")).ToList();
-		try {
-			// only Windows' own dialog windows: UI Automation on the loading game's main window can wait for its timeout each time
-			foreach (var h in Native.TopWindowsOf(procs.Select(p => p.Id).ToList()).Where(h => Native.ClassName(h) == "#32770")) {
-				if (Uia.FromHandle(h) is not { } e) {
-					continue;
-				}
-				var buttons = Uia.RealButtons(e);
-				var (press, note) = NativeBoxVerdict(Uia.Name(e), Uia.TextOf(e, 800), buttons.Select(Uia.Name).ToList());
-				if (press == null) {
-					throw new StepFailedException(note);
-				}
-				a_ctx.Log.Warn(note);
-				if (buttons.FirstOrDefault(x => Uia.Name(x).Replace("&", "").Trim() == press) is { } btn) {
-					Uia.Press(btn);
+		foreach (var b in a_boxes) {
+			var (press, note) = NativeBoxVerdict(b.Title, b.Text, b.Buttons);
+			if (press == null) {
+				throw new StepFailedException(note);
+			}
+			a_log.Warn(note);
+			b.Press(press);
+		}
+	}
+
+	// the boxes of THIS run's game and of an SKSE loader started since its launch - a game the player starts is never touched
+	static List<NativeBox> RunBoxes(RunContext a_ctx, DateTime a_launched)
+	{
+		var pids = new List<int>();
+		using (var g = Game(a_ctx)) {
+			if (g != null) {
+				pids.Add(g.Id);
+			}
+		}
+		foreach (var p in Procs.ByImage("skse64_loader.exe")) {
+			using (p) {
+				if (Procs.StartTime(p.Id) is { } t && t >= a_launched.ToUniversalTime().AddSeconds(-2)) {
+					pids.Add(p.Id);
 				}
 			}
-		} finally {
-			procs.ForEach(p => p.Dispose());
 		}
+		var outList = new List<NativeBox>();
+		// only Windows' own dialog windows: UI Automation on the loading game's main window can wait for its timeout each time
+		if (pids.Count == 0) {
+			return outList;
+		}
+		foreach (var h in Native.TopWindowsOf(pids).Where(h => Native.ClassName(h) == "#32770")) {
+			if (Uia.FromHandle(h) is not { } e) {
+				continue;
+			}
+			var buttons = Uia.RealButtons(e);
+			outList.Add(new NativeBox(Uia.Name(e), Uia.TextOf(e, 800), buttons.Select(b => Uia.Name(b).Replace("&", "").Trim()).ToList(),
+				label => {
+					if (buttons.FirstOrDefault(x => Uia.Name(x).Replace("&", "").Trim() == label) is { } btn) {
+						Uia.Press(btn);
+					}
+				}));
+		}
+		return outList;
 	}
 
 	// after a teleport: the new place loaded (the player there, no loading screen), within 5 minutes
@@ -505,6 +533,7 @@ public static partial class InGame
 	// returns whether the shaders compiled at this start
 	public static bool StartAndLoad(RunContext a_ctx, string a_step, StepSettings a_s, string a_save)
 	{
+		var launched = DateTime.Now;
 		LaunchGame(a_ctx, a_s);
 		var limit = TimeSpan.FromMinutes(a_s.Int("start_min", 8));
 		var sw = Stopwatch.StartNew();
@@ -517,7 +546,7 @@ public static partial class InGame
 			if (sw.Elapsed > TimeSpan.FromSeconds(30) && !GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while it was starting");
 			}
-			NativeBoxes(a_ctx);
+			AnswerNativeBoxes(RunBoxes(a_ctx, launched), a_ctx.Log);
 			Thread.Sleep(2000);
 		}
 		a_ctx.Log.Detail($"the game is up after {sw.Elapsed.TotalSeconds:0} s");
@@ -587,7 +616,7 @@ public static partial class InGame
 			if (!GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while its shaders compiled");
 			}
-			if (!seen && BootPassOver(logs, a_since) && !CacheBusy(a_ctx.Mo2.OverwriteDir)) {
+			if (!seen && BootPassOver(logs, a_since) && !Compiling(logs, a_ctx.Mo2.OverwriteDir, a_since)) {
 				passOverSince ??= sw.Elapsed;
 				if (sw.Elapsed - passOverSince >= TimeSpan.FromSeconds(30)) {
 					a_ctx.Log.Detail("the shader mod says its start-up pass is over - no compile to wait for");

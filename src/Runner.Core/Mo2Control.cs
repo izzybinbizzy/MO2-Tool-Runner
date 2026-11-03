@@ -155,7 +155,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 
 	// a program still running from Mod Organizer's own folders while MO2 is closed (a crash dumper of a game that died, kept
 	// alive inside the virtual Data folder): MO2 started beside it can crash at once (measured 2026-10-06, three crashes) - so
-	// MO2 waits for it to end; one this run's own game started is ended, any other is named and the start refused
+	// MO2 waits for it to end, then names it and refuses the start; it is never ended here (its PID may not be ours)
 	public Func<List<(int Pid, string Image)>>? LeftoverProbe { get; set; }
 	public static TimeSpan LeftoverWait { get; set; } = TimeSpan.FromMinutes(2);
 
@@ -203,15 +203,11 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 				return;
 			}
 		}
-		var ours = new HashSet<int>(Started.SelectMany(Procs.Tree));
-		foreach (var (pid, image) in left.Where(l => ours.Contains(l.Pid))) {
-			_log.Detail($"ended {image} ({pid}), left over from this run's own game");
-			Procs.KillTree(pid);
+		if ((left = probe()).Count == 0) {
+			return;
 		}
-		if ((left = probe()).Count > 0) {
-			throw new StepFailedException($"{string.Join(", ", left.Select(l => $"{l.Image} (process {l.Pid})"))} still runs from Mod Organizer's folders - " +
-				"left over from a game that closed? Close it, then start again (Mod Organizer can crash when started beside it)");
-		}
+		throw new StepFailedException($"{string.Join(", ", left.Select(l => $"{l.Image} (process {l.Pid})"))} still runs from Mod Organizer's folders - " +
+			"left over from a game that closed? Let it finish or close it, then start again (Mod Organizer can crash when started beside it)");
 	}
 
 	public static readonly string[] GameImages = ["SkyrimSE.exe", "skse64_loader.exe"];
@@ -231,6 +227,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		if (!Running) {
 			WaitForLeftovers(a_ct);
 			_log.Detail($"starting Mod Organizer (profile {ProfileName})");
+			_mo2LaunchedAt = DateTime.UtcNow;
 			Launch($"{Quote(Mo2.Exe)}{Instance} -p {Quote(ProfileName)}", Path.GetDirectoryName(Mo2.Exe)!);
 		}
 		WaitReady(a_ct);
@@ -250,8 +247,12 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	public static TimeSpan Poll { get; set; } = TimeSpan.FromMilliseconds(500);
 	const double QuietShare = 0.16;
 	const string SecondaryBox = "secondary process";
-	// a second ModOrganizer.exe started in the same second as another (an nxm link, the player's click): its own box, OK ends it
+	// a second ModOrganizer.exe started in the same second as another (an nxm link, the player's click): its own box, OK ends it.
+	// Answered only within a minute of a start this run sent - a box of a copy the player started is left to the player
 	const string AlreadyBox = "already running";
+	DateTime? _mo2LaunchedAt;
+
+	bool WeJustLaunched() => _mo2LaunchedAt is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(1);
 
 	ReadySignals ReadNow()
 	{
@@ -286,16 +287,21 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 			a_ct.ThrowIfCancellationRequested();
 			var s = (ReadyProbe ?? ReadNow)();
 			var now = sw.Elapsed;
-			if (s.Box != null && s.Box.Contains(AlreadyBox, StringComparison.OrdinalIgnoreCase)) {
+			var answer = s.Box != null && (s.Box.Contains(SecondaryBox, StringComparison.OrdinalIgnoreCase) ||
+				s.Box.Contains(AlreadyBox, StringComparison.OrdinalIgnoreCase) && WeJustLaunched());
+			if (answer && now > ReadyLimit) {
+				throw new StepFailedException($"Mod Organizer was not ready after {ReadyLimit.TotalMinutes:0.#} minutes - its box stays open after OK: " + Trim(s.Box!));
+			}
+			if (answer && s.Box!.Contains(AlreadyBox, StringComparison.OrdinalIgnoreCase)) {
 				_log.Detail("a second copy of Mod Organizer, started at the same moment, said one is already running - answered OK (it ends)");
 				PressBox(s.Box);
 				quietSince = null;
 				Thread.Sleep(Poll);
 				continue;
 			}
-			if (s.Box != null && s.Box.Contains(SecondaryBox, StringComparison.OrdinalIgnoreCase)) {
+			if (answer) {
 				_log.Detail("Mod Organizer said it lost a request from a second copy of itself - answered OK");
-				PressBox(s.Box);
+				PressBox(s.Box!);
 				quietSince = null;
 				Thread.Sleep(Poll);
 				continue;
@@ -344,6 +350,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		var waited = Stopwatch.StartNew();
 		var told = false;
 		while (true) {
+			a_ct.ThrowIfCancellationRequested();
 			var dl = DownloadsInProgress();
 			var game = GameRunning();
 			var theirs = (ForeignProbe ?? (() => ForeignChildren(true)))();
@@ -454,6 +461,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 	{
 		for (var attempt = 0; attempt < 3; ++attempt) {
 			WaitReady(a_ct);
+			_mo2LaunchedAt = DateTime.UtcNow;
 			Launch(a_cmd, Path.GetDirectoryName(Mo2.Exe)!);
 			var until = DateTime.UtcNow + a_limit;
 			var lost = false;
@@ -503,6 +511,25 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		return string.IsNullOrEmpty(p) ? null : Path.GetFullPath(p.Replace('/', '\\'));
 	}
 
+	// a Steam of another Windows account on this PC does not serve this user's game
+	static bool SteamInMySession()
+	{
+		int session;
+		using (var self = Process.GetCurrentProcess()) {
+			session = self.SessionId;
+		}
+		var found = false;
+		foreach (var p in Procs.ByImage("steam.exe")) {
+			using (p) {
+				try {
+					found |= p.SessionId == session;
+				} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) {
+				}
+			}
+		}
+		return found;
+	}
+
 	public void EnsureSteam(CancellationToken a_ct) => EnsureSteam(Mo2.GameDir, a_ct);
 
 	public void EnsureSteam(string a_gameDir, CancellationToken a_ct)
@@ -510,7 +537,7 @@ public sealed class Mo2Control(Mo2Instance a_mo2, string a_profile, RunLog a_log
 		if (!IsSteamGame(a_gameDir)) {
 			return;
 		}
-		bool Up() => SteamRunningProbe?.Invoke() ?? Procs.Running("steam.exe");
+		bool Up() => SteamRunningProbe?.Invoke() ?? SteamInMySession();
 		if (Up()) {
 			return;
 		}
