@@ -28,6 +28,10 @@ public static class Preflight
 		if (control.DownloadsInProgress() is { Count: > 0 } dl) {
 			outList.Add(new Issue("", true, "Mod Organizer is downloading (" + string.Join(", ", dl.Take(3)) + ") - wait for it"));
 		}
+		if (Mo2Control.Downloads(a_mo2.DownloadsDir).Stale is { Count: > 0 } stale) {
+			outList.Add(new Issue("", false, $"Mod Organizer keeps {stale.Count} download(s) that already finished as \"unfinished\" (" + string.Join(", ", stale.Take(3)) +
+				") - each is the same as the finished file beside it; remove its row in Mod Organizer's Downloads tab, or MO2 resumes it at every start"));
+		}
 		if (control.Running) {
 			outList.Add(new Issue("", false, "Mod Organizer is open - the run will close it"));
 		}

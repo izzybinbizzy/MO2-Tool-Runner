@@ -130,6 +130,38 @@ public static partial class InGame
 		return null;
 	}
 
+	// Bottled Shaders queues its disk-cache trim ("[DDC] N entries ...") only once its start-up compile pass is over, so that line
+	// with no "remaining=N" (N > 0) after it means a warm start needs no full compile watch (a warm start sat 300 s at the main menu)
+	// a line stamped with its date before a_since is an earlier session's, never this start's
+	public static bool BootPassOver(IReadOnlyList<string> a_lines, DateTime? a_since = null)
+	{
+		for (int i = a_lines.Count - 1; i >= 0; --i) {
+			var m = Remaining().Match(a_lines[i]);
+			if (m.Success && int.Parse(m.Groups[1].Value, InvariantCulture) > 0) {
+				return false;
+			}
+			if (a_lines[i].Contains("[DDC]", StringComparison.Ordinal)) {
+				var line = a_lines[i].TrimStart();
+				return a_since is not { } since || line.Length < 20 || !DateTime.TryParseExact(line[1..20], "yyyy-MM-dd HH:mm:ss", InvariantCulture,
+					System.Globalization.DateTimeStyles.None, out var at) || at >= since.AddSeconds(-1);
+			}
+		}
+		return false;
+	}
+
+	static bool BootPassOver(string a_logFolder, DateTime a_since)
+	{
+		var log = NewestShaderLog(a_logFolder);
+		if (log == null || File.GetLastWriteTimeUtc(log) < a_since.ToUniversalTime()) {
+			return false;
+		}
+		try {
+			return BootPassOver(Files.ReadSharedText(log).Split('\n').TakeLast(300).ToList(), a_since);
+		} catch (IOException) {
+			return false;
+		}
+	}
+
 	public static bool CacheBusy(string a_overwrite, int a_quietSeconds = 120)
 	{
 		var d = Path.Combine(a_overwrite, "ShaderCache");
@@ -246,17 +278,108 @@ public static partial class InGame
 	static bool DynOff(RunContext a_ctx) =>
 		a_ctx.Setup.StepSettings("cleansave") is { } cs && cs["dyndolod_off"] != null ? new StepSettings(cs).Bool("dyndolod_off", false) : HasDynDolod(a_ctx.Profile);
 
-	// a save just loaded is given time to settle before anything is done in it (his flow: a full minute)
+	// a box that says another will follow (a perk overhaul resetting perks: "A message box will appear when the process is
+	// complete") - the wait goes on until that one came, or 10 minutes
+	public static bool PromisesBox(string a_body) =>
+		a_body.Contains("message box will appear", StringComparison.OrdinalIgnoreCase) || a_body.Contains("message will appear", StringComparison.OrdinalIgnoreCase) ||
+		a_body.Contains("another message box", StringComparison.OrdinalIgnoreCase);
+
+	// when the settle ends after a box: a promise holds it up to 10 minutes; the box it promised (or any other) ends that hold,
+	// leaving the plain settle time or 10 s more, whichever is later
+	public static DateTime SettleUntil(DateTime a_plain, DateTime a_now, string a_body) =>
+		PromisesBox(a_body) ? a_now.AddMinutes(10) : a_plain > a_now.AddSeconds(10) ? a_plain : a_now.AddSeconds(10);
+
+	// a save just loaded is given time to settle before anything is done in it (his flow: a full minute); a mod's message box
+	// that opens meanwhile (seconds after the load, pausing the game) is answered like a load box
 	static void Settle(RunContext a_ctx, string a_step, int a_seconds, string a_why)
 	{
 		a_ctx.Activity(a_step, a_why);
-		var until = DateTime.UtcNow.AddSeconds(a_seconds);
+		var plain = DateTime.UtcNow.AddSeconds(a_seconds);
+		var until = plain;
+		var nextLook = DateTime.UtcNow;
 		while (DateTime.UtcNow < until) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			if (!GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while the save settled");
 			}
+			if (DateTime.UtcNow >= nextLook) {
+				nextLook = DateTime.UtcNow.AddSeconds(5);
+				try {
+					if (AnswerGameBox(a_ctx) is { } body) {
+						until = SettleUntil(plain, DateTime.UtcNow, body);
+						if (PromisesBox(body)) {
+							a_ctx.Log.Detail("that box says another follows - waiting for it (up to 10 minutes)");
+						}
+					}
+				} catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException or FormatException or System.Text.Json.JsonException) {
+				}
+			}
 			Thread.Sleep(1000);
+		}
+	}
+
+	// the game's message box, if one is open: answered by its text and labels (DecideBox); returns its text, or null when none
+	// was open - one this step cannot answer stops it, since an open box pauses the game under everything that follows
+	static string? AnswerGameBox(RunContext a_ctx)
+	{
+		if (a_ctx.DevBench.Call("menu", new { action = "list" }, 10)["messageBoxOpen"]?.GetValue<bool>() != true) {
+			return null;
+		}
+		var d = a_ctx.DevBench.Call("menu", new { action = "describe" }, 10);
+		if (d["messageBoxOpen"]?.GetValue<bool>() == false) {
+			return null;
+		}
+		var body = string.Join(" ", new[] { "bodyText", "text", "message" }.Select(k => d[k]?.ToString() ?? "")).Trim();
+		var labels = (d["buttons"] as JsonArray ?? d["buttonTexts"] as JsonArray ?? [])
+			.Select(b => b is JsonObject bo ? (bo["text"] ?? bo["label"])?.ToString() ?? "" : b?.ToString() ?? "").ToList();
+		var (answer, idx) = DevBench.DecideBox(body, labels, d["buttonCount"]?.GetValue<int>());
+		if (answer == null) {
+			throw new StepFailedException("the game shows a box this step does not answer: " + body);
+		}
+		a_ctx.DevBench.Call("menu", new { action = "accept", index = idx });
+		a_ctx.Log.Detail($"game box {answer}: {(body.Length > 160 ? body[..160] + " ..." : body)}");
+		return body;
+	}
+
+	// a Windows box the game or SKSE's loader shows before DevBench answers (DevBench cannot see it, and the start waits under
+	// it): SKSE's "a plugin failed to load" question is answered No - the game goes on without that plugin, which is named - a
+	// one-button notice is acknowledged and named; any other box stops the step with its text
+	public static (string? Press, string Note) NativeBoxVerdict(string a_title, string a_text, IReadOnlyList<string> a_buttons)
+	{
+		var all = a_title + " " + a_text;
+		var text = a_text.Length > 300 ? a_text[..300] + " ..." : a_text;
+		var labels = a_buttons.Select(b => b.Replace("&", "").Trim()).ToList();
+		if (all.Contains("plugin", StringComparison.OrdinalIgnoreCase) && (all.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+		    all.Contains("fail", StringComparison.OrdinalIgnoreCase)) && labels.FirstOrDefault(l => l.Equals("No", StringComparison.OrdinalIgnoreCase)) is { } no) {
+			return (no, "an SKSE plugin did not load - the game goes on without it (check that plugin's requirements): " + text);
+		}
+		if (labels.Count == 1) {
+			return (labels[0], "the game showed a notice: " + text);
+		}
+		return (null, "the game shows a Windows box this step does not answer: " + text);
+	}
+
+	static void NativeBoxes(RunContext a_ctx)
+	{
+		var procs = Procs.ByImage(GameImage).Concat(Procs.ByImage("skse64_loader.exe")).ToList();
+		try {
+			// only Windows' own dialog windows: UI Automation on the loading game's main window can wait for its timeout each time
+			foreach (var h in Native.TopWindowsOf(procs.Select(p => p.Id).ToList()).Where(h => Native.ClassName(h) == "#32770")) {
+				if (Uia.FromHandle(h) is not { } e) {
+					continue;
+				}
+				var buttons = Uia.RealButtons(e);
+				var (press, note) = NativeBoxVerdict(Uia.Name(e), Uia.TextOf(e, 800), buttons.Select(Uia.Name).ToList());
+				if (press == null) {
+					throw new StepFailedException(note);
+				}
+				a_ctx.Log.Warn(note);
+				if (buttons.FirstOrDefault(x => Uia.Name(x).Replace("&", "").Trim() == press) is { } btn) {
+					Uia.Press(btn);
+				}
+			}
+		} finally {
+			procs.ForEach(p => p.Dispose());
 		}
 	}
 
@@ -394,6 +517,7 @@ public static partial class InGame
 			if (sw.Elapsed > TimeSpan.FromSeconds(30) && !GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while it was starting");
 			}
+			NativeBoxes(a_ctx);
 			Thread.Sleep(2000);
 		}
 		a_ctx.Log.Detail($"the game is up after {sw.Elapsed.TotalSeconds:0} s");
@@ -419,21 +543,7 @@ public static partial class InGame
 				throw new StepFailedException($"the game closed while loading \"{a_save}\"");
 			}
 			try {
-				if (a_ctx.DevBench.Call("menu", new { action = "list" }, 10)["messageBoxOpen"]?.GetValue<bool>() == true) {
-					var d = a_ctx.DevBench.Call("menu", new { action = "describe" }, 10);
-					if (d["messageBoxOpen"]?.GetValue<bool>() == false) {
-						Thread.Sleep(2000);
-						continue;
-					}
-					var body = string.Join(" ", new[] { "bodyText", "text", "message" }.Select(k => d[k]?.ToString() ?? ""));
-					var labels = (d["buttons"] as JsonArray ?? d["buttonTexts"] as JsonArray ?? [])
-						.Select(b => b is JsonObject bo ? (bo["text"] ?? bo["label"])?.ToString() ?? "" : b?.ToString() ?? "").ToList();
-					var (answer, idx) = DevBench.DecideBox(body, labels, d["buttonCount"]?.GetValue<int>());
-					if (answer == null) {
-						throw new StepFailedException("the game shows a box this step does not answer: " + body.Trim());
-					}
-					a_ctx.DevBench.Call("menu", new { action = "accept", index = idx });
-					a_ctx.Log.Detail($"load box: {answer}");
+				if (AnswerGameBox(a_ctx) != null) {
 					Thread.Sleep(3000);
 					continue;
 				}
@@ -471,10 +581,20 @@ public static partial class InGame
 		var sw = Stopwatch.StartNew();
 		var seen = false;
 		var quietSince = TimeSpan.Zero;
+		TimeSpan? passOverSince = null;
 		while (sw.Elapsed < max) {
 			a_ctx.Cancel.ThrowIfCancellationRequested();
 			if (!GameUp(a_ctx)) {
 				throw new StepFailedException("the game closed while its shaders compiled");
+			}
+			if (!seen && BootPassOver(logs, a_since) && !CacheBusy(a_ctx.Mo2.OverwriteDir)) {
+				passOverSince ??= sw.Elapsed;
+				if (sw.Elapsed - passOverSince >= TimeSpan.FromSeconds(30)) {
+					a_ctx.Log.Detail("the shader mod says its start-up pass is over - no compile to wait for");
+					return false;
+				}
+			} else {
+				passOverSince = null;
 			}
 			if (Compiling(logs, a_ctx.Mo2.OverwriteDir, a_since)) {
 				if (!seen) {
