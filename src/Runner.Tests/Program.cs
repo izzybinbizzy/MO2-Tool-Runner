@@ -419,7 +419,13 @@ public static class Program
 		Check(ng.NewGame, "the tick is kept in the setup");
 		Equal("snowfixer,autoblend", string.Join(",", Runner.Plan(ng, null, null, null).Select(x => x.Key)), "a new game: the save steps left out");
 		Equal("snowfixer,autoblend", string.Join(",", ng.EnabledSteps.Select(x => x.Key)), "the check and the run see the same steps");
-		Throws<ArgumentException>(() => Runner.Plan(ng, "cleansave", null, null), "only the clean save on a new game is refused, said why");
+		ArgumentException? refusal = null;
+		try {
+			Runner.Plan(ng, "cleansave", null, null);
+		} catch (ArgumentException e) {
+			refusal = e;
+		}
+		Check(refusal?.Message.Contains("New game", StringComparison.Ordinal) == true, "only the clean save on a new game is refused, naming the tick: " + refusal?.Message);
 		Equal(0, Preflight.Run(ng, Mo2Instance.Load(f.Exe, f.Instance), ng.EnabledSteps.Select(x => x.Key).ToList()).Count(i => i.Step is "cleansave" or "playsave"),
 			"no save step asks for a save");
 		var lines = RunPreview.Build(ng, Mo2Instance.Load(f.Exe, f.Instance), Runner.Plan(ng, null, null, null)).Lines(_ => null);

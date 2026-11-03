@@ -78,7 +78,7 @@ public sealed partial class MainViewModel : Observable
 	Task RunRestore() => Restore();
 	Task RunCheck() => Check();
 
-	public Setup? Setup { get; private set { field = value; OnPropertyChanged(nameof(CanStart)); } }
+	public Setup? Setup { get; private set { field = value; OnPropertyChanged(nameof(CanStart)); OnPropertyChanged(nameof(NewGame)); } }
 	public event Action<string, string>? Alert;
 	// new log text (and true when the box must be emptied first: another run's log)
 	public event Action<string, bool>? LogChanged;
@@ -151,6 +151,8 @@ public sealed partial class MainViewModel : Observable
 			}
 			MarkLeftOut();
 			Estimate();
+			// the last check's findings were for the other set of steps
+			Issues.Clear();
 			ShowReady();
 		}
 		OnPropertyChanged(nameof(NewGame));
@@ -191,7 +193,7 @@ public sealed partial class MainViewModel : Observable
 		NowTitle = "Ready";
 		var on = Steps.Count(s => s.Runs);
 		NowActivity = SelectedSetup == null ? "Make a setup first (New setup)." :
-			$"Press START to run the {on} ticked step(s){(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
+			$"Press START to run the {on} step(s) that will run{(EstimateText == "" ? "" : ", " + EstimateText)}. Press Check (F5) first to see that every tool is found.";
 	}
 
 	public void Say(string a_text, string a_kind = "")
@@ -541,7 +543,8 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	// a step switched on / off for the setup (saved at once)
-	public bool SetupInUse => Setup != null && Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase);
+	// a start asked for and not yet in its run record counts too: the engine reads the setup in that gap
+	public bool SetupInUse => Setup != null && (_startAsked != null || (Engine.Active() is { } j && string.Equals(j.SetupFile, Setup.File, StringComparison.OrdinalIgnoreCase)));
 
 	public void SetOn(StepRow a_row, bool a_on)
 	{
