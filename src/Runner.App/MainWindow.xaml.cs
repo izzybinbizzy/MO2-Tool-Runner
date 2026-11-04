@@ -30,7 +30,7 @@ public partial class MainWindow : Window
 			await _vm.PollAsync();
 			// the notification-area icon (there once a run started or a notification was shown) says what runs
 			if (_vm.IsRunning || _tray?.Shown == true) {
-				_tray?.Show("Patcher Unification Project - " + _vm.NowTitle);
+				_tray?.Show("Skyrim Utility Patcher - " + _vm.NowTitle);
 			}
 		};
 		_timer.Start();

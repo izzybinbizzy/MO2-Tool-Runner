@@ -43,7 +43,7 @@ public sealed partial class HiddenDesktop : IDisposable
 	readonly nint _desk;
 	public string Name { get; }
 
-	public HiddenDesktop(string a_name = "Patcher Unification Project")
+	public HiddenDesktop(string a_name = "Skyrim Utility Patcher")
 	{
 		Name = a_name.Replace(' ', '-');
 		_desk = CreateDesktop(Name, 0, 0, 0, GENERIC_ALL, 0);

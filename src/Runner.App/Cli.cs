@@ -1,14 +1,14 @@
 namespace ToolRunner.App;
 
 // The command line (for players who script, and for agents under watch.py):
-//   "Patcher Unification Project.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
-//   "Patcher Unification Project.exe" check --setup <file>                                                  the pre-check, printed
-//   "Patcher Unification Project.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
-//   "Patcher Unification Project.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
-//   "Patcher Unification Project.exe" restore [--setup <file>]                                              put back an interrupted run
-//   "Patcher Unification Project.exe" stop | stop-after                                                     ask the running run to stop
-//   "Patcher Unification Project.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
-//   "Patcher Unification Project.exe" changes --setup <file> [--look]                                       what Mod Organizer changed, newest first
+//   "Skyrim Utility Patcher.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
+//   "Skyrim Utility Patcher.exe" check --setup <file>                                                  the pre-check, printed
+//   "Skyrim Utility Patcher.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
+//   "Skyrim Utility Patcher.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
+//   "Skyrim Utility Patcher.exe" restore [--setup <file>]                                              put back an interrupted run
+//   "Skyrim Utility Patcher.exe" stop | stop-after                                                     ask the running run to stop
+//   "Skyrim Utility Patcher.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
+//   "Skyrim Utility Patcher.exe" changes --setup <file> [--look]                                       what Mod Organizer changed, newest first
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
@@ -43,11 +43,11 @@ public static class Cli
 				_ => Help(),
 			};
 		} catch (Exception e) when (e is ArgumentException or IOException or InvalidDataException) {
-			Console.WriteLine("Patcher Unification Project: " + e.Message);
+			Console.WriteLine("Skyrim Utility Patcher: " + e.Message);
 			return 3;
 		} catch (Exception e) {
 			// never Windows' crash box (a window on the player's screen): said, logged, exit 1
-			Console.WriteLine("Patcher Unification Project: something went wrong - " + e.GetType().Name + ": " + e.Message);
+			Console.WriteLine("Skyrim Utility Patcher: something went wrong - " + e.GetType().Name + ": " + e.Message);
 			App.LogCrash(e);
 			return 1;
 		}
@@ -55,7 +55,7 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("Patcher Unification Project - run | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
+		Console.WriteLine("Skyrim Utility Patcher - run | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
 		return 0;
 	}
 

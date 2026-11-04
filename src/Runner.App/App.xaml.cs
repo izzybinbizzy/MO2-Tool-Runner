@@ -4,9 +4,9 @@ using System.Windows.Media.Imaging;
 
 namespace ToolRunner.App;
 
-//   "Patcher Unification Project.exe"                       the window
-//   "Patcher Unification Project.exe" run | check | ...     the command line (Cli.cs) - no window
-//   "Patcher Unification Project.exe" --snapshot <folder>   the window drawn off screen into <folder>\*.png (nothing is shown)
+//   "Skyrim Utility Patcher.exe"                       the window
+//   "Skyrim Utility Patcher.exe" run | check | ...     the command line (Cli.cs) - no window
+//   "Skyrim Utility Patcher.exe" --snapshot <folder>   the window drawn off screen into <folder>\*.png (nothing is shown)
 public partial class App : Application
 {
 	// anything unexpected: written to the data folder's "crash.txt" and said in a message, never Windows' crash box
@@ -26,7 +26,7 @@ public partial class App : Application
 			LogCrash(e.Exception);
 			e.Handled = true;
 			MessageBox.Show("Something went wrong: " + e.Exception.Message + "\n\nIt is written in crash.txt in the data folder. A run that is going is not affected.",
-				"Patcher Unification Project", MessageBoxButton.OK, MessageBoxImage.Warning);
+				"Skyrim Utility Patcher", MessageBoxButton.OK, MessageBoxImage.Warning);
 		};
 		AppDomain.CurrentDomain.UnhandledException += (_, e) => {
 			if (e.ExceptionObject is Exception ex) {
@@ -129,10 +129,10 @@ public partial class App : Application
 		Pump(w, 600);
 		Picture(w, a_dir, "3 a guided step");
 		// past runs: their logs written into a scratch folder for the history view to read, removed after
-		var runs = Path.Combine(Path.GetTempPath(), $"Patcher Unification Project page runs {Guid.NewGuid():N}");
+		var runs = Path.Combine(Path.GetTempPath(), $"Skyrim Utility Patcher page runs {Guid.NewGuid():N}");
 		try {
 			var steps = StepCatalog.DefaultOrder.Where(k => k is not ("wryebash" or "anvillod")).ToList();
-			var full = new List<string> { "21:02:10  Patcher Unification Project - " + name + " (profile " + name + "), " + steps.Count + " steps",
+			var full = new List<string> { "21:02:10  Skyrim Utility Patcher - " + name + " (profile " + name + "), " + steps.Count + " steps",
 				"21:02:10  every output switched off - each back on once its tool rebuilt it" };
 			var at = new DateTime(2026, 10, 27, 21, 2, 22);
 			foreach (var k in steps) {
@@ -150,9 +150,9 @@ public partial class App : Application
 			foreach (var (when, took, verdict, ok, log) in new[] {
 				("Tue Oct 27  21:02", "1h 41m", $"finished: {steps.Count} step(s) in 101 min", true, full),
 				("Mon Oct 26  23:15", "30m", "finished: 3 step(s) in 30 min", true,
-					new List<string> { "23:15:02  Patcher Unification Project - " + name + " (profile " + name + "), from TexGen: 3 steps", "23:45:10  ALL DONE: finished: 3 step(s) in 30 min" }),
+					new List<string> { "23:15:02  Skyrim Utility Patcher - " + name + " (profile " + name + "), from TexGen: 3 steps", "23:45:10  ALL DONE: finished: 3 step(s) in 30 min" }),
 				("Sun Oct 25  22:40", "48m", "stopped at DynDOLOD - the profile is back as it was, with this run's finished outputs on; carry on from DynDOLOD", false,
-					new List<string> { "22:40:11  Patcher Unification Project - " + name + " (profile " + name + "), " + steps.Count + " steps", "23:28:30  stopped on request" }),
+					new List<string> { "22:40:11  Skyrim Utility Patcher - " + name + " (profile " + name + "), " + steps.Count + " steps", "23:28:30  stopped on request" }),
 			}) {
 				var folder = Path.Combine(runs, rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
 				Directory.CreateDirectory(folder);
@@ -264,7 +264,7 @@ public partial class App : Application
 		Pump(w, 600);
 		Save("6 a guided step");
 		// a made-up theme over the same run: every themeable value changed, so the picture shows what a theme reaches
-		var demoTheme = Path.Combine(Path.GetTempPath(), $"Patcher Unification Project demo theme {Guid.NewGuid():N}.json");
+		var demoTheme = Path.Combine(Path.GetTempPath(), $"Skyrim Utility Patcher demo theme {Guid.NewGuid():N}.json");
 		try {
 			File.WriteAllText(demoTheme, """
 				{ "name": { "value": "Demo" }, "windowsMode": { "value": "Light" },

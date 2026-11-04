@@ -10,13 +10,13 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- WPF0001: the Fluent theme's ThemeMode is marked experimental -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
-    <AssemblyName>Patcher Unification Project</AssemblyName>
+    <AssemblyName>Skyrim Utility Patcher</AssemblyName>
     <RootNamespace>ToolRunner.App</RootNamespace>
     <ApplicationIcon>Icon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.0.0</Version>
     <Authors>izzydoingit</Authors>
-    <Product>Patcher Unification Project</Product>
+    <Product>Skyrim Utility Patcher</Product>
     <Description>Runs Mod Organizer 2's generators in the right order, unattended, and puts the profile back.</Description>
     <Copyright>izzydoingit - GPL-3.0-or-later</Copyright>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

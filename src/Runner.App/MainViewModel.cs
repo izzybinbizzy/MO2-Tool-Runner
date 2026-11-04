@@ -663,7 +663,7 @@ public sealed partial class MainViewModel : Observable
 		var start = new DateTime(2026, 10, 27, 21, 2, 10);
 		var log = new List<string>();
 		void Line(double a_min, string a_text) => log.Add($"{start.AddMinutes(a_min).ToString("HH:mm:ss", InvariantCulture)}  {a_text}");
-		Line(0, $"Patcher Unification Project - {SelectedSetup?.Name} (profile {Setup?.Profile}), {Steps.Count(s => s.On)} steps");
+		Line(0, $"Skyrim Utility Patcher - {SelectedSetup?.Name} (profile {Setup?.Profile}), {Steps.Count(s => s.On)} steps");
 		Line(0.1, "every output switched off - each back on once its tool rebuilt it");
 		double spent = 0.2, now = 0, left = 0;
 		for (var i = 0; i < Steps.Count; i++) {

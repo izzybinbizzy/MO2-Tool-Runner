@@ -1,8 +1,8 @@
 {
   "_read_me": [
-    "Patcher Unification Project - THEME TEMPLATE. Every value below is the current default theme (black and gold).",
+    "Skyrim Utility Patcher - THEME TEMPLATE. Every value below is the current default theme (black and gold).",
     "A theme is one copy of this file with new values: keep every key, change only the \"value\" fields (and the numbers / glyphs).",
-    "Put the theme file (and its icon, if it has one) in the \"Themes\" folder inside Patcher Unification Project's data folder; Settings > THE WINDOW'S LOOK picks it.",
+    "Put the theme file (and its icon, if it has one) in the \"Themes\" folder inside Skyrim Utility Patcher's data folder; Settings > THE WINDOW'S LOOK picks it.",
     "A key left out keeps the default; a value that does not read is named in Settings and the default kept.",
     "Colours are #RRGGBB, or #AARRGGBB where AA is opacity (00 see-through ... FF solid). Fonts are Windows font names, a fallback after a comma.",
     "Each \"where\" line says where on screen the value shows, so a theme can be judged without running the program.",

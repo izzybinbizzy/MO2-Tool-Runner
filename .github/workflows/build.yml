@@ -26,12 +26,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Build
-        run: dotnet build "src/Patcher Unification Project.slnx" -c Release -nologo
+        run: dotnet build "src/Skyrim Utility Patcher.slnx" -c Release -nologo
       - name: Offline tests
         run: dotnet run --project src/Runner.Tests -c Release --no-build
       - name: Single-file exe
         shell: pwsh
         run: |
           dotnet publish src/Runner.App -c Release -nologo -o publish
-          $exe = Get-Item "publish/Patcher Unification Project.exe"
-          "### Patcher Unification Project.exe: $([math]::Round($exe.Length / 1KB)) KB" >> $env:GITHUB_STEP_SUMMARY
+          $exe = Get-Item "publish/Skyrim Utility Patcher.exe"
+          "### Skyrim Utility Patcher.exe: $([math]::Round($exe.Length / 1KB)) KB" >> $env:GITHUB_STEP_SUMMARY
