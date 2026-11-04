@@ -23,7 +23,20 @@ public static class Program
 		var filter = a_args.Length > 0 ? a_args[0] : "";
 		// a game another session runs on this PC is not this test's business
 		Preflight.GameCheck = () => [];
+		// a real run of the program on this PC holds the real run lock
+		Runner.LockScope = " tests " + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
 		Mo2Control.GameProbe = () => [];
+		// nor this PC's own state: its Mod Organizer, an update waiting, its battery, how it was started
+		SystemChecks.SelfAdmin = () => false;
+		SystemChecks.Mo2Unreadable = _ => false;
+		SystemChecks.AdminFlagged = _ => false;
+		SystemChecks.Mo2Paths = () => [];
+		SystemChecks.RestartPending = () => false;
+		SystemChecks.Battery = () => null;
+		SystemChecks.ControlledFolderAccess = () => false;
+		SystemChecks.CloudFolders = () => [];
+		SystemChecks.ProgramFolders = () => [];
+		SystemChecks.IsNetwork = _ => false;
 		var tests = typeof(Program).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
 			.Where(m => m.Name.StartsWith("T_", StringComparison.Ordinal) && m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).OrderBy(m => m.MetadataToken);
 		foreach (var t in tests) {
@@ -73,6 +86,8 @@ public static class Program
 	sealed class FakeMo2 : IDisposable
 	{
 		public string Root { get; }
+		// the folder Dispose removes: Root, or the folder a deeper Root was made in
+		public string Top { get; }
 		public string Exe => Path.Combine(Root, "MO2", "ModOrganizer.exe");
 		public string Instance => Path.Combine(Root, "MO2");
 		public string Game => Path.Combine(Root, "Game");
@@ -83,9 +98,13 @@ public static class Program
 		public string Data => Path.Combine(Root, "RunnerData");
 		public string SetupFile => Path.Combine(Data, "Setups", "Test.json");
 
-		public FakeMo2(string a_nl = "\r\n")
+		// every test runs under a folder with a space, an apostrophe, accents and a non-Latin letter in it - a player's paths can hold any
+		public const string OddFolder = "Pläyer's Mödding – ü ж";
+
+		public FakeMo2(string a_nl = "\r\n", string a_deeper = "")
 		{
-			Root = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", Guid.NewGuid().ToString("N")[..8]);
+			Top = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", OddFolder + " " + Guid.NewGuid().ToString("N")[..8]);
+			Root = Path.Combine(Top, a_deeper);
 			Directory.CreateDirectory(Path.Combine(Game, "Data"));
 			Directory.CreateDirectory(ProfileDir);
 			Directory.CreateDirectory(Mods);
@@ -163,10 +182,10 @@ public static class Program
 		{
 			try {
 				// a test's read-only files would stop the delete
-				foreach (var f in new DirectoryInfo(Root).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
+				foreach (var f in new DirectoryInfo(Top).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
 					f.IsReadOnly = false;
 				}
-				Directory.Delete(Root, true);
+				Directory.Delete(Top, true);
 			} catch (IOException) {
 			} catch (UnauthorizedAccessException) {
 			}
@@ -2214,7 +2233,7 @@ public static class Program
 	// the rename: the run lock is held under the old name too, so an old copy of the program never runs beside this one
 	static void T_RunLockCoversTheOldName()
 	{
-		var oldLock = "Local\\" + Brand.OldNames[0] + " run";
+		var oldLock = "Local\\" + Brand.OldNames[0] + " run" + Runner.LockScope;
 		using (var hold = Runner.HoldIfFree()) {
 			Check(hold != null, "free: taken");
 			var open = Mutex.TryOpenExisting(oldLock, out var m);
@@ -2379,5 +2398,217 @@ public static class Program
 		var d = cache.Read();
 		Equal(1, d.Count, "a removed run drops out");
 		Equal("2026-10-01 10-00-00", d[0].Id, "the one left");
+	}
+
+	// ------------------------------------------------------------------ the PC-level pre-checks (SystemChecks)
+	static void SetLight(string a_path)
+	{
+		var b = File.ReadAllBytes(a_path);
+		b[9] |= 0x02;
+		File.WriteAllBytes(a_path, b);
+	}
+
+	static void T_PluginLimitCountsByKind()
+	{
+		using var f = new FakeMo2();
+		f.Mod("Lights", ("Light.esl", false, []), ("LightFlag.esp", false, []), ("LightMaster.esm", true, []), ("Unticked.esp", false, []), ("Big.esp", false, []));
+		SetLight(Path.Combine(f.Mods, "Lights", "LightFlag.esp"));
+		SetLight(Path.Combine(f.Mods, "Lights", "LightMaster.esm"));
+		FakeMo2.Plugin(Path.Combine(f.Game, "Data", "ccTest.esl"), false);
+		FakeMo2.Plugin(Path.Combine(f.Game, "Data", "Update.esm"), true);
+		File.WriteAllText(Path.Combine(f.Game, "Skyrim.ccc"), "ccTest.esl\r\nccAbsent.esm\r\n");
+		File.WriteAllText(Path.Combine(f.ProfileDir, "modlist.txt"), "+Lights\r\n" + f.Text("modlist.txt"));
+		File.AppendAllText(Path.Combine(f.ProfileDir, "plugins.txt"), "*Light.esl\r\n*LightFlag.esp\r\n*LightMaster.esm\r\nUnticked.esp\r\n*Big.esp\r\n*Gone.esp\r\n*Update.esm\r\n");
+		var c = SystemChecks.CountPlugins(ProfileOf(f));
+		// full: Skyrim.esm, Update.esm (once, though plugins.txt names it too), the six of the fake, Big.esp; Gone.esp is nowhere
+		Equal(9, c.Full, "full plugins");
+		// light: the .esl, the flagged .esp, the flagged .esm, the Creation Club .esl that Skyrim.ccc names
+		Equal(4, c.Light, "light plugins");
+		Check(!Plugins.IsLight(Path.Combine(f.Mods, "Lights", "Big.esp")), "an unflagged .esp is full");
+		Check(Plugins.IsLight(Path.Combine(f.Mods, "Lights", "LightMaster.esm")), "an ESL-flagged .esm is light");
+		Equal(0, SystemChecks.PluginLimit(c).Count(), "far from both limits");
+		Check(SystemChecks.PluginLimit(new(255, 0)).Single().Blocking, "255 full plugins stop the run");
+		Check(!SystemChecks.PluginLimit(new(254, 0)).Single().Blocking, "254 full plugins only warn (the outputs add more)");
+		Equal(0, SystemChecks.PluginLimit(new(249, 4086)).Count(), "249 full and 4086 light: fine");
+		Check(!SystemChecks.PluginLimit(new(10, 4096)).Single().Blocking, "4096 light plugins only warn");
+		Check(SystemChecks.PluginLimit(new(10, 4097)).Single().Blocking, "4097 light plugins stop the run");
+		var unread = SystemChecks.PluginLimit(new(250 - 10, 10, 20)).Single();
+		Check(!unread.Blocking && unread.Text.Contains("could be over", StringComparison.Ordinal), "unreadable plugins are said, and what they could mean");
+		// a plugin held open with no sharing cannot be read: neither light nor full
+		var locked = Path.Combine(f.Mods, "Lights", "LightFlag.esp");
+		using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None)) {
+			Equal<bool?>(null, Plugins.LightOrNot(locked), "an unreadable plugin is neither kind");
+			Equal(1, SystemChecks.CountPlugins(ProfileOf(f)).Unreadable, "and counted apart");
+		}
+	}
+
+	static void T_AdminOnOneSideOnly()
+	{
+		Equal(0, SystemChecks.Admin(false, false, false).Count(), "both normal");
+		Check(SystemChecks.Admin(false, true, false).Single().Blocking, "Mod Organizer as administrator, the runner not: stop");
+		Check(SystemChecks.Admin(false, false, true).Single().Blocking, "Mod Organizer set to always run as administrator: stop");
+		Equal(2, SystemChecks.Admin(false, true, true).Count(), "both named");
+		var self = SystemChecks.Admin(true, true, true).ToList();
+		Check(self.Count == 1 && !self[0].Blocking, "the runner as administrator: one warning (whatever it starts runs as administrator too)");
+	}
+
+	static void T_ASecondMo2IsNamed()
+	{
+		var ours = @"C:\Games\MO2\ModOrganizer.exe";
+		Equal(0, SystemChecks.OtherMo2([@"c:\games\mo2\MODORGANIZER.exe"], ours).Count(), "our own, any case");
+		var i = SystemChecks.OtherMo2([ours, @"D:\Other MO2\ModOrganizer.exe", @"D:\Other MO2\ModOrganizer.exe"], ours).Single();
+		Check(i.Blocking && i.Text.Contains(@"D:\Other MO2\ModOrganizer.exe", StringComparison.Ordinal), "another install stops the run, named once");
+	}
+
+	static void T_RestartBatteryAndLongPaths()
+	{
+		Equal(0, SystemChecks.Power(false, null).Count(), "plugged in, nothing pending");
+		Check(!SystemChecks.Power(true, null).Single().Blocking, "a pending restart warns");
+		var b = SystemChecks.Power(false, new(true, 40)).Single();
+		Check(!b.Blocking && b.Text.Contains("40 %", StringComparison.Ordinal), "on battery warns with its level");
+		Check(!SystemChecks.Power(false, new(true, 255)).Single().Text.Contains('%', StringComparison.Ordinal), "an unknown level is left out");
+		var deep = Path.Combine(Path.GetTempPath(), new string('x', SystemChecks.LongFolder));
+		Check(!SystemChecks.LongPaths([deep, deep, "", Path.GetTempPath()]).Single().Blocking, "a long folder warns once");
+	}
+
+	static void T_TroubleFoldersAreWarned()
+	{
+		SystemChecks.TroubleInput In(string a_game = @"C:\Games\Skyrim", string a_base = @"C:\Modding\MO2", string a_mods = @"C:\Modding\MO2\mods",
+			string a_out = "", string a_docs = @"C:\Users\p\Documents", bool a_cfa = false, Func<string, bool>? a_net = null) =>
+			new([("the game", a_game), ("Mod Organizer's instance", a_base), ("Mod Organizer's mods", a_mods), ("xlodgen's output folder", a_out)], a_docs,
+				[@"C:\Program Files", @"C:\Program Files (x86)"], [@"C:\Users\p\OneDrive"], a_cfa, a_net ?? (_ => false));
+		Equal(0, SystemChecks.TroubleFolders(In()).Count(), "a clean setup: nothing");
+		var pf = SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition")).Single();
+		Check(!pf.Blocking && pf.Text.StartsWith("the game (", StringComparison.Ordinal) && pf.Text.Contains(@"inside C:\Program Files (x86)", StringComparison.Ordinal),
+			"the game in Program Files warns");
+		Equal(0, SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files Extra\Skyrim")).Count(), "a folder that only starts with the same letters is not inside");
+		Check(SystemChecks.TroubleFolders(In(a_docs: @"C:\Users\p\OneDrive\Documents")).Single().Text.Contains("Documents", StringComparison.Ordinal), "Documents in OneDrive warns");
+		// the instance in OneDrive with its mods inside it: one warning, naming the instance only
+		var one = SystemChecks.TroubleFolders(In(a_base: @"C:\Users\p\OneDrive\MO2", a_mods: @"C:\Users\p\OneDrive\MO2\mods")).Single();
+		Check(one.Text.Contains("Mod Organizer's instance", StringComparison.Ordinal) && !one.Text.Contains("mods (", StringComparison.Ordinal), "one cause told once");
+		Check(SystemChecks.TroubleFolders(In(a_out: @"C:\Users\p\OneDrive\LOD")).Single().Text.StartsWith("xlodgen's output folder", StringComparison.Ordinal), "a step's output in the cloud warns");
+		Check(SystemChecks.TroubleFolders(In(a_game: @"C:\Users\p\OneDrive\Skyrim")).Single().Text.StartsWith("the game", StringComparison.Ordinal), "the game in the cloud warns");
+		var net = SystemChecks.TroubleFolders(In(a_net: d => d.StartsWith(@"C:\Modding", StringComparison.Ordinal))).Single();
+		Check(net.Text.Contains("Mod Organizer's instance (", StringComparison.Ordinal) && !net.Text.Contains("Mod Organizer's mods (", StringComparison.Ordinal) &&
+			net.Text.Contains(" is on a network drive", StringComparison.Ordinal), "the network named once for the instance and the mods inside it");
+		Check(SystemChecks.TroubleFolders(In(a_cfa: true)).Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "controlled folder access warns");
+		Check(SystemChecks.TroubleFolders(In(a_cfa: true, a_docs: @"C:\Users\p\OneDrive\Documents")).All(i => !i.Blocking), "every one only warns");
+		// the real network probe on local paths
+		// Windows' own folder: on the local disk on every PC (the temp folder can be set to a share)
+		var local = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+		Check(!SystemChecks.IsNetworkPath(local), "Windows' folder is local");
+		Check(!SystemChecks.IsNetworkPath(@"\\?\" + local), "a long-form local path is local");
+		Check(SystemChecks.IsNetworkPath(@"\\server\share\mods") && SystemChecks.IsNetworkPath(@"\\?\UNC\server\share\mods"), "a share is a network folder");
+		Check(SystemChecks.IsNetworkPath(@"\\.\UNC\server\share\mods"), "the device form of a share is a network folder");
+		Check(!SystemChecks.IsNetworkPath(@"\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\mods"), "a volume named by its id is local");
+		// the same folder under two names is named once; cloud folders are taken once, a folder inside another left out
+		var twice = SystemChecks.TroubleFolders(In(a_mods: @"C:\Users\p\OneDrive\x", a_out: @"C:\Users\p\OneDrive\x\")).Single();
+		Equal(1, twice.Text.Split(@"OneDrive\x").Length - 1, "one folder, one mention");
+		Equal(@"C:\Users\p\Dropbox", string.Join("|", SystemChecks.Roots([@"C:\Users\p\Dropbox\", @"c:\users\p\dropbox", @"C:\Users\p\Dropbox\Sub", ""])), "the cloud roots");
+		// a probe that throws leaves only its own part out (every probe stubbed: the test never reads this PC)
+		var notes = new List<ToolRunner.Steps.Issue>();
+		var was = SystemChecks.ControlledFolderAccess;
+		var clouds = SystemChecks.CloudFolders;
+		var docs = SystemChecks.Documents;
+		var pfs = SystemChecks.ProgramFolders;
+		try {
+			SystemChecks.ControlledFolderAccess = () => throw new System.Security.SecurityException("locked down");
+			SystemChecks.CloudFolders = () => throw new InvalidOperationException("a settings file of the wrong shape");
+			SystemChecks.Documents = () => @"C:\Users\p\Documents";
+			SystemChecks.ProgramFolders = () => [@"C:\Program Files"];
+			var input = SystemChecks.ReadTrouble([("the game", @"C:\Program Files\Skyrim")], notes);
+			Check(!input.ControlledAccess && input.CloudFolders.Count == 0, "the failing probes give nothing");
+			Equal(2, notes.Count, "each failing probe told once");
+			Check(SystemChecks.TroubleFolders(input).Single().Text.Contains("Program Files", StringComparison.Ordinal), "the probes that read still warn");
+		} finally {
+			SystemChecks.ControlledFolderAccess = was;
+			SystemChecks.CloudFolders = clouds;
+			SystemChecks.Documents = docs;
+			SystemChecks.ProgramFolders = pfs;
+		}
+	}
+
+	static void T_PrecheckCarriesThePcChecks()
+	{
+		using var f = new FakeMo2();
+		var setup = f.WriteSetup();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		Equal(0, Preflight.Run(setup, mo2, []).Count(i => i.Blocking), "a clean fake: nothing blocks");
+		var was = SystemChecks.Mo2Paths;
+		try {
+			SystemChecks.Mo2Paths = () => [Path.Combine(f.Root, "Another", "ModOrganizer.exe")];
+			Check(Preflight.Run(setup, mo2, []).Any(i => i.Blocking && i.Text.Contains("another Mod Organizer", StringComparison.Ordinal)), "the check reaches the pre-check");
+		} finally {
+			SystemChecks.Mo2Paths = was;
+		}
+		var clouds = SystemChecks.CloudFolders;
+		try {
+			SystemChecks.CloudFolders = () => [f.Root];
+			Check(Preflight.Run(setup, mo2, []).Any(i => i.Text.Contains("cloud app", StringComparison.Ordinal)), "the trouble folders reach the pre-check");
+		} finally {
+			SystemChecks.CloudFolders = clouds;
+		}
+		var unread = SystemChecks.Mo2Unreadable;
+		try {
+			SystemChecks.Mo2Unreadable = _ => true;
+			var issues = Preflight.Run(setup, mo2, []);
+			Check(issues.Any(i => i.Blocking && i.Text.StartsWith(SystemChecks.UnreadableText, StringComparison.Ordinal)), "an unreadable Mod Organizer stops the run");
+		} finally {
+			SystemChecks.Mo2Unreadable = unread;
+		}
+		// Mod Organizer set to always run as administrator, through the whole check; and its probe failing leaves the others
+		var flagged = SystemChecks.AdminFlagged;
+		try {
+			SystemChecks.AdminFlagged = _ => true;
+			Check(SystemChecks.Run(mo2, ProfileOf(f), []).Single(i => i.Blocking).Text.Contains("always run as administrator", StringComparison.Ordinal), "the flag stops the run");
+			SystemChecks.Mo2Unreadable = _ => throw new System.ComponentModel.Win32Exception(5);
+			Check(SystemChecks.Run(mo2, ProfileOf(f), []).Any(i => i.Blocking && i.Text.Contains("always run as administrator", StringComparison.Ordinal)),
+				"a failing process probe does not hide the flag");
+		} finally {
+			SystemChecks.AdminFlagged = flagged;
+			SystemChecks.Mo2Unreadable = unread;
+		}
+		// a switched-off step's folder is not the run's business
+		var offOut = Path.Combine(f.Root, new string('q', SystemChecks.LongFolder));
+		var off = f.WriteSetup(("pandora", new JsonObject { ["output_dir"] = offOut }));
+		((JsonObject)((JsonArray)off.Root["steps"]!)[0]!)["on"] = false;
+		off.Save();
+		Check(!Preflight.Run(Setup.Load(off.File), mo2, []).Any(i => i.Text.Contains(offOut, StringComparison.Ordinal)), "a switched-off step's output is not checked");
+		// a step's output folder deep down is warned about too
+		var deepOut = Path.Combine(f.Root, new string('o', SystemChecks.LongFolder));
+		var withOut = f.WriteSetup(("pandora", new JsonObject { ["output_dir"] = deepOut }));
+		Check(Preflight.Run(withOut, mo2, []).Any(i => i.Text.Contains(deepOut, StringComparison.Ordinal)), "a step's output folder is checked for its length");
+	}
+
+	// a blocking PC check refuses the run before anything is touched
+	static void T_ASecondMo2RefusesTheRun()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => throw new InvalidOperationException("must not run")));
+		f.WriteSetup(("snowfixer", []));
+		var before = f.Text("modlist.txt");
+		var was = SystemChecks.Mo2Paths;
+		try {
+			SystemChecks.Mo2Paths = () => [Path.Combine(f.Root, "Another MO2", "ModOrganizer.exe")];
+			var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+			Check(r.Folder == null && r.Verdict.StartsWith("not started", StringComparison.Ordinal) && r.Verdict.Contains("another Mod Organizer", StringComparison.Ordinal), r.Verdict);
+			Equal(before, f.Text("modlist.txt"), "the profile untouched");
+		} finally {
+			SystemChecks.Mo2Paths = was;
+		}
+	}
+
+	// a player's folder can be deeper than Windows' old 260-letter limit: the profile's own files are still read, changed and put back
+	static void T_LongPathProfileWorks()
+	{
+		using var f = new FakeMo2("\r\n", string.Join('\\', Enumerable.Repeat("a long folder name for the test", 9)));
+		Check(f.ProfileDir.Length > 300, "the fake sits past 260 letters");
+		var p = ProfileOf(f);
+		var snap = p.Snapshot();
+		p.SetMods([], ["Base Mod"]);
+		Check(!p.IsOn("Base Mod"), "a mod switched off in a long path");
+		p.Restore(snap);
+		Check(p.IsOn("Base Mod"), "and put back");
+		Equal(7, SystemChecks.CountPlugins(p).Full, "its plugins counted");
 	}
 }

@@ -119,8 +119,7 @@ public sealed class Setup
 		if (Profile == "") p.Add("the MO2 profile is not set");
 		if (BackupDir == "") p.Add("the backup folder is not set");
 		// whole local paths only: a relative one would follow whatever folder the run was started from
-		foreach (var (what, dir) in new[] { ("the backup folder", BackupDir), ("the scratch folder", Str(Root, "scratch") ?? "") }
-			         .Concat(Steps.Select(s => ($"{s.Key}'s output folder", Str(s.Settings, "output_dir") ?? "")))) {
+		foreach (var (what, dir) in Folders()) {
 			if (dir != "" && (!Path.IsPathFullyQualified(dir) || dir.StartsWith(@"\\", StringComparison.Ordinal))) {
 				p.Add($"{what} must be a whole path on this PC (like D:\\Modding\\...): {dir}");
 			}
@@ -133,6 +132,12 @@ public sealed class Setup
 		if (unknown.Count > 0) p.Add("unknown step(s): " + string.Join(", ", unknown));
 		return p;
 	}
+
+	// the folders the setup itself names (empty ones included): its backups, its scratch, each step's output (a_running: only the
+	// steps a run would run - not one switched off, nor a save step left out for a new game)
+	public IEnumerable<(string What, string Dir)> Folders(bool a_running = false) =>
+		new[] { ("the backup folder", BackupDir), ("the scratch folder", Str(Root, "scratch") ?? "") }
+			.Concat((a_running ? EnabledSteps : Steps).Select(s => ($"{s.Key}'s output folder", Str(s.Settings, "output_dir") ?? "")));
 
 	public void Save(string? a_file = null)
 	{
