@@ -50,19 +50,14 @@ public static class DataFolder
 		return now;
 	}
 
-	// a copy of the program under an old name is running, or holds the old run lock
+	// a copy of the program under an old name is running (by its program file: this version also holds the old-name run lock,
+	// so the lock says nothing about an old copy)
 	static bool OldRunning()
 	{
 		foreach (var n in Brand.OldNames) {
 			var ps = Procs.ByImage(n + ".exe");
 			ps.ForEach(p => p.Dispose());
 			if (ps.Count > 0) {
-				return true;
-			}
-		}
-		foreach (var n in Brand.OldNames) {
-			if (Mutex.TryOpenExisting("Local\\" + n + " run", out var m)) {
-				m.Dispose();
 				return true;
 			}
 		}
