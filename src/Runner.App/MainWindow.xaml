@@ -49,6 +49,7 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
           <Button Content="_Check" Style="{StaticResource Ghost}" Command="{Binding CheckCommand}" ToolTip="Check every tool and setting before a run (F5)" Margin="0,0,8,0"/>
           <Button Content="_History" Style="{StaticResource Ghost}" Click="History_Click" ToolTip="Past runs (Ctrl+H)" Margin="0,0,8,0"/>
+          <Button Content="_Queue" Style="{StaticResource Ghost}" Click="Queue_Click" ToolTip="Run several setups one after another" Margin="0,0,8,0"/>
           <Button Content="_Settings" Style="{StaticResource Ghost}" Click="Settings_Click" ToolTip="This setup's settings (Ctrl+,)"/>
         </StackPanel>
       </Grid>
@@ -178,6 +179,8 @@
                 </StackPanel>
               </DockPanel>
             </Border>
+            <TextBlock Text="{Binding QueueText}" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="{DynamicResource Gold}"
+                       Visibility="{Binding QueueText, Converter={StaticResource NotEmpty}}" AutomationProperties.LiveSetting="Polite"/>
             <TextBlock Text="{Binding Verdict}" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="{DynamicResource SizeVerdict}"
                        Foreground="{Binding VerdictKind, Converter={StaticResource KindBrush}}"
                        Visibility="{Binding Verdict, Converter={StaticResource NotEmpty}}"/>
@@ -191,6 +194,10 @@
                       IsEnabled="{Binding IsRunning}" ToolTip="Lets the running step finish, then puts your profile back"/>
               <Button Content="Stop _now" Style="{StaticResource Danger}" Command="{Binding StopNowCommand}" Margin="8,0,0,0"
                       IsEnabled="{Binding IsRunning}" ToolTip="Closes the tool at once and puts your profile back"/>
+              <!-- the last run failed or was stopped: run it again from the step it stopped at -->
+              <Button Content="{Binding RetryText}" Style="{StaticResource Ghost}" Command="{Binding RetryCommand}" Margin="8,0,0,0"
+                      Visibility="{Binding RetryFrom, Converter={StaticResource NotEmpty}}"
+                      ToolTip="Starts the last run again at the step that did not finish; the steps before it are not run again"/>
               <!-- a new game: no save to keep clean, so the clean save and the save to play are left out (kept in the setup) -->
               <CheckBox Content="New game" IsChecked="{Binding NewGame}" IsEnabled="{Binding CanStart}" VerticalAlignment="Center" Margin="16,0,0,0"
                         Foreground="{DynamicResource Text}" AutomationProperties.Name="New game"

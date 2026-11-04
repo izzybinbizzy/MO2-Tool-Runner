@@ -68,6 +68,11 @@ public sealed partial class MainViewModel : Observable
 	public string MessageKind { get; set => Set(ref field, value); } = "";
 	public string EstimateText { get; set => Set(ref field, value); } = "";
 	public bool StopAfterAsked { get; set => Set(ref field, value); }
+	// the step the setup's last run stopped at ("" = nothing to run again): the "Run again from ..." button
+	public string RetryFrom { get; set { if (Set(ref field, value)) OnPropertyChanged(nameof(RetryText)); } } = "";
+	public string RetryText => RetryFrom == "" ? "" : "Run _again from " + StepCatalog.Name(RetryFrom);
+	// a queue of setups going: which one runs ("" = none)
+	public string QueueText { get; set => Set(ref field, value); } = "";
 
 	public Cmd StartCommand => field ??= new(Start);
 	public Cmd StopAfterCommand => field ??= new(StopAfter);
@@ -75,6 +80,7 @@ public sealed partial class MainViewModel : Observable
 	public Cmd ContinueCommand => field ??= new(Continue);
 	public Cmd RestoreCommand => field ??= new(() => _ = RunRestore());
 	public Cmd CheckCommand => field ??= new(() => _ = RunCheck());
+	public Cmd RetryCommand => field ??= new(() => _ = RunRetry());
 	Task RunRestore() => Restore();
 	Task RunCheck() => Check();
 
@@ -213,8 +219,11 @@ public sealed partial class MainViewModel : Observable
 		}
 		_polling = true;
 		try {
-			var (mo2, game, runs) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs()));
-			Poll(mo2, game, runs);
+			var (mo2, game, runs, queue) = await Task.Run(() => {
+				var runs = Engine.Runs();
+				return (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), runs, QueueLook(runs));
+			});
+			Poll(mo2, game, runs, queue);
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException) {
 			// a file or process that changed mid-read: the next tick reads it again
 		} finally {
@@ -222,9 +231,36 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
-	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs());
+	public void Poll()
+	{
+		var runs = Engine.Runs();
+		Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), runs, QueueLook(runs));
+	}
 
-	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs)
+	// the queue going (its line for the window), else the last queue's summary while nothing has started since it ended
+	sealed record QueueSeen(QueueRun.State? Going, string Text);
+
+	// a start from this window hides the last queue's summary; so does any run started after that queue ended
+	DateTime _queueShownSince = DateTime.MinValue;
+
+	QueueSeen QueueLook(List<Journal> a_runs)
+	{
+		var q = QueueRun.Read(AppPaths.Data);
+		if (q?.Running is { } now) {
+			var next = q.Setups.Skip(q.Current + 1).Select(Path.GetFileNameWithoutExtension).ToList();
+			return new QueueSeen(q, $"Queue: setup {q.Current + 1} of {q.Setups.Count} ({Path.GetFileNameWithoutExtension(now)})" + (next.Count > 0 ? ", then " + string.Join(", ", next) : ""));
+		}
+		var last = QueueRun.LastFile(AppPaths.Data);
+		try {
+			if (File.Exists(last) && File.GetLastWriteTime(last) is var ended && ended > _queueShownSince && !a_runs.Any(j => j.Started > ended)) {
+				return new QueueSeen(null, "Last queue - " + string.Join("; ", Files.ReadSharedText(last).Split('\n', StringSplitOptions.RemoveEmptyEntries)));
+			}
+		} catch (IOException) {
+		}
+		return new QueueSeen(null, "");
+	}
+
+	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs, QueueSeen a_queue)
 	{
 		Mo2Open = a_mo2;
 		GameRunning = a_game;
@@ -233,13 +269,18 @@ public sealed partial class MainViewModel : Observable
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
 		_run = active ?? (_run is { } r && Directory.Exists(r.Folder) ? Fresh(runs, r) : Engine.Latest(SelectedSetup?.File, runs));
+		var queue = a_queue.Going;
+		QueueText = a_queue.Text;
 		var interrupted = Engine.Interrupted(runs);
 		Interrupted = interrupted == null ? "" : $"The run of {interrupted.Started:ddd HH:mm} ({interrupted.SetupName}) did not finish - your profile may still have outputs switched off.";
 		if (_run == null) {
+			RetryFrom = "";
 			ShowReady();
 			return;
 		}
 		IsRunning = _run.Unfinished && _run.OwnerAlive;
+		RetryFrom = !IsRunning && queue == null && SelectedSetup != null && string.Equals(_run.SetupFile, SelectedSetup.File, StringComparison.OrdinalIgnoreCase) &&
+		            Retry.FromStep(_run) is { } from ? from : "";
 		StopAfterAsked = _run.StopAfterStep;
 		var cur = _run.Steps.FirstOrDefault(s => s.State == StepState.Running);
 		NowTitle = IsRunning ? (cur?.Name ?? "Getting ready") : _run.State switch {
@@ -343,8 +384,11 @@ public sealed partial class MainViewModel : Observable
 	bool _previewing;
 
 	string? CannotStart() =>
-		SelectedSetup == null || Setup == null ? "Make or pick a setup first." :
-		Engine.Active() != null ? "A run is going already." :
+		SelectedSetup == null || Setup == null ? "Make or pick a setup first." : CannotStartAny();
+
+	// what stops any start, a single run or a queue
+	static string? CannotStartAny() =>
+		Engine.Active() != null || QueueRun.Read(AppPaths.Data) != null ? "A run is going already." :
 		Engine.Interrupted() != null ? "The last run did not finish - put your profile back first (the button at the top)." : null;
 
 	// the profile's mod list and plugin list as they are on disk (unreadable = a stamp of its own, so it never matches)
@@ -439,6 +483,7 @@ public sealed partial class MainViewModel : Observable
 
 	void StartNow(string a_file, string? a_only, string? a_from, string? a_until)
 	{
+		_queueShownSince = DateTime.Now;
 		var (ok, text) = Engine.StartRun(a_file, a_only, a_from, a_until);
 		if (!ok) {
 			Say("Could not start: " + text, "bad");
@@ -468,6 +513,95 @@ public sealed partial class MainViewModel : Observable
 			Say("The run did not start and gave no reason - nothing was changed. Press Check (F5) to see what is wrong.", "bad");
 			_startAsked = null;
 		}
+	}
+
+	// the last run again, from the step it stopped at, to where it ended: the very steps previewed are the ones started
+	Task RunRetry()
+	{
+		if (_run == null || Retry.Request(_run, AppPaths.Data) is not { } req) {
+			return Task.CompletedTask;
+		}
+		return StartWith(null, req.From, req.Until);
+	}
+
+	// several setups one after another (the queue box picked them; the window follows each run as it goes). Each setup's
+	// preview is shown first, in one box, unless every one of them has the preview switched off.
+	public async Task StartQueue(List<string> a_files, bool a_keepGoing)
+	{
+		if (_previewing) {
+			return;
+		}
+		if (CannotStartAny() is { } why) {
+			Say(why, "bad");
+			return;
+		}
+		// the queue is always asked about: its order and its rule, and each setup's preview unless that setup has it switched off;
+		// what was shown is stamped (each setup file's bytes, each profile's lists) and started only if nothing changed meanwhile
+		_previewing = true;
+		Say("Working out what the queue will do ...", "");
+		string text;
+		Func<string> stamp;
+		try {
+			(text, stamp) = await Task.Run(() => {
+				var parts = new List<string>();
+				var profiles = new List<string>();
+				foreach (var (f, i) in a_files.Select((f, i) => (f, i))) {
+					var setup = Setup.Parse(Files.ReadShared(f), f);
+					var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+					profiles.Add(mo2.ProfileDir(setup.Profile));
+					var head = $"{i + 1}. {setup.Name}";
+					if (Setup.Bool(setup.Root, "previewBeforeRun") == false) {
+						parts.Add(head);
+						continue;
+					}
+					var usual = Engine.UsualTimes(f);
+					parts.Add(head + "\n" + string.Join("\n", RunPreview.Build(setup, mo2, Runner.Plan(setup, null, null, null)).Lines(k => usual.TryGetValue(k, out var t) ? t : null)));
+				}
+				string Stamp() => string.Join("|", a_files.Select(f => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Files.ReadShared(f))))
+					.Concat(profiles.Distinct(StringComparer.OrdinalIgnoreCase).Select(ProfileStamp)));
+				return (string.Join("\n\n", parts) + "\n\n" + (a_keepGoing ? "A failed run is skipped and the next setup starts." : "The queue ends at the first run that does not finish."),
+					(Func<string>)Stamp);
+			});
+		} catch (Exception e) {
+			Say("Could not work out what the queue would do: " + e.Message, "bad");
+			return;
+		} finally {
+			_previewing = false;
+		}
+		string before;
+		try {
+			before = await Task.Run(stamp);
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			Say("Could not read a setup of the queue: " + e.Message, "bad");
+			return;
+		}
+		if (ConfirmRun == null || !ConfirmRun(text)) {
+			Say("Not started - nothing was changed.", "");
+			return;
+		}
+		string after;
+		try {
+			after = await Task.Run(stamp);
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			after = "unreadable";
+		}
+		if (after != before) {
+			Say("Not started: a setup or its profile changed while the box was open - press Queue again to see the new one.", "warn");
+			return;
+		}
+		if (CannotStartAny() is { } now) {
+			Say(now, "bad");
+			return;
+		}
+		_queueShownSince = DateTime.Now;
+		var (ok, started) = Engine.StartQueue(a_files, a_keepGoing);
+		if (!ok) {
+			Say("Could not start the queue: " + started, "bad");
+			return;
+		}
+		Say($"Queue of {a_files.Count} setups starting - checking the first one ...", "");
+		_startAsked = DateTime.Now;
+		_run = null;
 	}
 
 	void StopAfter()

@@ -401,6 +401,17 @@ public partial class MainWindow : Window
 	static void AutomationPropertiesName(DependencyObject a_o, string a_name) => System.Windows.Automation.AutomationProperties.SetName(a_o, a_name);
 
 	// ---------------------------------------------------------------- a new setup
+	void Queue_Click(object a_s, RoutedEventArgs a_e)
+	{
+		if (_vm.IsRunning) {
+			_vm.Say("A run is going already.", "bad");
+			return;
+		}
+		if (QueueDialog.Run(this, _vm.Setups.Select(s => s.File).ToList()) is { } q) {
+			_ = _vm.StartQueue(q.Files, q.KeepGoing);
+		}
+	}
+
 	void NewSetup_Click(object a_s, RoutedEventArgs a_e)
 	{
 		if (_vm.IsRunning) {

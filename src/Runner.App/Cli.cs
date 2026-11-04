@@ -2,6 +2,8 @@ namespace ToolRunner.App;
 
 // The command line (for players who script, and for agents under watch.py):
 //   "Skyrim Utility Patcher.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
+//   "Skyrim Utility Patcher.exe" retry --setup <file>                                                  its last run again, from the step that did not finish
+//   "Skyrim Utility Patcher.exe" queue --setup <file> --setup <file> ... [--keep-going]               several setups, one after another
 //   "Skyrim Utility Patcher.exe" check --setup <file>                                                  the pre-check, printed
 //   "Skyrim Utility Patcher.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
 //   "Skyrim Utility Patcher.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
@@ -12,7 +14,7 @@ namespace ToolRunner.App;
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
-	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "check" or "preview" or "lod" or "restore" or "stop" or "stop-after" or "import" or "updates" or "changes" or "--help" or "-h" or "/?";
+	public static bool Handles(string[] a_args) => a_args.Length > 0 && a_args[0] is "run" or "retry" or "queue" or "check" or "preview" or "lod" or "restore" or "stop" or "stop-after" or "import" or "updates" or "changes" or "--help" or "-h" or "/?";
 
 	static string? Opt(string[] a_args, string a_name)
 	{
@@ -32,6 +34,8 @@ public static class Cli
 		try {
 			return a_args[0] switch {
 				"run" => Run(a_args),
+				"retry" => RetryCmd(a_args),
+				"queue" => Queue(a_args),
 				"check" => Check(a_args),
 				"preview" => Preview(a_args),
 				"lod" => Lod(a_args),
@@ -55,32 +59,88 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("Skyrim Utility Patcher - run | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
+		Console.WriteLine("Skyrim Utility Patcher - run | retry | queue | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
 		return 0;
 	}
 
 	static string SetupArg(string[] a_args) =>
 		Opt(a_args, "--setup") is { } s ? Path.GetFullPath(s) : throw new ArgumentException("--setup <setup file> is needed");
 
+	// every value of an option given more than once (queue --setup a --setup b)
+	static List<string> Opts(string[] a_args, string a_name)
+	{
+		var outList = new List<string>();
+		for (int i = 0; i + 1 < a_args.Length; ++i) {
+			if (a_args[i] == a_name) {
+				outList.Add(a_args[++i]);
+			}
+		}
+		return outList;
+	}
+
 	static int Run(string[] a_args)
 	{
 		var setup = SetupArg(a_args);
-		var req = new RunRequest(setup, AppPaths.Data, Opt(a_args, "--only"), Opt(a_args, "--from"), Opt(a_args, "--until"));
-		var outcome = Runner.Run(req);
+		return RunOne(new RunRequest(setup, AppPaths.Data, Opt(a_args, "--only"), Opt(a_args, "--from"), Opt(a_args, "--until")));
+	}
+
+	static int RetryCmd(string[] a_args)
+	{
+		var setup = SetupArg(a_args);
+		var last = Journal.All(AppPaths.Runs).FirstOrDefault(j => string.Equals(j.SetupFile, setup, StringComparison.OrdinalIgnoreCase));
+		if (last == null) {
+			Console.WriteLine("this setup has no run to start again");
+			return 1;
+		}
+		if (Retry.Request(last, AppPaths.Data) is not { } req) {
+			Console.WriteLine(last.Unfinished ? "its last run did not finish - put the profile back first (restore)" : "its last run finished - nothing to run again");
+			return 1;
+		}
+		Console.WriteLine($"starting again from {StepCatalog.Name(req.From!)}");
+		return RunOne(req);
+	}
+
+	static int Queue(string[] a_args)
+	{
+		var setups = Opts(a_args, "--setup").Select(Path.GetFullPath).ToList();
+		if (setups.Count == 0) {
+			throw new ArgumentException("--setup <setup file> is needed, once per setup, in the order they run");
+		}
+		// a setup refused before anything changed: the window reads the reason as for a single run, at once
+		var items = QueueRun.Run(setups, AppPaths.Data, a_args.Contains("--keep-going"), null, i => {
+			if (i.Outcome is { Folder: null } refused) {
+				WriteRefusal(Path.GetFileNameWithoutExtension(i.SetupFile) + ": " + refused.Verdict);
+			}
+		});
+		foreach (var l in QueueRun.Summary(items)) {
+			Console.WriteLine(l);
+		}
+		// the first that did not finish names the queue's outcome
+		return items.Select(i => i.Outcome).FirstOrDefault(o => o != null && o.State != RunState.Finished) is { } bad ? (bad.State == RunState.Stopped ? 2 : 1) : 0;
+	}
+
+	static int RunOne(RunRequest a_req)
+	{
+		var outcome = Runner.Run(a_req);
 		Console.WriteLine(outcome.Verdict);
 		if (outcome.Folder == null) {
-			// refused before anything changed: the window reads the reason here
-			try {
-				Directory.CreateDirectory(AppPaths.Runs);
-				Files.WriteAtomic(Engine.RefusalFile, outcome.Verdict);
-			} catch (IOException) {
-			}
+			WriteRefusal(outcome.Verdict);
 		}
 		return outcome.State switch {
 			RunState.Finished => 0,
 			RunState.Stopped => 2,
 			_ => 1,
 		};
+	}
+
+	// refused before anything changed: the window reads the reason here
+	static void WriteRefusal(string a_why)
+	{
+		try {
+			Directory.CreateDirectory(AppPaths.Runs);
+			Files.WriteAtomic(Engine.RefusalFile, a_why);
+		} catch (IOException) {
+		}
 	}
 
 	static int Check(string[] a_args)

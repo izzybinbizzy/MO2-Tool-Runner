@@ -2611,4 +2611,70 @@ public static class Program
 		Check(p.IsOn("Base Mod"), "and put back");
 		Equal(7, SystemChecks.CountPlugins(p).Full, "its plugins counted");
 	}
+
+	// ------------------------------------------------------------------ run again from the failed step, a queue of setups
+	static Journal RunOf(RunState a_state, params (string Key, StepState State)[] a_steps) => new() {
+		SetupFile = @"C:\Setups\Test.json", State = a_state, Steps = a_steps.Select(s => new StepRecord { Key = s.Key, State = s.State }).ToList(),
+	};
+
+	static void T_RetryStartsAtTheStepThatDidNotFinish()
+	{
+		var failed = RunOf(RunState.Failed, ("synthesis", StepState.Done), ("texgen", StepState.Failed), ("dyndolod", StepState.Skipped));
+		Equal("texgen", Retry.FromStep(failed), "the failed step");
+		var req = Retry.Request(failed, @"C:\Data")!;
+		Equal("texgen", req.From, "from the failed step");
+		Equal("dyndolod", req.Until, "to where the run ended");
+		Equal<string?>(null, req.Only, "not one step only");
+		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("texgen", StepState.Done), ("dyndolod", StepState.Stopped))), "a stopped step");
+		// "stop after this step": the run writes the steps it never reached as Skipped - the first of them is where it carries on
+		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("synthesis", StepState.Done), ("texgen", StepState.Done), ("dyndolod", StepState.Skipped))), "after a stop after");
+		// refused before its first step (Mod Organizer would not close): every step Skipped - from the start
+		Equal("texgen", Retry.FromStep(RunOf(RunState.Failed, ("texgen", StepState.Skipped), ("dyndolod", StepState.Skipped))), "nothing ran yet");
+		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Restored, ("texgen", StepState.Done), ("dyndolod", StepState.Running))), "put back after a crash");
+		Equal<string?>(null, Retry.FromStep(RunOf(RunState.Finished, ("texgen", StepState.Done))), "a finished run has nothing to run again");
+		Equal<string?>(null, Retry.FromStep(RunOf(RunState.Running, ("texgen", StepState.Running))), "a run not finished is put back first");
+		Equal<string?>(null, Retry.FromStep(RunOf(RunState.Failed, ("texgen", StepState.Done))), "every step done");
+	}
+
+	static void T_RetryRunsOnlyWhatIsLeft()
+	{
+		using var f = new FakeMo2();
+		var setup = f.WriteSetup(("pandora", new JsonObject()), ("playsave", new JsonObject()));
+		var j = RunOf(RunState.Failed, ("pandora", StepState.Done), ("playsave", StepState.Failed));
+		j.SetupFile = setup.File;
+		var req = Retry.Request(j, f.Data)!;
+		Equal("playsave", string.Join(",", Runner.Plan(setup, req.Only, req.From, req.Until).Select(s => s.Key)), "the plan of a run again holds only the steps left");
+	}
+
+	static void T_QueueRunsInOrderAndEndsWhereItShould()
+	{
+		using var f = new FakeMo2();
+		var data = f.Data;
+		var files = new[] { "A", "B", "C" }.Select(n => Path.Combine(data, "Setups", n + ".json")).ToList();
+		List<string> Ran(Dictionary<string, RunState> a_results, bool a_keep, out List<QueueRun.Item> a_items)
+		{
+			var ran = new List<string>();
+			a_items = QueueRun.Run(files, data, a_keep, r => {
+				var name = Path.GetFileNameWithoutExtension(r.SetupFile);
+				ran.Add(name);
+				var st = QueueRun.Read(data);
+				Check(st != null && st.Setups[st.Current] == r.SetupFile, "the queue file names the setup that runs");
+				Check(r.From == null && r.Only == null, "each setup runs whole");
+				// nothing else may start between or during the queue's runs: the lock is the queue's for its whole length
+				var other = Task.Run(Runner.HoldIfFree).GetAwaiter().GetResult();
+				Check(other == null, "the run lock is held by the queue");
+				return new RunOutcome(a_results.TryGetValue(name, out var s) ? s : RunState.Finished, name + " verdict", "x");
+			});
+			Check(!File.Exists(QueueRun.File(data)), "the queue file is gone at the end");
+			return ran;
+		}
+		Equal("A,B,C", string.Join(",", Ran([], false, out var all)), "all three in order");
+		Check(all.All(i => i.Outcome?.State == RunState.Finished), "each one finished");
+		Equal("A,B", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, false, out var stopped)), "a failed run ends the queue");
+		Check(QueueRun.Summary(stopped).Last() == "C: not run", "the setup never run is said");
+		Check(File.ReadAllText(QueueRun.LastFile(data)).Contains("C: not run", StringComparison.Ordinal), "the last queue's summary is kept for the window");
+		Equal("A,B,C", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, true, out _)), "keep going goes past a failed run");
+		Equal("A", string.Join(",", Ran(new() { ["A"] = RunState.Stopped }, true, out _)), "a stopped run always ends the queue");
+		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");
+	}
 }
