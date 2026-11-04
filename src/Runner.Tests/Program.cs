@@ -2678,14 +2678,16 @@ public static class Program
 		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");
 	}
 
-	// every picture the window loads, read the way the window reads it: an Icon.ico WPF could not decode crashed the program at
-	// start (2026-11-03) - a picture like that fails here, never on a player's screen
+	// the window's pictures read the way the window reads them: an Icon.ico WPF could not decode crashed the program at start
+	// (2026-11-03) - a picture like that fails here, never on a player's screen. Covered: every picture compiled into the program
+	// and every picture App.xaml's resources make; NOT a picture a window names by its own address (use the Logo resource way)
 	static void T_EveryWindowPictureLoads()
 	{
 		string[] kinds = [".png", ".ico", ".jpg", ".jpeg", ".bmp", ".gif"];
 		var read = new List<string>();
 		Exception? failed = null;
-		// every pixel copied out: a picture cut short still has its size in its header, only a full read finds it broken
+		// every pixel copied out, past the size in its header (a PNG merely cut short is NOT refused - WPF draws what it has,
+		// measured 2026-11-03 - so that is no crash and not what this catches)
 		static void Whole(System.Windows.Media.Imaging.BitmapSource a_b, string a_what)
 		{
 			Check(a_b.PixelWidth > 0 && a_b.PixelHeight > 0, a_what + " has a size");
@@ -2712,7 +2714,9 @@ public static class Program
 					}
 				}
 				// the program's own resources made as its window makes them (App.xaml names its own assembly in each picture's
-				// address, so they read the same from here), each picture among them read
+				// address, so they read the same from here), each picture among them read. A process holds one WPF Application:
+				// this test makes it, so no other test may
+				Check(System.Windows.Application.Current == null, "no WPF Application made before this test (only one per process)");
 				var app = new ToolRunner.App.App();
 				app.InitializeComponent();
 				foreach (var k in app.Resources.Keys) {

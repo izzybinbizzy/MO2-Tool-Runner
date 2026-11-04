@@ -29,6 +29,11 @@ public partial class App : Application
 			LogCrash(e.Exception);
 			e.Handled = true;
 			if (headless) {
+				// said where the command was started too (exit 1 alone reads like a plain refusal)
+				try {
+					Console.Error.WriteLine("Something went wrong: " + e.Exception.Message + " (written in crash.txt in the data folder)");
+				} catch (IOException) {
+				}
 				Shutdown(1);
 				return;
 			}
