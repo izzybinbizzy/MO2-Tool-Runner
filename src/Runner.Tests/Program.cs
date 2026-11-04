@@ -23,6 +23,8 @@ public static class Program
 		var filter = a_args.Length > 0 ? a_args[0] : "";
 		// a game another session runs on this PC is not this test's business
 		Preflight.GameCheck = () => [];
+		// a real run of the program on this PC holds the real run lock
+		Runner.LockScope = " tests " + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
 		Mo2Control.GameProbe = () => [];
 		// nor this PC's own state: its Mod Organizer, an update waiting, its battery, how it was started
 		SystemChecks.SelfAdmin = () => false;
@@ -2231,7 +2233,7 @@ public static class Program
 	// the rename: the run lock is held under the old name too, so an old copy of the program never runs beside this one
 	static void T_RunLockCoversTheOldName()
 	{
-		var oldLock = "Local\\" + Brand.OldNames[0] + " run";
+		var oldLock = "Local\\" + Brand.OldNames[0] + " run" + Runner.LockScope;
 		using (var hold = Runner.HoldIfFree()) {
 			Check(hold != null, "free: taken");
 			var open = Mutex.TryOpenExisting(oldLock, out var m);
@@ -2430,6 +2432,14 @@ public static class Program
 		Equal(0, SystemChecks.PluginLimit(new(249, 4086)).Count(), "249 full and 4086 light: fine");
 		Check(!SystemChecks.PluginLimit(new(10, 4096)).Single().Blocking, "4096 light plugins only warn");
 		Check(SystemChecks.PluginLimit(new(10, 4097)).Single().Blocking, "4097 light plugins stop the run");
+		var unread = SystemChecks.PluginLimit(new(250 - 10, 10, 20)).Single();
+		Check(!unread.Blocking && unread.Text.Contains("could be over", StringComparison.Ordinal), "unreadable plugins are said, and what they could mean");
+		// a plugin held open with no sharing cannot be read: neither light nor full
+		var locked = Path.Combine(f.Mods, "Lights", "LightFlag.esp");
+		using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None)) {
+			Equal<bool?>(null, Plugins.LightOrNot(locked), "an unreadable plugin is neither kind");
+			Equal(1, SystemChecks.CountPlugins(ProfileOf(f)).Unreadable, "and counted apart");
+		}
 	}
 
 	static void T_AdminOnOneSideOnly()
@@ -2484,8 +2494,10 @@ public static class Program
 		Check(SystemChecks.TroubleFolders(In(a_cfa: true)).Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "controlled folder access warns");
 		Check(SystemChecks.TroubleFolders(In(a_cfa: true, a_docs: @"C:\Users\p\OneDrive\Documents")).All(i => !i.Blocking), "every one only warns");
 		// the real network probe on local paths
-		Check(!SystemChecks.IsNetworkPath(Path.GetTempPath()), "the temp folder is local");
-		Check(!SystemChecks.IsNetworkPath(@"\\?\" + Path.GetTempPath()), "a long-form local path is local");
+		// Windows' own folder: on the local disk on every PC (the temp folder can be set to a share)
+		var local = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+		Check(!SystemChecks.IsNetworkPath(local), "Windows' folder is local");
+		Check(!SystemChecks.IsNetworkPath(@"\\?\" + local), "a long-form local path is local");
 		Check(SystemChecks.IsNetworkPath(@"\\server\share\mods") && SystemChecks.IsNetworkPath(@"\\?\UNC\server\share\mods"), "a share is a network folder");
 		Check(SystemChecks.IsNetworkPath(@"\\.\UNC\server\share\mods"), "the device form of a share is a network folder");
 		Check(!SystemChecks.IsNetworkPath(@"\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\mods"), "a volume named by its id is local");
@@ -2544,10 +2556,46 @@ public static class Program
 		} finally {
 			SystemChecks.Mo2Unreadable = unread;
 		}
+		// Mod Organizer set to always run as administrator, through the whole check; and its probe failing leaves the others
+		var flagged = SystemChecks.AdminFlagged;
+		try {
+			SystemChecks.AdminFlagged = _ => true;
+			Check(SystemChecks.Run(mo2, ProfileOf(f), []).Single(i => i.Blocking).Text.Contains("always run as administrator", StringComparison.Ordinal), "the flag stops the run");
+			SystemChecks.Mo2Unreadable = _ => throw new System.ComponentModel.Win32Exception(5);
+			Check(SystemChecks.Run(mo2, ProfileOf(f), []).Any(i => i.Blocking && i.Text.Contains("always run as administrator", StringComparison.Ordinal)),
+				"a failing process probe does not hide the flag");
+		} finally {
+			SystemChecks.AdminFlagged = flagged;
+			SystemChecks.Mo2Unreadable = unread;
+		}
+		// a switched-off step's folder is not the run's business
+		var offOut = Path.Combine(f.Root, new string('q', SystemChecks.LongFolder));
+		var off = f.WriteSetup(("pandora", new JsonObject { ["output_dir"] = offOut }));
+		((JsonObject)((JsonArray)off.Root["steps"]!)[0]!)["on"] = false;
+		off.Save();
+		Check(!Preflight.Run(Setup.Load(off.File), mo2, []).Any(i => i.Text.Contains(offOut, StringComparison.Ordinal)), "a switched-off step's output is not checked");
 		// a step's output folder deep down is warned about too
 		var deepOut = Path.Combine(f.Root, new string('o', SystemChecks.LongFolder));
 		var withOut = f.WriteSetup(("pandora", new JsonObject { ["output_dir"] = deepOut }));
 		Check(Preflight.Run(withOut, mo2, []).Any(i => i.Text.Contains(deepOut, StringComparison.Ordinal)), "a step's output folder is checked for its length");
+	}
+
+	// a blocking PC check refuses the run before anything is touched
+	static void T_ASecondMo2RefusesTheRun()
+	{
+		using var f = new FakeMo2();
+		StepRegistry.Replace(new FakeStep("snowfixer", (ctx, s) => throw new InvalidOperationException("must not run")));
+		f.WriteSetup(("snowfixer", []));
+		var before = f.Text("modlist.txt");
+		var was = SystemChecks.Mo2Paths;
+		try {
+			SystemChecks.Mo2Paths = () => [Path.Combine(f.Root, "Another MO2", "ModOrganizer.exe")];
+			var r = Runner.Run(new RunRequest(f.SetupFile, f.Data));
+			Check(r.Folder == null && r.Verdict.StartsWith("not started", StringComparison.Ordinal) && r.Verdict.Contains("another Mod Organizer", StringComparison.Ordinal), r.Verdict);
+			Equal(before, f.Text("modlist.txt"), "the profile untouched");
+		} finally {
+			SystemChecks.Mo2Paths = was;
+		}
 	}
 
 	// a player's folder can be deeper than Windows' old 260-letter limit: the profile's own files are still read, changed and put back

@@ -14,7 +14,10 @@ public static class Runner
 	public const string MutexName = "Local\\" + Brand.Name + " run";
 
 	// the run lock under every name the program had: a copy of the old version never runs beside this one
-	static IEnumerable<string> MutexNames => Brand.AllNames.Select(n => "Local\\" + n + " run");
+	static IEnumerable<string> MutexNames => Brand.AllNames.Select(n => "Local\\" + n + " run" + LockScope);
+
+	// the offline tests take a lock of their own, so a real run on the same PC never meets them (and they never block it)
+	public static string LockScope { get; set; } = "";
 
 	public static string RunsDir(string a_dataDir) => Path.Combine(a_dataDir, "Runs");
 

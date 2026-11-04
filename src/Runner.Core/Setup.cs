@@ -133,10 +133,11 @@ public sealed class Setup
 		return p;
 	}
 
-	// the folders the setup itself names (empty ones included): its backups, its scratch, each step's output
-	public IEnumerable<(string What, string Dir)> Folders() =>
+	// the folders the setup itself names (empty ones included): its backups, its scratch, each step's output (a_running: only the
+	// steps a run would run - not one switched off, nor a save step left out for a new game)
+	public IEnumerable<(string What, string Dir)> Folders(bool a_running = false) =>
 		new[] { ("the backup folder", BackupDir), ("the scratch folder", Str(Root, "scratch") ?? "") }
-			.Concat(Steps.Select(s => ($"{s.Key}'s output folder", Str(s.Settings, "output_dir") ?? "")));
+			.Concat((a_running ? EnabledSteps : Steps).Select(s => ($"{s.Key}'s output folder", Str(s.Settings, "output_dir") ?? "")));
 
 	public void Save(string? a_file = null)
 	{

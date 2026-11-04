@@ -23,10 +23,12 @@ public static partial class SystemChecks
 			}
 		}
 		var self = SelfAdmin();
-		Guard("how Mod Organizer runs", () => self ? Admin(true, false, false) : Admin(false, Mo2Unreadable(a_mo2), AdminFlagged(a_mo2.Exe)));
+		Guard("how Mod Organizer runs", () => self ? Admin(true, false, false) : Admin(false, Mo2Unreadable(a_mo2), false));
+		Guard("whether Mod Organizer is set to run as administrator", () => self ? [] : Admin(false, false, AdminFlagged(a_mo2.Exe)));
 		Guard("for another Mod Organizer", () => OtherMo2(Mo2Paths(), a_mo2.Exe));
 		Guard("the plugin limit", () => PluginLimit(CountPlugins(a_profile)));
-		Guard("Windows' restart and the battery", () => Power(RestartPending(), Battery()));
+		Guard("whether Windows waits to restart", () => Power(RestartPending(), null));
+		Guard("the battery", () => Power(false, Battery()));
 		Guard("the folders' path lengths", () => LongPaths(folders.Select(f => f.Dir)));
 		var notes = new List<Issue>();
 		Guard("for folders that cause trouble", () => TroubleFolders(ReadTrouble(folders, notes)).ToList());
@@ -102,7 +104,8 @@ public static partial class SystemChecks
 	// the game loads these without a line in plugins.txt
 	static readonly string[] Implicit = ["Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm"];
 
-	public sealed record PluginCount(int Full, int Light);
+	// Unreadable: plugins whose header could not be read - neither kind can be said for them
+	public sealed record PluginCount(int Full, int Light, int Unreadable = 0);
 
 	public static PluginCount CountPlugins(Profile a_profile)
 	{
@@ -115,19 +118,25 @@ public static partial class SystemChecks
 			names.UnionWith(Files.DecodeText(Files.ReadShared(ccc)).Split('\n').Select(l => l.Trim()).Where(l => l != "" && paths.ContainsKey(l)));
 		}
 		names.UnionWith(a_profile.ActivePlugins());
-		int full = 0, light = 0;
+		int full = 0, light = 0, unreadable = 0;
 		foreach (var n in names) {
 			// a ticked plugin no mod provides is not loaded
 			if (!paths.TryGetValue(n, out var p)) {
 				continue;
 			}
-			if (Plugins.IsLight(p)) {
+			switch (Plugins.LightOrNot(p)) {
+			case true:
 				++light;
-			} else {
+				break;
+			case false:
 				++full;
+				break;
+			default:
+				++unreadable;
+				break;
 			}
 		}
-		return new PluginCount(full, light);
+		return new PluginCount(full, light, unreadable);
 	}
 
 	public static IEnumerable<Issue> PluginLimit(PluginCount a_c)
@@ -141,6 +150,11 @@ public static partial class SystemChecks
 			yield return new Issue("", true, $"{a_c.Light} light plugins (.esl or ESL-flagged) are switched on - the game loads at most {LightLimit}");
 		} else if (a_c.Light > LightLimit - 10) {
 			yield return new Issue("", false, $"{a_c.Light} light plugins (.esl or ESL-flagged) are switched on, close to the game's {LightLimit} - the outputs of this run may add more");
+		}
+		if (a_c.Unreadable > 0) {
+			var over = a_c.Full + a_c.Unreadable > FullLimit || a_c.Light + a_c.Unreadable > LightLimit;
+			yield return new Issue("", false, $"{a_c.Unreadable} switched-on plugin(s) could not be read (in use by another program, or no access), so the plugin limit " +
+				"was counted without them" + (over ? " - with them the game could be over its limit" : ""));
 		}
 	}
 
