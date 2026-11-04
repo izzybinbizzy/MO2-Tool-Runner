@@ -2685,6 +2685,13 @@ public static class Program
 		string[] kinds = [".png", ".ico", ".jpg", ".jpeg", ".bmp", ".gif"];
 		var read = new List<string>();
 		Exception? failed = null;
+		// every pixel copied out: a picture cut short still has its size in its header, only a full read finds it broken
+		static void Whole(System.Windows.Media.Imaging.BitmapSource a_b, string a_what)
+		{
+			Check(a_b.PixelWidth > 0 && a_b.PixelHeight > 0, a_what + " has a size");
+			var stride = (a_b.PixelWidth * a_b.Format.BitsPerPixel + 7) / 8;
+			a_b.CopyPixels(new byte[stride * a_b.PixelHeight], stride, 0);
+		}
 		var t = new Thread(() => {
 			try {
 				var asm = typeof(ToolRunner.App.App).Assembly;
@@ -2695,21 +2702,22 @@ public static class Program
 						var name = (string)e.Key;
 						if (kinds.Any(k => name.EndsWith(k, StringComparison.OrdinalIgnoreCase)) && e.Value is Stream pic) {
 							using (pic) {
-								var frame = System.Windows.Media.Imaging.BitmapDecoder.Create(pic, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
-									System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames[0];
-								Check(frame.PixelWidth > 0, name + " is a picture");
+								foreach (var frame in System.Windows.Media.Imaging.BitmapDecoder.Create(pic, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+									System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames) {
+									Whole(frame, name);
+								}
 							}
 							read.Add(name);
 						}
 					}
 				}
-				// the program's own resources made as its window makes them (App.xaml), each picture among them read
-				System.Windows.Application.ResourceAssembly = asm;
+				// the program's own resources made as its window makes them (App.xaml names its own assembly in each picture's
+				// address, so they read the same from here), each picture among them read
 				var app = new ToolRunner.App.App();
 				app.InitializeComponent();
 				foreach (var k in app.Resources.Keys) {
 					if (app.Resources[k] is System.Windows.Media.Imaging.BitmapSource b) {
-						Check(b.PixelWidth > 0, $"the {k} picture is read");
+						Whole(b, $"the {k} picture");
 						read.Add(k.ToString() ?? "");
 					}
 				}

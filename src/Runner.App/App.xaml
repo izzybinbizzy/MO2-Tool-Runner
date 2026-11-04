@@ -79,7 +79,7 @@
       <CornerRadius x:Key="ButtonCorner">6</CornerRadius>
       <CornerRadius x:Key="CheckBoxCorner">4</CornerRadius>
       <CornerRadius x:Key="GuidedBoxCorner">6</CornerRadius>
-      <BitmapImage x:Key="Logo" UriSource="pack://application:,,,/Logo.png"/>
+      <BitmapImage x:Key="Logo" UriSource="pack://application:,,,/Skyrim Utility Patcher;component/Logo.png"/>
 
       <Style x:Key="H1" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource HeadFont}"/>
