@@ -1,12 +1,12 @@
 namespace ToolRunner;
 
-// The program's name, and the name it had before: a save, a cache stamp, a data folder or a Windows task made under the old
+// The program's name, and the names it had before: a save, a cache stamp, a data folder or a Windows task made under the old
 // name is still its own.
 public static class Brand
 {
-	public const string Name = "Patcher Unification Project";
+	public const string Name = "Skyrim Utility Patcher";
 
-	public static readonly string[] OldNames = ["MO2 Tool Runner"];
+	public static readonly string[] OldNames = ["Patcher Unification Project", "MO2 Tool Runner"];
 
 	public static IEnumerable<string> AllNames => OldNames.Prepend(Name);
 

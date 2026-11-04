@@ -225,17 +225,17 @@ public static class Program
 		Equal(@"-o:""D:\LOD\"" -x \\srv\share", ini["customExecutables"]["1\\arguments"], "quotes and backslashes unescaped once");
 	}
 
-	// a real Mod Organizer, read only: PUP_REAL_MO2 = its ModOrganizer.exe, PUP_REAL_BASE = its instance folder (skipped
+	// a real Mod Organizer, read only: SUP_REAL_MO2 = its ModOrganizer.exe, SUP_REAL_BASE = its instance folder (skipped
 	// when unset - a build machine has none)
 	static void T_RealIniReads()
 	{
-		var exe = Environment.GetEnvironmentVariable("PUP_REAL_MO2");
+		var exe = Environment.GetEnvironmentVariable("SUP_REAL_MO2");
 		if (exe == null || !File.Exists(exe)) {
-			Console.WriteLine("      (skipped: PUP_REAL_MO2 not set)");
+			Console.WriteLine("      (skipped: SUP_REAL_MO2 not set)");
 			return;
 		}
 		var mo2 = Mo2Instance.Load(exe);
-		if (Environment.GetEnvironmentVariable("PUP_REAL_BASE") is { } b) {
+		if (Environment.GetEnvironmentVariable("SUP_REAL_BASE") is { } b) {
 			Equal(b, mo2.BaseDir, "the instance folder");
 		}
 		Check(mo2.Executables.Any(e => e.Title == "SKSE"), "an SKSE entry");
@@ -628,10 +628,10 @@ public static class Program
 	{
 		var mon = new DateTime(2026, 10, 26, 3, 0, 0, DateTimeKind.Utc);
 		var thu = mon.AddDays(3);
-		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom("Patcher Unification Project - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
+		Equal("Skyrim Utility Patcher - clean save", InGame.PlaySaveFrom("Skyrim Utility Patcher - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
 		Equal("Named", InGame.PlaySaveFrom(null, "Named", mon, "Save9", thu).Save, "then the one the setup names");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, mon, "Save9", thu).Save, "an old clean save loses to newer progress of the player's");
-		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
+		Equal("Skyrim Utility Patcher - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
 		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
 		// only the runner's GAME steps count as its own time - a save the player made while a tool step ran is theirs
@@ -1406,7 +1406,7 @@ public static class Program
 	// ("Invalid Path to LOD") - ACMOS paints the terrain LOD wherever it is
 	static void T_AcmosFindsTheTerrainLodWhereItIs()
 	{
-		var dir = Path.Combine(Path.GetTempPath(), "PUP acmos " + Guid.NewGuid().ToString("N"));
+		var dir = Path.Combine(Path.GetTempPath(), "SUP acmos " + Guid.NewGuid().ToString("N"));
 		var scratch = Path.Combine(dir, "Terrain LOD");
 		var mod = Path.Combine(dir, "mods", "SSELODGen_Output - X");
 		try {
@@ -2118,16 +2118,16 @@ public static class Program
 	// runs at a set time are gone (his checklist answer 451): only a task an older version made is recognised, and removed
 	static void T_OldTimedRunsAreClearedAway()
 	{
-		Check(Schedule.IsOurs("Patcher Unification Project - Bottled Shaders 1A2B3C"), "a task of ours");
+		Check(Schedule.IsOurs("Skyrim Utility Patcher - Bottled Shaders 1A2B3C"), "a task of ours");
 		Check(Schedule.IsOurs("\\MO2 Tool Runner - Bottled Shaders 1A2B3C"), "one made under the old name");
 		Check(!Schedule.IsOurs("MicrosoftEdgeUpdateTaskMachineCore"), "anyone else's task");
 		Check(!Schedule.IsOurs("MO2 Tool Runner"), "only the name followed by \" - \"");
 		Check(Schedule.IsOurs("mo2 tool runner - Bottled 1A2B3C"), "any case");
 		Check(Schedule.StartsOurs("<Exec><Command>\"C:\\Some Folder\\MO2 Tool Runner.exe\"</Command></Exec>"), "a task starting the old program");
-		Check(Schedule.StartsOurs("<Exec><Command>C:\\x\\Patcher Unification Project.exe</Command></Exec>"), "or the new one");
+		Check(Schedule.StartsOurs("<Exec><Command>C:\\x\\Skyrim Utility Patcher.exe</Command></Exec>"), "or the new one");
 		Check(!Schedule.StartsOurs("<Exec><Command>cmd.exe</Command></Exec>"), "a task of the player's own that only shares the name");
 		// Windows itself, only where asked (harmless tasks a year ahead, removed at once)
-		if (Environment.GetEnvironmentVariable("PUP_SCHEDULE_PROBE") != "1") {
+		if (Environment.GetEnvironmentVariable("SUP_SCHEDULE_PROBE") != "1") {
 			return;
 		}
 		const string probe = "MO2 Tool Runner - zz offline leftover", theirs = "MO2 Tool Runner - zz offline not ours";
@@ -2146,7 +2146,7 @@ public static class Program
 	// the old name keeps the old folder where it is; once it ends, the folder is taken over
 	static void T_DataFolderWaitsForARunningOldCopy()
 	{
-		var parent = Path.Combine(Path.GetTempPath(), "PUP old copy " + Guid.NewGuid().ToString("N"));
+		var parent = Path.Combine(Path.GetTempPath(), "SUP old copy " + Guid.NewGuid().ToString("N"));
 		var fake = Path.Combine(parent, "bin", Brand.OldNames[0] + ".exe");
 		Directory.CreateDirectory(Path.Combine(parent, Brand.OldNames[0] + " Data", "Setups"));
 		Directory.CreateDirectory(Path.GetDirectoryName(fake)!);
@@ -2171,7 +2171,7 @@ public static class Program
 	// an apostrophe in the path never matter, a sibling folder sharing the name is left, a cut-off repoint is finished
 	static void T_DataFolderTakenOverUnderTheNewName()
 	{
-		var parent = Path.Combine(Path.GetTempPath(), "PUP adopt " + Guid.NewGuid().ToString("N"), "Bob's José");
+		var parent = Path.Combine(Path.GetTempPath(), "SUP adopt " + Guid.NewGuid().ToString("N"), "Bob's José");
 		try {
 			string Old(string a_rest = "") => Path.Combine(parent, Brand.OldNames[0] + " Data") + a_rest;
 			string New(string a_rest = "") => Path.Combine(parent, Brand.Name + " Data") + a_rest;

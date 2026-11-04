@@ -73,7 +73,7 @@ public sealed unsafe partial class Tray : IDisposable
 	{
 		if (_added) {
 			_added = false;
-			Show(_tip == "" ? "Patcher Unification Project" : _tip);
+			Show(_tip == "" ? "Skyrim Utility Patcher" : _tip);
 		}
 	}
 
@@ -108,7 +108,7 @@ public sealed unsafe partial class Tray : IDisposable
 	public bool Notify(string a_title, string a_text, bool a_sound)
 	{
 		if (!_added) {
-			Show("Patcher Unification Project");
+			Show("Skyrim Utility Patcher");
 		}
 		if (!_added) {
 			return false;
