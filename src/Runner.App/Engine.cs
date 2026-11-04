@@ -14,58 +14,21 @@ public static class AppPaths
 	public static string Setups => Path.Combine(Data, "Setups");
 	public static string Runs => Runner.RunsDir(Data);
 
-	// a data folder an older version made under the old name is taken over by renaming it (same drive, nothing copied); a
-	// rename that fails leaves it where it was and that folder is used
-	static string Adopt(string a_parent, string a_suffix)
-	{
-		var now = Path.Combine(a_parent, Brand.Name + a_suffix);
-		if (Directory.Exists(now)) {
-			return now;
-		}
-		foreach (var old in Brand.OldNames.Select(n => Path.Combine(a_parent, n + a_suffix)).Where(Directory.Exists)) {
-			try {
-				Directory.Move(old, now);
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-				return old;
-			}
-			Repoint(now, old);
-			return now;
-		}
-		return now;
-	}
-
-	// setups and run records name folders inside the data folder (backups, scratch, parked outputs) by their whole path: each
-	// one under the old folder is written under the new one
-	static void Repoint(string a_now, string a_old)
-	{
-		string Esc(string p) => System.Text.Json.JsonSerializer.Serialize(p.TrimEnd('\\'))[1..^1];
-		var (from, to) = (Esc(a_old), Esc(a_now));
-		foreach (var f in Directory.EnumerateFiles(a_now, "*.json", SearchOption.AllDirectories)) {
-			try {
-				var text = File.ReadAllText(f);
-				if (text.Contains(from, StringComparison.OrdinalIgnoreCase)) {
-					Files.WriteAtomic(f, text.Replace(from, to, StringComparison.OrdinalIgnoreCase));
-				}
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-				// a file that cannot be read keeps its old paths; its setup then names a folder that is gone, which the pre-check says
-			}
-		}
-	}
-
 	static string Resolve()
 	{
-		var beside = Adopt(AppContext.BaseDirectory, " Data");
 		try {
 			if (Files.IsUnder(AppContext.BaseDirectory, Path.GetTempPath())) {
 				throw new UnauthorizedAccessException("a temporary folder");
 			}
+			// one made under the program's old name is taken over (DataFolder.Adopt)
+			var beside = DataFolder.Adopt(AppContext.BaseDirectory, " Data");
 			Directory.CreateDirectory(beside);
 			var probe = Path.Combine(beside, ".write test");
 			File.WriteAllText(probe, "");
 			File.Delete(probe);
 			return beside;
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-			var local = Adopt(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "");
+			var local = DataFolder.Adopt(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "");
 			Directory.CreateDirectory(local);
 			return local;
 		}

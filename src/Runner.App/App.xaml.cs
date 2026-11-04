@@ -54,6 +54,14 @@ public partial class App : Application
 		}
 		MainWindow = w;
 		w.Show();
+		// runs at a set time are gone (his checklist answer 451): a task an older version made is cleared away, off the
+		// window's thread (a failure leaves it; it can start nothing that is not there)
+		_ = Task.Run(() => {
+			try {
+				Schedule.RemoveLeftovers();
+			} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) {
+			}
+		});
 	}
 
 	static void Pump(Window a_w, int a_ms)
@@ -218,8 +226,8 @@ public partial class App : Application
 		w.ShowPanel("settings");
 		Pump(w, 600);
 		Save("3 settings");
-		// the settings further down: the run options, tool updates, a run at a set time
-		foreach (var (y, name) in new[] { (420.0, "3b settings, run options"), (900.0, "3c settings, set time") }) {
+		// the settings further down: the run options, tool updates
+		foreach (var (y, name) in new[] { (420.0, "3b settings, run options"), (900.0, "3c settings, tool updates") }) {
 			w.ScrollDrawer(y);
 			Pump(w, 400);
 			Save(name);

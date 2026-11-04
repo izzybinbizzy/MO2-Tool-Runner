@@ -21,7 +21,6 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 - **A preview before a run** shows the tools in order, every mod switched off and why, when the game starts, and about how long it takes.
 - **Also:**
   - tool update checks (Nexus and GitHub)
-  - a run at a set time (a Windows scheduled task)
   - the mods your LOD is built from, with each one's page
   - a history of every change made to your Mod Organizer
   - themes

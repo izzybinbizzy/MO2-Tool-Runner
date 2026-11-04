@@ -171,6 +171,10 @@ public static class Cli
 	{
 		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <profile file> is needed");
 		var s = Setup.Load(Path.GetFullPath(file));
+		if (s.Root["steps"] is not System.Text.Json.Nodes.JsonArray || s.Root["mo2"] is not System.Text.Json.Nodes.JsonObject) {
+			Console.WriteLine("not a setup file (no steps list, no Mod Organizer): " + file);
+			return 1;
+		}
 		// the name becomes a file name in the Setups folder: no folder parts, no characters Windows refuses
 		var name = Opt(a_args, "--name") ?? s.Name;
 		name = string.Concat(Path.GetFileName(name).Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c)).Trim();

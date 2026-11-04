@@ -1,211 +1,53 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
-using System.Xml.Linq;
 
 namespace ToolRunner;
 
-// A run at a set time with nothing to click (his checklist 270, "all 3."): a Windows scheduled task of the player's own that
-// starts the runner's command line ("run --setup <file>") at that time, once or every day, and only while the player is signed
-// in (the tools and the game need their desktop). A run it starts is like any other: refused before anything changes, with the
-// reason kept for the window, when it is not safe (the game running, a download, another run). Its definition goes to Windows
-// as XML (no 261-character command limit, nothing in it depends on the Windows language), and is read back the same way.
-public static partial class Schedule
+// Runs at a set time are gone (his checklist answer 451, 2026-11-03: "completely remove scheduled runs from this entirely. they
+// will never happen."). What is left only clears away a Windows task an older version made, under its old or new name, so
+// nothing starts a run by itself any more.
+public static class Schedule
 {
-	public sealed record RunTime(DateTime At, bool Daily);
+	// a task name an older version gave a setup's timed run
+	public static bool IsOurs(string a_task) =>
+		Brand.AllNames.Any(b => a_task.TrimStart('\\').StartsWith(b + " - ", StringComparison.Ordinal));
 
-	static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
-
-	// one task per setup FILE, named only from that file (its name inside the setup can change - the task must still be found)
-	public static string TaskName(Setup a_setup, string a_brand = Brand.Name)
-	{
-		var mark = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(a_setup.File).ToUpperInvariant())))[..6];
-		return a_brand + " - " + string.Concat(Path.GetFileNameWithoutExtension(a_setup.File).Select(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ? '-' : c)).Trim() + " " + mark;
-	}
-
-	// the next time a clock time comes round (today if still ahead, else tomorrow)
-	public static DateTime Next(TimeSpan a_time, DateTime a_now)
-	{
-		var t = a_now.Date + a_time;
-		return t > a_now ? t : t.AddDays(1);
-	}
-
-	public static string TaskXml(string a_command, string a_arguments, RunTime a_when)
-	{
-		var start = new XElement(Ns + "StartBoundary", a_when.At.ToString("yyyy-MM-dd'T'HH:mm:ss", InvariantCulture));
-		var trigger = a_when.Daily
-			? new XElement(Ns + "CalendarTrigger", start, new XElement(Ns + "Enabled", "true"), new XElement(Ns + "ScheduleByDay", new XElement(Ns + "DaysInterval", 1)))
-			: new XElement(Ns + "TimeTrigger", start, new XElement(Ns + "Enabled", "true"));
-		var task = new XElement(Ns + "Task", new XAttribute("version", "1.2"),
-			new XElement(Ns + "RegistrationInfo", new XElement(Ns + "Description", Brand.Name + ": a run at a set time (made in its Settings - remove it there).")),
-			new XElement(Ns + "Triggers", trigger),
-			new XElement(Ns + "Principals", new XElement(Ns + "Principal", new XAttribute("id", "Author"),
-				new XElement(Ns + "UserId", Environment.UserDomainName + "\\" + Environment.UserName),
-				new XElement(Ns + "LogonType", "InteractiveToken"), new XElement(Ns + "RunLevel", "LeastPrivilege"))),
-			new XElement(Ns + "Settings",
-				new XElement(Ns + "MultipleInstancesPolicy", "IgnoreNew"),
-				new XElement(Ns + "DisallowStartIfOnBatteries", "false"),
-				new XElement(Ns + "StopIfGoingOnBatteries", "false"),
-				// a missed time is skipped, never run later while the player may be using Mod Organizer
-				new XElement(Ns + "StartWhenAvailable", "false"),
-				new XElement(Ns + "WakeToRun", "false"),
-				// a whole run can take hours: Windows never ends it
-				new XElement(Ns + "ExecutionTimeLimit", "PT0S"),
-				new XElement(Ns + "Enabled", "true"),
-				new XElement(Ns + "Priority", "4")),
-			new XElement(Ns + "Actions", new XAttribute("Context", "Author"), new XElement(Ns + "Exec",
-				new XElement(Ns + "Command", a_command), new XElement(Ns + "Arguments", a_arguments),
-				new XElement(Ns + "WorkingDirectory", Path.GetDirectoryName(a_command) ?? ""))));
-		return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" + task.ToString();
-	}
-
-	[GeneratedRegex(@"^\s*<\?xml[^>]*\?>")]
-	private static partial Regex Declaration();
-
-	// the trigger of a task definition (null: none this runner understands)
-	public static RunTime? Parse(string a_xml)
-	{
-		var doc = XDocument.Parse(Declaration().Replace(a_xml, ""));
-		foreach (var t in doc.Descendants().Where(e => e.Name.LocalName is "TimeTrigger" or "CalendarTrigger")) {
-			var s = t.Elements().FirstOrDefault(e => e.Name.LocalName == "StartBoundary")?.Value;
-			if (s != null && DateTime.TryParse(s, InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal, out var at)) {
-				return new RunTime(at, t.Elements().Any(e => e.Name.LocalName == "ScheduleByDay"));
-			}
-		}
-		return null;
-	}
-
-	public static void Set(Setup a_setup, string a_exe, RunTime a_when)
-	{
-		Register(TaskName(a_setup), TaskXml(a_exe, $"run --setup \"{a_setup.File}\"", a_when));
-		foreach (var old in Brand.OldNames) {
-			RemoveTask(TaskName(a_setup, old));
-		}
-	}
-
-	public static void Register(string a_name, string a_xml)
-	{
-		var file = Path.Combine(Path.GetTempPath(), Brand.Name + " task " + Guid.NewGuid().ToString("N") + ".xml");
-		File.WriteAllText(file, a_xml, Encoding.Unicode);
-		try {
-			var (code, text) = Schtasks("/Create", "/TN", a_name, "/XML", file, "/F");
-			if (code != 0) {
-				throw new InvalidOperationException("Windows did not take the scheduled run: " + text.Trim());
-			}
-		} finally {
-			File.Delete(file);
-		}
-	}
-
-	// the setup's scheduled run as Windows has it (null: none). A task made under the old name starts the old program file, which
-	// the rename took away: with this program's exe given it is made again under the new name, the old one removed.
-	public static RunTime? Read(Setup a_setup, string? a_exe = null)
-	{
-		if (ReadTask(TaskName(a_setup)) is { } now) {
-			return now;
-		}
-		foreach (var old in Brand.OldNames) {
-			if (ReadTask(TaskName(a_setup, old)) is { } was) {
-				if (!string.IsNullOrEmpty(a_exe)) {
-					Set(a_setup, a_exe, was);
-				}
-				return was;
-			}
-		}
-		return null;
-	}
-
-	public static RunTime? ReadTask(string a_name)
-	{
-		var (code, text) = Schtasks("/Query", "/TN", a_name, "/XML");
-		return code == 0 ? Parse(text) : null;
-	}
-
-	public static void Remove(Setup a_setup)
-	{
-		foreach (var brand in Brand.AllNames) {
-			RemoveTask(TaskName(a_setup, brand));
-		}
-	}
-
-	public static void RemoveTask(string a_name)
-	{
-		if (Schtasks("/Query", "/TN", a_name).Code != 0) {
-			return;
-		}
-		var (code, text) = Schtasks("/Delete", "/TN", a_name, "/F");
-		if (code != 0) {
-			throw new InvalidOperationException("Windows did not remove the scheduled run: " + text.Trim());
-		}
-	}
-
-	// the setup file a task of ours runs (its "run --setup "<file>"" arguments), null when it is not one of ours
-	public static string? SetupOf(string a_xml)
-	{
-		var doc = XDocument.Parse(Declaration().Replace(a_xml, ""));
-		var args = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value;
-		var m = args == null ? null : SetupArg().Match(args);
-		return m is { Success: true } ? m.Groups["f"].Value : null;
-	}
-
-	[GeneratedRegex("^run --setup \"(?<f>[^\"]+)\"$")]
-	private static partial Regex SetupArg();
-
-	// tasks of ours whose setup file is gone (moved, renamed or deleted - their task names came from the old path, so the window
-	// could no longer find them, and Windows would start a run on a missing file): removed, their names returned (the fourth
-	// review, L6)
-	public static List<string> RemoveOrphans(Func<string, bool>? a_only = null)
+	// every such task removed -> their names (only those a_only lets through, for the test)
+	public static List<string> RemoveLeftovers(Func<string, bool>? a_only = null)
 	{
 		var removed = new List<string>();
 		var (code, csv) = Schtasks("/Query", "/FO", "CSV", "/NH");
 		if (code != 0) {
 			return removed;
 		}
-		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => Brand.AllNames.Any(b => l.StartsWith("\"\\" + b + " - ", StringComparison.Ordinal)))
-			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(n => a_only == null || a_only(n)).ToList();
+		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith('"') && l.IndexOf('"', 1) > 1)
+			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(IsOurs).Where(n => a_only == null || a_only(n)).ToList();
 		foreach (var n in names) {
-			try {
-				var (c, xml) = Schtasks("/Query", "/TN", n, "/XML");
-				if (c == 0 && SetupOf(xml) is { } file && ConfirmedGone(file)) {
-					RemoveTask(n);
-					removed.Add(n);
-				}
-			} catch (Exception e) when (e is System.Xml.XmlException or InvalidOperationException or ArgumentException) {
-				// a task that does not read is left alone
+			if (Schtasks("/Delete", "/TN", n, "/F").Code == 0) {
+				removed.Add(n);
 			}
 		}
 		return removed;
 	}
 
-	// a setup file that is really gone - not one Windows could not reach: a whole path, its drive there, and its folder either
-	// gone or read whole without it (File.Exists says false for a locked folder or an unplugged drive too - CodeRabbit on PR #4)
-	public static bool ConfirmedGone(string a_file)
+	// a harmless task under a given name (the test's own, a year ahead), so RemoveLeftovers can be proven against Windows itself
+	public static bool AddProbe(string a_name)
 	{
+		// as XML: nothing in it depends on the Windows language (a date typed on the command line does)
+		var at = DateTime.Now.Date.AddYears(1).AddHours(3).ToString("yyyy-MM-dd'T'HH:mm:ss", InvariantCulture);
+		var xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
+		          $"<Triggers><TimeTrigger><StartBoundary>{at}</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>" +
+		          "<Actions><Exec><Command>cmd.exe</Command><Arguments>/c exit</Arguments></Exec></Actions></Task>";
+		var file = Path.Combine(Path.GetTempPath(), Brand.Name + " probe " + Guid.NewGuid().ToString("N") + ".xml");
+		File.WriteAllText(file, xml, Encoding.Unicode);
 		try {
-			// a file Windows finds is never gone, whatever form its path is written in (slashes, a short 8.3 name - the fifth
-			// review, N4); the folder listing below is compared in the full form
-			if (!Path.IsPathFullyQualified(a_file) || File.Exists(a_file)) {
-				return false;
-			}
-			a_file = Path.GetFullPath(a_file);
-			if (Path.GetPathRoot(a_file) is not { Length: > 0 } root || !Directory.Exists(root)) {
-				return false;
-			}
-			var dir = Path.GetDirectoryName(a_file)!;
-			// the deepest folder of the path that is still there must be readable; a folder of it missing on a present drive = gone
-			var probe = dir;
-			while (!Directory.Exists(probe)) {
-				probe = Path.GetDirectoryName(probe);
-				if (probe == null) {
-					return false;
-				}
-			}
-			var listed = Directory.EnumerateFileSystemEntries(probe).ToList();
-			return probe != dir || !listed.Any(f => string.Equals(Path.GetFullPath(f), a_file, StringComparison.OrdinalIgnoreCase));
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException) {
-			return false;
+			return Schtasks("/Create", "/TN", a_name, "/XML", file, "/F").Code == 0;
+		} finally {
+			File.Delete(file);
 		}
 	}
+
+	public static bool Exists(string a_name) => Schtasks("/Query", "/TN", a_name).Code == 0;
 
 	// schtasks writes in the console's code page, not UTF-8 (a localized Windows' messages came out garbled - the fourth review, L6)
 	static Encoding ConsoleText()

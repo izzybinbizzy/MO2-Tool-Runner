@@ -254,7 +254,7 @@ public static partial class InGame
 	{
 		try {
 			var newest = NewestSave(a_ctx.Profile);
-			if (newest == null || newest.Equals(SaveReady, StringComparison.OrdinalIgnoreCase)) {
+			if (newest == null || Brand.AllNames.Any(b => newest.Equals(b + " - ready to play", StringComparison.OrdinalIgnoreCase))) {
 				return null;
 			}
 			var ours = Brand.Made(newest) ||

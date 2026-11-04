@@ -671,27 +671,6 @@ public static class Program
 		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
 		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
 		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
-		var xml = Schedule.TaskXml(@"C:\R\Patcher Unification Project.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
-		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
-		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
-		// a setup file is "gone" only when Windows could look and it is not there
-		var dir = Path.Combine(Path.GetTempPath(), "PUP orphan " + Guid.NewGuid().ToString("N"));
-		Directory.CreateDirectory(dir);
-		try {
-			var here = Path.Combine(dir, "Here.json");
-			File.WriteAllText(here, "{}");
-			Check(!Schedule.ConfirmedGone(here), "a file that is there is not gone");
-			Check(!Schedule.ConfirmedGone(here.Replace('\\', '/')), "nor in another path form");
-			Check(Schedule.ConfirmedGone(Path.Combine(dir, "Gone.json")), "missing from a folder that was read: gone");
-			Check(Schedule.ConfirmedGone(Path.Combine(dir, "No Folder", "Gone.json")), "its folder missing on a present drive: gone");
-			Check(!Schedule.ConfirmedGone("Relative.json"), "a relative path proves nothing");
-			var noDrive = Enumerable.Range('D', 23).Select(c => $"{(char)c}:\\").FirstOrDefault(r => !Directory.Exists(r));
-			if (noDrive != null) {
-				Check(!Schedule.ConfirmedGone(noDrive + @"Setups\X.json"), "an unplugged drive proves nothing");
-			}
-		} finally {
-			Directory.Delete(dir, true);
-		}
 	}
 
 	static void T_CheckBoxPixels()
@@ -2126,7 +2105,6 @@ public static class Program
 		Check(left.Contains("2026-01-01 00-00-00 Other") && left.Contains("my own folder"), "another setup's and a folder not of a run stay");
 	}
 
-	// his checklist 270: a run at a set time - its Windows task definition reads back as written
 	// the rename (his order 2026-11-03): saves, tasks and stamps made under the old name are still the runner's own
 	static void T_OldNameIsStillOurs()
 	{
@@ -2137,54 +2115,101 @@ public static class Program
 		Check(Brand.AllNames.First() == Brand.Name && Brand.AllNames.Contains("MO2 Tool Runner"), "both names known, the new one first");
 	}
 
-	static void T_ScheduleDefinitionReadsBack()
+	// runs at a set time are gone (his checklist answer 451): only a task an older version made is recognised, and removed
+	static void T_OldTimedRunsAreClearedAway()
 	{
-		var now = new DateTime(2026, 10, 27, 14, 0, 0);
-		Equal(new DateTime(2026, 10, 28, 3, 0, 0), Schedule.Next(TimeSpan.FromHours(3), now), "03:00 is tomorrow at 14:00");
-		Equal(new DateTime(2026, 10, 27, 22, 30, 0), Schedule.Next(new TimeSpan(22, 30, 0), now), "22:30 is still today");
-		var daily = Schedule.Parse(Schedule.TaskXml(@"C:\Some Folder\Patcher Unification Project.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true)));
-		Equal(new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true), daily, "every day at 03:00");
-		var once = Schedule.Parse(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false)));
-		Equal(new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false), once, "once");
-		Check(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(now, true)).Contains("<StartWhenAvailable>false</StartWhenAvailable>", StringComparison.Ordinal),
-			"a missed time is skipped, never run later");
-		using (var f = new FakeMo2()) {
-			var a = f.WriteSetup(("snowfixer", []));
-			var b = Setup.FromJson((JsonObject)a.Root.DeepClone(), Path.Combine(f.Data, "Setups", "Copy of Test.json"));
-			Check(Schedule.TaskName(a) != Schedule.TaskName(b), "two setups with one name get two tasks");
-			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.Load(f.SetupFile)), "the same setup file always gets the same task");
-			var renamed = (JsonObject)a.Root.DeepClone();
-			renamed["name"] = "A New Name";
-			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.FromJson(renamed, f.SetupFile)), "a setup renamed inside keeps its task");
-			// the rename (his order 2026-11-03): a task made under the old name is its own task, found by the same file
-			Check(Schedule.TaskName(a).StartsWith(Brand.Name + " - ", StringComparison.Ordinal), "a new task carries the new name");
-			Equal(Schedule.TaskName(a)[Brand.Name.Length..], Schedule.TaskName(a, Brand.OldNames[0])[Brand.OldNames[0].Length..],
-				"the old-name task of the same setup file differs only in the name");
-		}
-		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
+		Check(Schedule.IsOurs("Patcher Unification Project - Bottled Shaders 1A2B3C"), "a task of ours");
+		Check(Schedule.IsOurs("\\MO2 Tool Runner - Bottled Shaders 1A2B3C"), "one made under the old name");
+		Check(!Schedule.IsOurs("MicrosoftEdgeUpdateTaskMachineCore"), "anyone else's task");
+		Check(!Schedule.IsOurs("MO2 Tool Runner"), "only the name followed by \" - \"");
+		// Windows itself, only where asked (a harmless task a year ahead, removed at once)
 		if (Environment.GetEnvironmentVariable("PUP_SCHEDULE_PROBE") != "1") {
 			return;
 		}
-		const string name = "Patcher Unification Project - zz offline test";
-		var when = new Schedule.RunTime(DateTime.Now.Date.AddYears(1).AddHours(3), true);
+		const string probe = "MO2 Tool Runner - zz offline leftover";
 		try {
-			Schedule.Register(name, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit", when));
-			Equal(when, Schedule.ReadTask(name), "Windows has it as written");
+			Check(Schedule.AddProbe(probe) && Schedule.Exists(probe), "a leftover task made");
+			Check(Schedule.RemoveLeftovers(n => n == probe).SequenceEqual([probe]), "it is removed");
+			Check(!Schedule.Exists(probe), "and Windows no longer has it");
 		} finally {
-			Schedule.RemoveTask(name);
+			Schedule.RemoveLeftovers(n => n == probe);
 		}
-		Equal(null, Schedule.ReadTask(name), "and it is gone again");
-		// a task whose setup file is gone is found and removed; a cmd task of ours with no setup is left alone
-		const string orphan = "Patcher Unification Project - zz offline orphan";
-		var missing = Path.Combine(Path.GetTempPath(), "Patcher Unification Project missing " + Guid.NewGuid().ToString("N") + ".json");
+	}
+
+	// the rename: an old data folder is taken over and every path inside it repointed - escaping, letters outside English and
+	// an apostrophe in the path never matter, a sibling folder sharing the name is left, a cut-off repoint is finished
+	static void T_DataFolderTakenOverUnderTheNewName()
+	{
+		var parent = Path.Combine(Path.GetTempPath(), "PUP adopt " + Guid.NewGuid().ToString("N"), "Bob's José");
 		try {
-			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
-			// only the test's own task is looked at - a task of the player's is never touched by a test
-			Check(Schedule.RemoveOrphans(n => n == orphan).SequenceEqual([orphan]), "an orphaned task is removed");
-			Equal(null, Schedule.ReadTask(orphan), "and Windows no longer has it");
+			string Old(string a_rest = "") => Path.Combine(parent, Brand.OldNames[0] + " Data") + a_rest;
+			string New(string a_rest = "") => Path.Combine(parent, Brand.Name + " Data") + a_rest;
+			void Write(string a_file, string a_json)
+			{
+				Directory.CreateDirectory(Path.GetDirectoryName(a_file)!);
+				File.WriteAllText(a_file, a_json);
+			}
+			var sibling = Path.Combine(parent, Brand.OldNames[0] + " Data2", "x");
+			var relaxed = new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+			Write(Old(@"\Setups\A.json"), new JsonObject { ["backups"] = Old(@"\Backups"), ["scratch"] = Old(), ["other"] = sibling,
+				["list"] = new JsonArray(Old(@"\Runs\1")) }.ToJsonString(relaxed));
+			Write(Old(@"\Runs\1\journal.json"), new JsonObject { ["folder"] = Old(@"\Runs\1") }.ToJsonString());
+			Equal(Old(), DataFolder.Adopt(parent, " Data", () => true), "an old copy running: the old folder is used, nothing moved");
+			Check(Directory.Exists(Old()) && !Directory.Exists(New()), "left where it was");
+			Directory.CreateDirectory(New());
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "an empty new folder does not hide the old one");
+			Check(!Directory.Exists(Old()), "the old folder moved");
+			var a = JsonNode.Parse(File.ReadAllText(New(@"\Setups\A.json")))!;
+			Equal(New(@"\Backups"), a["backups"]!.ToString(), "a path inside (written with literal letters)");
+			Equal(New(), a["scratch"]!.ToString(), "the folder itself");
+			Equal(sibling, a["other"]!.ToString(), "a sibling folder sharing the name is left");
+			Equal(New(@"\Runs\1"), a["list"]![0]!.ToString(), "a path in a list");
+			Equal(New(@"\Runs\1"), JsonNode.Parse(File.ReadAllText(New(@"\Runs\1\journal.json")))!["folder"]!.ToString(), "a path written escaped");
+			Check(!File.Exists(New(@"\.renamed from.txt")), "the repoint finished, its mark gone");
+			// a repoint cut off half way: the mark makes the next start finish it
+			Write(New(@"\Setups\B.json"), new JsonObject { ["backups"] = Old(@"\Backups") }.ToJsonString());
+			File.WriteAllText(New(@"\.renamed from.txt"), Old());
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "the new folder in use");
+			Equal(New(@"\Backups"), JsonNode.Parse(File.ReadAllText(New(@"\Setups\B.json")))!["backups"]!.ToString(), "the cut-off repoint finished");
+			// a new folder in use is never replaced by an old one that turns up beside it
+			Write(Old(@"\Setups\C.json"), "{}");
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "a new folder with files is kept");
+			Check(File.Exists(Old(@"\Setups\C.json")), "the old one left alone");
 		} finally {
-			Schedule.RemoveTask(orphan);
+			Directory.Delete(Path.GetDirectoryName(parent)!, true);
 		}
+	}
+
+	// the rename: the run lock is held under the old name too, so an old copy of the program never runs beside this one
+	static void T_RunLockCoversTheOldName()
+	{
+		var oldLock = "Local\\" + Brand.OldNames[0] + " run";
+		using (var hold = Runner.HoldIfFree()) {
+			Check(hold != null, "free: taken");
+			var open = Mutex.TryOpenExisting(oldLock, out var m);
+			m?.Dispose();
+			Check(open, "the old name's lock is held too");
+		}
+		using var taken = new ManualResetEventSlim();
+		using var done = new ManualResetEventSlim();
+		var t = new Thread(() => {
+			using var m = new Mutex(true, oldLock);
+			taken.Set();
+			done.Wait();
+			m.ReleaseMutex();
+		});
+		t.Start();
+		taken.Wait();
+		try {
+			using var hold = Runner.HoldIfFree();
+			Check(hold == null, "an old copy holding its lock: no run");
+			Check(Runner.HoldIfFree() is null, "still none");
+		} finally {
+			done.Set();
+			t.Join();
+		}
+		using var after = Runner.HoldIfFree();
+		Check(after != null, "free again once the old copy let go");
 	}
 
 	// his lesson 2026-10-27 (checklist 271): the mods a LOD step builds from are found off their plugins' record groups, each with
