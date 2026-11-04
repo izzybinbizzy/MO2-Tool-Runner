@@ -111,19 +111,20 @@ public static class Plugins
 	}
 
 	// a light plugin takes no full load-order slot: an .esl file, or an .esp / .esm whose TES4 record carries the light flag (0x200)
-	public static bool IsLight(string a_path)
+	public static bool IsLight(string a_path) =>
+		a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase) || (HeaderFlags(a_path) & 0x200) != 0;
+
+	// the TES4 record's flags; 0 when the file is not a plugin or cannot be read
+	static uint HeaderFlags(string a_path)
 	{
-		if (a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase)) {
-			return true;
-		}
 		try {
 			using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 			var h = new byte[12];
-			return fs.Read(h, 0, 12) == 12 && Encoding.ASCII.GetString(h, 0, 4) == "TES4" && (BitConverter.ToUInt32(h, 8) & 0x200) != 0;
+			return fs.Read(h, 0, 12) == 12 && Encoding.ASCII.GetString(h, 0, 4) == "TES4" ? BitConverter.ToUInt32(h, 8) : 0;
 		} catch (IOException) {
-			return false;
+			return 0;
 		} catch (UnauthorizedAccessException) {
-			return false;
+			return 0;
 		}
 	}
 
@@ -131,17 +132,7 @@ public static class Plugins
 	public static bool IsMaster(string a_path)
 	{
 		// the game loads every .esl in the master block too, flagged or not
-		if (a_path.EndsWith(".esm", StringComparison.OrdinalIgnoreCase) || a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase)) {
-			return true;
-		}
-		try {
-			using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-			var h = new byte[12];
-			return fs.Read(h, 0, 12) == 12 && Encoding.ASCII.GetString(h, 0, 4) == "TES4" && (h[8] & 1) != 0;
-		} catch (IOException) {
-			return false;
-		} catch (UnauthorizedAccessException) {
-			return false;
-		}
+		return a_path.EndsWith(".esm", StringComparison.OrdinalIgnoreCase) || a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase) ||
+		       (HeaderFlags(a_path) & 1) != 0;
 	}
 }

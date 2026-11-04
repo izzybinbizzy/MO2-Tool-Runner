@@ -31,7 +31,6 @@ public static class Program
 		SystemChecks.Mo2Paths = () => [];
 		SystemChecks.RestartPending = () => false;
 		SystemChecks.Battery = () => null;
-		SystemChecks.LongPathsOn = () => true;
 		var tests = typeof(Program).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
 			.Where(m => m.Name.StartsWith("T_", StringComparison.Ordinal) && m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).OrderBy(m => m.MetadataToken);
 		foreach (var t in tests) {
@@ -81,6 +80,8 @@ public static class Program
 	sealed class FakeMo2 : IDisposable
 	{
 		public string Root { get; }
+		// the folder Dispose removes: Root, or the folder a deeper Root was made in
+		public string Top { get; }
 		public string Exe => Path.Combine(Root, "MO2", "ModOrganizer.exe");
 		public string Instance => Path.Combine(Root, "MO2");
 		public string Game => Path.Combine(Root, "Game");
@@ -96,7 +97,8 @@ public static class Program
 
 		public FakeMo2(string a_nl = "\r\n", string a_deeper = "")
 		{
-			Root = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", OddFolder + " " + Guid.NewGuid().ToString("N")[..8], a_deeper);
+			Top = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", OddFolder + " " + Guid.NewGuid().ToString("N")[..8]);
+			Root = Path.Combine(Top, a_deeper);
 			Directory.CreateDirectory(Path.Combine(Game, "Data"));
 			Directory.CreateDirectory(ProfileDir);
 			Directory.CreateDirectory(Mods);
@@ -174,10 +176,10 @@ public static class Program
 		{
 			try {
 				// a test's read-only files would stop the delete
-				foreach (var f in new DirectoryInfo(Root).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
+				foreach (var f in new DirectoryInfo(Top).EnumerateFiles("*", SearchOption.AllDirectories).Where(f => f.IsReadOnly)) {
 					f.IsReadOnly = false;
 				}
-				Directory.Delete(Root, true);
+				Directory.Delete(Top, true);
 			} catch (IOException) {
 			} catch (UnauthorizedAccessException) {
 			}
@@ -2421,7 +2423,8 @@ public static class Program
 		Equal(0, SystemChecks.PluginLimit(c).Count(), "far from both limits");
 		Check(SystemChecks.PluginLimit(new(255, 0)).Single().Blocking, "255 full plugins stop the run");
 		Check(!SystemChecks.PluginLimit(new(254, 0)).Single().Blocking, "254 full plugins only warn (the outputs add more)");
-		Equal(0, SystemChecks.PluginLimit(new(249, 4096)).Count(), "249 full and 4096 light: fine");
+		Equal(0, SystemChecks.PluginLimit(new(249, 4086)).Count(), "249 full and 4086 light: fine");
+		Check(!SystemChecks.PluginLimit(new(10, 4096)).Single().Blocking, "4096 light plugins only warn");
 		Check(SystemChecks.PluginLimit(new(10, 4097)).Single().Blocking, "4097 light plugins stop the run");
 	}
 
@@ -2451,8 +2454,7 @@ public static class Program
 		Check(!b.Blocking && b.Text.Contains("40 %", StringComparison.Ordinal), "on battery warns with its level");
 		Check(!SystemChecks.Power(false, new(true, 255)).Single().Text.Contains('%', StringComparison.Ordinal), "an unknown level is left out");
 		var deep = Path.Combine(Path.GetTempPath(), new string('x', SystemChecks.LongFolder));
-		Equal(0, SystemChecks.LongPaths([deep], true).Count(), "long paths switched on: nothing");
-		Check(!SystemChecks.LongPaths([deep, deep, "", Path.GetTempPath()], false).Single().Blocking, "a long folder warns once while long paths are off");
+		Check(!SystemChecks.LongPaths([deep, deep, "", Path.GetTempPath()]).Single().Blocking, "a long folder warns once");
 	}
 
 	static void T_PrecheckCarriesThePcChecks()
@@ -2468,6 +2470,18 @@ public static class Program
 		} finally {
 			SystemChecks.Mo2Paths = was;
 		}
+		var unread = SystemChecks.Mo2Unreadable;
+		try {
+			SystemChecks.Mo2Unreadable = _ => true;
+			var issues = Preflight.Run(setup, mo2, []);
+			Check(issues.Any(i => i.Blocking && i.Text.StartsWith(SystemChecks.UnreadableText, StringComparison.Ordinal)), "an unreadable Mod Organizer stops the run");
+		} finally {
+			SystemChecks.Mo2Unreadable = unread;
+		}
+		// a step's output folder deep down is warned about too
+		var deepOut = Path.Combine(f.Root, new string('o', SystemChecks.LongFolder));
+		var withOut = f.WriteSetup(("pandora", new JsonObject { ["output_dir"] = deepOut }));
+		Check(Preflight.Run(withOut, mo2, []).Any(i => i.Text.Contains(deepOut, StringComparison.Ordinal)), "a step's output folder is checked for its length");
 	}
 
 	// a player's folder can be deeper than Windows' old 260-letter limit: the profile's own files are still read, changed and put back

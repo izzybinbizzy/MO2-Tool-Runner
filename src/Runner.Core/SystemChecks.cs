@@ -11,19 +11,32 @@ public static partial class SystemChecks
 	public static List<Issue> Run(Mo2Instance a_mo2, Profile a_profile, IEnumerable<string> a_folders)
 	{
 		var outList = new List<Issue>();
-		outList.AddRange(Admin(SelfAdmin(), Mo2Unreadable(a_mo2), AdminFlagged(a_mo2.Exe)));
-		outList.AddRange(OtherMo2(Mo2Paths(), a_mo2.Exe));
-		outList.AddRange(PluginLimit(CountPlugins(a_profile)));
-		outList.AddRange(Power(RestartPending(), Battery()));
-		outList.AddRange(LongPaths(a_folders, LongPathsOn()));
+		// a check that cannot read what it needs is told and the others still run - it never ends the pre-check
+		void Guard(string a_what, Func<IEnumerable<Issue>> a_check)
+		{
+			try {
+				outList.AddRange(a_check());
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception) {
+				outList.Add(new Issue("", false, $"could not check {a_what}: {e.Message}"));
+			}
+		}
+		var self = SelfAdmin();
+		Guard("how Mod Organizer runs", () => self ? Admin(true, false, false) : Admin(false, Mo2Unreadable(a_mo2), AdminFlagged(a_mo2.Exe)));
+		Guard("for another Mod Organizer", () => OtherMo2(Mo2Paths(), a_mo2.Exe));
+		Guard("the plugin limit", () => PluginLimit(CountPlugins(a_profile)));
+		Guard("Windows' restart and the battery", () => Power(RestartPending(), Battery()));
+		Guard("the folders' path lengths", () => LongPaths(a_folders));
 		return outList;
 	}
 
 	// ---- 440: administrator on one side only
 	public static Func<bool> SelfAdmin { get; set; } = () => Environment.IsPrivilegedProcess;
 
-	// a Mod Organizer of this setup that runs but whose program path this process cannot read: started as administrator
+	// a Mod Organizer that runs but whose program path this process cannot read (started as administrator, or by another user):
+	// the runner can neither tell it from its own nor close it, so it stops the run like one of its own run as administrator
 	public static Func<Mo2Instance, bool> Mo2Unreadable { get; set; } = a_mo2 => new Mo2Control(a_mo2, "", RunLog.Null).Unreadable().Count > 0;
+
+	public const string UnreadableText = "a Mod Organizer runs that the runner cannot read";
 
 	// Windows' "Run this program as an administrator" box, for this user or every user
 	public static Func<string, bool> AdminFlagged { get; set; } = a_exe => {
@@ -45,8 +58,8 @@ public static partial class SystemChecks
 			yield break;
 		}
 		if (a_mo2Unreadable) {
-			yield return new Issue("", true, "Mod Organizer runs as administrator and the runner does not - Windows will not let the runner close it or press its windows; " +
-				"close Mod Organizer (or start both the same way), then start again");
+			yield return new Issue("", true, UnreadableText + " (started as administrator, or by another Windows user) - Windows will not let the runner close it " +
+				"or press its windows; close that Mod Organizer (or start both the same way), then start again");
 		}
 		if (a_mo2Flagged) {
 			yield return new Issue("", true, "Mod Organizer is set to always run as administrator (its Properties > Compatibility tab) and the runner is not - " +
@@ -121,6 +134,8 @@ public static partial class SystemChecks
 		}
 		if (a_c.Light > LightLimit) {
 			yield return new Issue("", true, $"{a_c.Light} light plugins (.esl or ESL-flagged) are switched on - the game loads at most {LightLimit}");
+		} else if (a_c.Light > LightLimit - 10) {
+			yield return new Issue("", false, $"{a_c.Light} light plugins (.esl or ESL-flagged) are switched on, close to the game's {LightLimit} - the outputs of this run may add more");
 		}
 	}
 
@@ -160,21 +175,17 @@ public static partial class SystemChecks
 	}
 
 	// ---- 447: long paths
-	public static Func<bool> LongPathsOn { get; set; } = () =>
-		Registry.GetValue(@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem", "LongPathsEnabled", 0) is int v && v != 0;
-
-	// the tools write folders of their own inside these (LOD meshes, textures, grass cache) that run tens of letters deep
+	// the tools write folders of their own inside these (LOD meshes, textures, grass cache) that run tens of letters deep, and most
+	// of them keep Windows' 260-letter limit whatever Windows' own long-path setting says (that setting reaches only programs
+	// built for it)
 	public const int LongFolder = 200;
 
-	public static IEnumerable<Issue> LongPaths(IEnumerable<string> a_folders, bool a_longOn)
+	public static IEnumerable<Issue> LongPaths(IEnumerable<string> a_folders)
 	{
-		if (a_longOn) {
-			yield break;
-		}
 		foreach (var d in a_folders.Where(d => d != "").Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase)) {
 			if (d.Length > LongFolder) {
-				yield return new Issue("", false, $"a folder's path is {d.Length} letters long ({d}) and Windows' long paths are off - a tool writing deep inside it " +
-					"can pass Windows' 260-letter limit and fail; move it to a shorter path, or switch long paths on in Windows");
+				yield return new Issue("", false, $"a folder's path is {d.Length} letters long ({d}) - a tool writing deep inside it can pass Windows' " +
+					"260-letter limit and fail; move it to a shorter path");
 			}
 		}
 	}
