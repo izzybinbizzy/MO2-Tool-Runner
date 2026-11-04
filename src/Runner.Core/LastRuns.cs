@@ -63,10 +63,18 @@ public static class LastRuns
 		if (a_pending == null) {
 			return null;
 		}
-		return a_rows.Where(r => r.Who == Mo2Changes.Outside && r.When > a_since && r.Profiles.Contains(a_profile, StringComparer.OrdinalIgnoreCase) &&
-		                         r.What is not ("profile added" or "profile removed"))
+		var all = a_rows.Where(r => r.Who == Mo2Changes.Outside && r.When > a_since && r.Profiles.Contains(a_profile, StringComparer.OrdinalIgnoreCase) &&
+		                             r.What is not ("profile added" or "profile removed"))
 			.Select(r => (r.Mod, r.What)).Concat(a_pending).Where(c => !a_skip(c.Mod)).ToList();
+		// a mod ticked and unticked again (or added and removed again) is back as the step found it
+		var undone = all.GroupBy(c => c.Mod, StringComparer.OrdinalIgnoreCase).Where(g => Cancels(g.Select(c => c.What.Split(' ')[0]).ToList()))
+			.Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		return all.Where(c => !undone.Contains(c.Mod)).ToList();
 	}
+
+	static bool Cancels(List<string> a_kinds) =>
+		a_kinds.All(k => k is "ticked" or "unticked" or "added" or "removed") &&
+		a_kinds.Count(k => k == "ticked") == a_kinds.Count(k => k == "unticked") && a_kinds.Count(k => k == "added") == a_kinds.Count(k => k == "removed");
 
 	// the step's own lines of its run's log: from its "=== <name> ===" line to its "done in" / FAILED / STOPPED line (the time
 	// and the detail lines left out), at most a_max of them, the last ones when there are more
@@ -100,12 +108,15 @@ public static class LastRuns
 	// every step of the setup, read off the disk: its runs, Mod Organizer's kept changes and the profile now (read only)
 	public static List<Section> Build(Setup a_setup, Mo2Instance a_mo2, IEnumerable<Journal> a_runs, string a_dataDir)
 	{
-		var of = Of(a_runs, a_setup.File);
+		var runs = a_runs.ToList();
+		var of = Of(runs, a_setup.File);
 		var own = OwnMods(a_setup);
 		var hide = a_setup.ChangesHideMods;
 		bool Skip(string a_mod) => own.Contains(a_mod) || hide.Any(h => a_mod.StartsWith(h, StringComparison.OrdinalIgnoreCase));
 		var rows = Mo2Changes.Read(Mo2Changes.Dir(a_dataDir, a_mo2));
-		var pending = Mo2Changes.Pending(a_mo2, a_dataDir, a_setup.Profile);
+		// while a run goes, or one stopped before its last look, what changed since that look is partly the run's own switching:
+		// not known until it ends or is put back
+		var pending = runs.Any(j => j.Unfinished) ? null : Mo2Changes.Pending(a_mo2, a_dataDir, a_setup.Profile);
 		return a_setup.Steps.Select(s => {
 			of.TryGetValue(s.Key, out var r);
 			var since = r.LastDone?.Ended is { } e ? ChangesSince(rows, pending, a_setup.Profile, e, Skip) : null;
@@ -183,18 +194,23 @@ public static class LastRuns
 		return lines;
 	}
 
-	// the log lines of a section's latest run (read off its run folder; none when the log is gone)
-	public static List<string> LogOf(Section a_s)
+	// the log lines of a section's latest run (read off its run folder; none when the log is gone); a_read keeps each run's log
+	// once, for the steps that share that run
+	public static List<string> LogOf(Section a_s, Dictionary<string, string[]>? a_read = null)
 	{
 		if (a_s.Latest is not { } l) {
 			return [];
 		}
-		var file = Path.Combine(l.RunFolder, "log.txt");
-		try {
-			// a run still going holds its log open for writing
-			return File.Exists(file) ? LogLines(Files.ReadSharedText(file).Split('\n'), l.Name) : [];
-		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-			return [];
+		if (a_read?.TryGetValue(l.RunFolder, out var known) != true) {
+			var file = Path.Combine(l.RunFolder, "log.txt");
+			try {
+				// a run still going holds its log open for writing
+				known = File.Exists(file) ? Files.ReadSharedText(file).Split('\n') : [];
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+				known = [];
+			}
+			a_read?.TryAdd(l.RunFolder, known);
 		}
+		return LogLines(known!, l.Name);
 	}
 }

@@ -220,7 +220,10 @@
         <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Margin="0,0,0,12" Visibility="{Binding LastCardText, Converter={StaticResource NotEmpty}}">
           <StackPanel>
             <TextBlock Text="{Binding LastCardTitle}" Style="{StaticResource H2}" Margin="0,0,0,6"/>
-            <TextBlock Text="{Binding LastCardText}" TextWrapping="Wrap" AutomationProperties.Name="Last run"/>
+            <!-- held to a few lines so the log keeps its room in the smallest window -->
+            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <TextBlock Text="{Binding LastCardText}" TextWrapping="Wrap" AutomationProperties.Name="Last run"/>
+            </ScrollViewer>
           </StackPanel>
         </Border>
         <!-- the log -->

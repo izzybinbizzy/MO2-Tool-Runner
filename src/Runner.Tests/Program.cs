@@ -2784,10 +2784,14 @@ public static class Program
 			Row(4, Mo2Changes.Outside, "Test", "profile added", "Test"),
 			Row(5, Mo2Changes.Outside, "DynDOLOD Output", "unticked", "Test"),
 			Row(6, Mo2Changes.Outside, "Tree Mod", "moved within Trees", "Test"),
+			Row(7, Mo2Changes.Outside, "Looked At", "ticked", "Test"),
+			Row(8, Mo2Changes.Outside, "Looked At", "unticked", "Test"),
 		};
 		var changes = LastRuns.ChangesSince(rows, [("New Mod", "removed (was under Misc)")], "Test", since, m => m == "DynDOLOD Output")!;
 		Equal("Grass Mod,Tree Mod,New Mod", string.Join(",", changes.Select(c => c.Mod)),
-			"only changes made outside the runner, in this profile (any case), after it finished, not the setup's own mods - then the ones not kept yet");
+			"only changes made outside the runner, in this profile (any case), after it finished, not the setup's own mods, not one undone again - then the ones not kept yet");
+		Equal("Looked At ticked", string.Join(",", LastRuns.ChangesSince(rows.Take(8), [], "Test", since, _ => false)!.Where(c => c.Mod == "Looked At").Select(c => c.Mod + " " + c.What)),
+			"a tick not undone still counts");
 		Equal("1 added, 1 moved, 1 removed", LastRuns.Counted(changes), "counted by kind");
 		Equal<IReadOnlyList<(string, string)>?>(null, LastRuns.ChangesSince(rows, null, "Test", since, _ => false), "a mod list that could not be read now: not known, never \"current\"");
 		var t = since.AddHours(-1);
@@ -2845,7 +2849,8 @@ public static class Program
 		var setup = f.WriteSetup(("texgen", new JsonObject { ["output_mod"] = "Output A" }), ("dyndolod", new JsonObject()));
 		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
 		var t = DateTime.Now.AddMinutes(-30);
-		var j = new Journal { SetupFile = setup.File, Started = t, Folder = Path.Combine(Runner.RunsDir(f.Data), "2026-11-02 21-00-00 Test"), Steps = [Ran("texgen", StepState.Done, t)] };
+		var j = new Journal { SetupFile = setup.File, Started = t, Ended = t.AddMinutes(6), State = RunState.Finished, Folder = Path.Combine(Runner.RunsDir(f.Data), "2026-11-02 21-00-00 Test"),
+			Steps = [Ran("texgen", StepState.Done, t)] };
 		Directory.CreateDirectory(j.Folder);
 		j.Save();
 		File.WriteAllLines(Path.Combine(j.Folder, "log.txt"), [$"{t:HH:mm:ss}  === TexGen ===", $"{t:HH:mm:ss}  made the textures", $"{t:HH:mm:ss}  === TexGen done in 5.0 min ==="]);
@@ -2867,5 +2872,14 @@ public static class Program
 		Equal("Base Mod unticked", string.Join(",", kept.ChangedSince!.Select(c => c.Mod + " " + c.What)), "once kept, it still counts (once)");
 		Equal(before.Replace("+Base Mod", "-Base Mod", StringComparison.Ordinal).Replace("+Output A", "-Output A", StringComparison.Ordinal), File.ReadAllText(list),
 			"the profile is only read");
+		var logs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+		Equal(string.Join("|", LastRuns.LogOf(texgen)), string.Join("|", LastRuns.LogOf(texgen, logs)), "the same lines when each log is read once");
+		Equal(1, logs.Count, "and the log is kept for the next step of that run");
+		// a run going (or one that stopped before its last look) switches mods itself: what changed since the look is not known
+		var going = new Journal { SetupFile = setup.File, Started = DateTime.Now, State = RunState.Running, Folder = Path.Combine(Runner.RunsDir(f.Data), "2026-11-02 22-00-00 Test") };
+		Directory.CreateDirectory(going.Folder);
+		going.Save();
+		Equal<IReadOnlyList<(string, string)>?>(null, LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data).Single(s => s.Key == "texgen").ChangedSince,
+			"not known while a run is unfinished");
 	}
 }

@@ -162,12 +162,20 @@ public sealed partial class MainViewModel : Observable
 			return;
 		}
 		var load = ++_lastLoad;
+		_lastLoaded = DateTime.UtcNow;
 		List<(LastRuns.Section Section, string Line, string Text)> got;
 		try {
-			got = await Task.Run(() => LastRuns.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), Engine.Runs(), AppPaths.Data)
-				.Select(s => (s, LastRuns.Line(s), string.Join("\n", LastRuns.Detail(s, setup.Profile, LastRuns.LogOf(s))))).ToList());
-		} catch (Exception) {
-			// a setup whose Mod Organizer does not read: the section stays empty (Check says why)
+			got = await Task.Run(() => {
+				var logs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+				return LastRuns.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), Engine.Runs(), AppPaths.Data)
+					.Select(s => (s, LastRuns.Line(s), string.Join("\n", LastRuns.Detail(s, setup.Profile, LastRuns.LogOf(s, logs))))).ToList();
+			});
+		} catch (Exception e) {
+			// a setup whose Mod Organizer does not read (Check says more): the card says so, never an empty "never run"
+			if (load == _lastLoad && ReferenceEquals(setup, Setup)) {
+				_outOfDate = "The last runs could not be worked out: " + e.Message;
+				ShowLastCard();
+			}
 			return;
 		}
 		if (load != _lastLoad || !ReferenceEquals(setup, Setup)) {
@@ -184,6 +192,11 @@ public sealed partial class MainViewModel : Observable
 			$"Changed in Mod Organizer since they last finished: {string.Join(", ", stale)}. Run them again to bring their output up to date (right-click a step to run only it, or START for every step).";
 		ShowLastCard();
 	}
+
+	DateTime _lastLoaded = DateTime.MinValue;
+
+	// the window came back into focus (a mod may have been ticked in Mod Organizer meanwhile): at most every 10 s
+	public Task LoadLastRunsIfStale() => DateTime.UtcNow - _lastLoaded < TimeSpan.FromSeconds(10) ? Task.CompletedTask : LoadLastRuns();
 
 	void ShowLastCard()
 	{
