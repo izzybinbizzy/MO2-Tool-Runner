@@ -64,8 +64,10 @@ public sealed partial class HiddenDesktop : IDisposable
 		var root = pi.dwProcessId;
 		Process p;
 		try {
-			// taken while Windows' own handle still holds the process (a PID could be reused once both are closed)
+			// taken while Windows' own handle still holds the process (a PID could be reused once both are closed), with a handle
+			// of its own held at once - so its exit code can still be read after it ended
 			p = Process.GetProcessById(root);
+			_ = p.SafeHandle;
 		} catch (ArgumentException) {
 			throw new StepFailedException($"{a_commandLine} ended as soon as it started");
 		} finally {
