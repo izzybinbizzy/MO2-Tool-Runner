@@ -2677,4 +2677,64 @@ public static class Program
 		Equal("A", string.Join(",", Ran(new() { ["A"] = RunState.Stopped }, true, out _)), "a stopped run always ends the queue");
 		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");
 	}
+
+	// the window's pictures read the way the window reads them: an Icon.ico WPF could not decode crashed the program at start
+	// (2026-11-03) - a picture like that fails here, never on a player's screen. Covered: every picture compiled into the program
+	// and every picture App.xaml's resources make; NOT a picture a window names by its own address (use the Logo resource way)
+	static void T_EveryWindowPictureLoads()
+	{
+		string[] kinds = [".png", ".ico", ".jpg", ".jpeg", ".bmp", ".gif"];
+		var read = new List<string>();
+		Exception? failed = null;
+		// every pixel copied out, past the size in its header (a PNG merely cut short is NOT refused - WPF draws what it has,
+		// measured 2026-11-03 - so that is no crash and not what this catches)
+		static void Whole(System.Windows.Media.Imaging.BitmapSource a_b, string a_what)
+		{
+			Check(a_b.PixelWidth > 0 && a_b.PixelHeight > 0, a_what + " has a size");
+			var stride = (a_b.PixelWidth * a_b.Format.BitsPerPixel + 7) / 8;
+			a_b.CopyPixels(new byte[stride * a_b.PixelHeight], stride, 0);
+		}
+		var t = new Thread(() => {
+			try {
+				var asm = typeof(ToolRunner.App.App).Assembly;
+				// each picture compiled into the program
+				using (var s = asm.GetManifestResourceStream(asm.GetName().Name + ".g.resources") ?? throw new InvalidOperationException("the program has no resources")) {
+					using var r = new System.Resources.ResourceReader(s);
+					foreach (System.Collections.DictionaryEntry e in r) {
+						var name = (string)e.Key;
+						if (kinds.Any(k => name.EndsWith(k, StringComparison.OrdinalIgnoreCase)) && e.Value is Stream pic) {
+							using (pic) {
+								foreach (var frame in System.Windows.Media.Imaging.BitmapDecoder.Create(pic, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+									System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames) {
+									Whole(frame, name);
+								}
+							}
+							read.Add(name);
+						}
+					}
+				}
+				// the program's own resources made as its window makes them (App.xaml names its own assembly in each picture's
+				// address, so they read the same from here), each picture among them read. A process holds one WPF Application:
+				// this test makes it, so no other test may
+				Check(System.Windows.Application.Current == null, "no WPF Application made before this test (only one per process)");
+				var app = new ToolRunner.App.App();
+				app.InitializeComponent();
+				foreach (var k in app.Resources.Keys) {
+					if (app.Resources[k] is System.Windows.Media.Imaging.BitmapSource b) {
+						Whole(b, $"the {k} picture");
+						read.Add(k.ToString() ?? "");
+					}
+				}
+			} catch (Exception e) when (e is not OutOfMemoryException) {
+				failed = e;
+			}
+		});
+		t.SetApartmentState(ApartmentState.STA);
+		t.Start();
+		t.Join();
+		if (failed != null) {
+			throw new InvalidOperationException(failed.Message, failed);
+		}
+		Check(read.Contains("Logo") && read.Any(n => n.EndsWith(".png", StringComparison.OrdinalIgnoreCase)), "the header logo and its file are among them: " + string.Join(", ", read));
+	}
 }

@@ -26,7 +26,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Icon.ico" />
+    <Resource Include="Logo.png" />
     <EmbeddedResource Include="Theme template.json" LogicalName="ThemeTemplate.json" />
   </ItemGroup>
 
