@@ -29,6 +29,10 @@ public static class QueueDialog
 
 		var rows = a_setups.Select(f => new Row { File = f, Box = new CheckBox { Content = Path.GetFileNameWithoutExtension(f), Foreground = Brushes2.Get("Text") } }).ToList();
 		var list = new ListBox { MinHeight = 120, MaxHeight = 320 };
+		// a click on a tick box is the box's own, so its row would stay unselected: the row follows the box's focus
+		foreach (var r in rows) {
+			r.Box.GotKeyboardFocus += (_, _) => list.SelectedItem = r.Box;
+		}
 		System.Windows.Automation.AutomationProperties.SetName(list, "Setups in the order they run");
 		void Fill(int a_select)
 		{
@@ -72,11 +76,6 @@ public static class QueueDialog
 			var files = rows.Where(r => r.Box.IsChecked == true).Select(r => r.File).ToList();
 			if (files.Count < 2) {
 				note.Text = "Tick at least two setups (one setup is a normal Start).";
-				return;
-			}
-			var order = string.Join("\n", files.Select((f, i) => $"{i + 1}. {Path.GetFileNameWithoutExtension(f)}"));
-			if (!Ask.Show(w, "Start the queue?", order + "\n\n" + (keep.IsChecked == true ? "A failed run is skipped and the next setup starts." : "The queue ends at the first run that does not finish."),
-				    "Start the queue", "Not now")) {
 				return;
 			}
 			picked = new Picked(files, keep.IsChecked == true);

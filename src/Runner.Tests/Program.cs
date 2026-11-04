@@ -2619,15 +2619,19 @@ public static class Program
 
 	static void T_RetryStartsAtTheStepThatDidNotFinish()
 	{
-		var failed = RunOf(RunState.Failed, ("synthesis", StepState.Done), ("xlodgen", StepState.Skipped), ("texgen", StepState.Failed), ("dyndolod", StepState.Pending));
+		var failed = RunOf(RunState.Failed, ("synthesis", StepState.Done), ("texgen", StepState.Failed), ("dyndolod", StepState.Skipped));
+		failed.ReturnMarker = "FF000801";
 		Equal("texgen", Retry.FromStep(failed), "the failed step");
 		var req = Retry.Request(failed, @"C:\Data")!;
 		Equal("texgen", req.From, "from the failed step");
 		Equal("dyndolod", req.Until, "to where the run ended");
 		Equal<string?>(null, req.Only, "not one step only");
+		Equal("FF000801", req.ReturnMarker, "the clean save's marker goes along");
 		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("texgen", StepState.Done), ("dyndolod", StepState.Stopped))), "a stopped step");
-		// refused before its first step (a before-run command failed): from the start
-		Equal("texgen", Retry.FromStep(RunOf(RunState.Failed, ("texgen", StepState.Pending), ("dyndolod", StepState.Pending))), "nothing ran yet");
+		// "stop after this step": the run writes the steps it never reached as Skipped - the first of them is where it carries on
+		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("synthesis", StepState.Done), ("texgen", StepState.Done), ("dyndolod", StepState.Skipped))), "after a stop after");
+		// refused before its first step (Mod Organizer would not close): every step Skipped - from the start
+		Equal("texgen", Retry.FromStep(RunOf(RunState.Failed, ("texgen", StepState.Skipped), ("dyndolod", StepState.Skipped))), "nothing ran yet");
 		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Restored, ("texgen", StepState.Done), ("dyndolod", StepState.Running))), "put back after a crash");
 		Equal<string?>(null, Retry.FromStep(RunOf(RunState.Finished, ("texgen", StepState.Done))), "a finished run has nothing to run again");
 		Equal<string?>(null, Retry.FromStep(RunOf(RunState.Running, ("texgen", StepState.Running))), "a run not finished is put back first");
@@ -2638,8 +2642,10 @@ public static class Program
 	{
 		using var f = new FakeMo2();
 		var setup = f.WriteSetup(("pandora", new JsonObject()), ("playsave", new JsonObject()));
-		var plan = Runner.Plan(setup, null, "playsave", "playsave");
-		Equal("playsave", string.Join(",", plan.Select(s => s.Key)), "the plan of a run again holds only the steps left");
+		var j = RunOf(RunState.Failed, ("pandora", StepState.Done), ("playsave", StepState.Failed));
+		j.SetupFile = setup.File;
+		var req = Retry.Request(j, f.Data)!;
+		Equal("playsave", string.Join(",", Runner.Plan(setup, req.Only, req.From, req.Until).Select(s => s.Key)), "the plan of a run again holds only the steps left");
 	}
 
 	static void T_QueueRunsInOrderAndEndsWhereItShould()
@@ -2656,6 +2662,9 @@ public static class Program
 				var st = QueueRun.Read(data);
 				Check(st != null && st.Setups[st.Current] == r.SetupFile, "the queue file names the setup that runs");
 				Check(r.From == null && r.Only == null, "each setup runs whole");
+				// nothing else may start between or during the queue's runs: the lock is the queue's for its whole length
+				var other = Task.Run(Runner.HoldIfFree).GetAwaiter().GetResult();
+				Check(other == null, "the run lock is held by the queue");
 				return new RunOutcome(a_results.TryGetValue(name, out var s) ? s : RunState.Finished, name + " verdict", "x");
 			});
 			Check(!File.Exists(QueueRun.File(data)), "the queue file is gone at the end");
@@ -2665,6 +2674,7 @@ public static class Program
 		Check(all.All(i => i.Outcome?.State == RunState.Finished), "each one finished");
 		Equal("A,B", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, false, out var stopped)), "a failed run ends the queue");
 		Check(QueueRun.Summary(stopped).Last() == "C: not run", "the setup never run is said");
+		Check(File.ReadAllText(QueueRun.LastFile(data)).Contains("C: not run", StringComparison.Ordinal), "the last queue's summary is kept for the window");
 		Equal("A,B,C", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, true, out _)), "keep going goes past a failed run");
 		Equal("A", string.Join(",", Ran(new() { ["A"] = RunState.Stopped }, true, out _)), "a stopped run always ends the queue");
 		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");

@@ -1,22 +1,12 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace ToolRunner;
 
-// "Run again from the failed step": a run that failed, was stopped or was put back after a crash starts again at its first
-// step that did not finish, and ends where it ended before (a run asked to go only "until" a step keeps that end).
-public static class Retry
-{
-	public static string? FromStep(Journal a_j) =>
-		a_j.Unfinished || a_j.State == RunState.Finished ? null : a_j.Steps.FirstOrDefault(s => s.State is not (StepState.Done or StepState.Skipped))?.Key;
-
-	// null when the run has nothing left to run again
-	public static RunRequest? Request(Journal a_j, string a_dataDir) =>
-		FromStep(a_j) is { } from ? new RunRequest(a_j.SetupFile, a_dataDir, null, from, a_j.Steps[^1].Key) : null;
-}
-
-// Several setups run one after another, each a whole run of its own (its pre-check, its run record, its put-back). A run that
-// was stopped ends the queue; a failed one ends it too unless the queue is set to keep going. While it goes, "queue.json" in
-// the runs folder says which setups it holds and which one runs (the window shows it); it is removed at the end.
+// Several setups run one after another, each a whole run of its own (its pre-check, its run record, its put-back). The run
+// lock is held for the whole queue, so nothing else starts in the gap between two setups. A stopped run ends the queue; a
+// failed or refused one ends it too unless the queue is set to keep going. While it goes, "queue.json" in the runs folder says
+// which setups it holds and which one runs (the window shows it); at the end "last queue.txt" says what became of each.
 public static class QueueRun
 {
 	public sealed record Item(string SetupFile, RunOutcome? Outcome);
@@ -24,28 +14,55 @@ public static class QueueRun
 	public sealed class State
 	{
 		public int Pid { get; set; }
+		// the owner's start time: a PID Windows gives to another program after a crash never passes for the queue
+		public DateTime? PidStarted { get; set; }
 		public List<string> Setups { get; set; } = [];
 		public int Current { get; set; }
-		public bool KeepGoing { get; set; }
+
+		public string? Running => Current >= 0 && Current < Setups.Count ? Setups[Current] : null;
 	}
 
 	public static string File(string a_dataDir) => Path.Combine(Runner.RunsDir(a_dataDir), "queue.json");
 
+	public static string LastFile(string a_dataDir) => Path.Combine(Runner.RunsDir(a_dataDir), "last queue.txt");
+
+	static DateTime? StartOf(int a_pid)
+	{
+		try {
+			using var p = Process.GetProcessById(a_pid);
+			return p.StartTime.ToUniversalTime();
+		} catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) {
+			return null;
+		}
+	}
+
+	// the queue going now (null = none, or one whose owner is gone)
 	public static State? Read(string a_dataDir)
 	{
 		try {
+			if (!System.IO.File.Exists(File(a_dataDir))) {
+				return null;
+			}
 			var s = JsonSerializer.Deserialize<State>(Files.ReadShared(File(a_dataDir)));
-			return s != null && s.Pid != 0 && Procs.Alive(s.Pid) ? s : null;
+			return s is { Pid: not 0, Running: not null } && StartOf(s.Pid) is { } t && s.PidStarted is { } w && Math.Abs((t - w).TotalSeconds) < 2 ? s : null;
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
 			return null;
 		}
 	}
 
-	public static List<Item> Run(IReadOnlyList<string> a_setups, string a_dataDir, bool a_keepGoing, Func<RunRequest, RunOutcome>? a_run = null)
+	public static List<Item> Run(IReadOnlyList<string> a_setups, string a_dataDir, bool a_keepGoing, Func<RunRequest, RunOutcome>? a_run = null,
+		Action<Item>? a_after = null)
 	{
-		var run = a_run ?? (r => Runner.Run(r));
 		var outList = a_setups.Select(s => new Item(Path.GetFullPath(s), null)).ToList();
-		var state = new State { Pid = Environment.ProcessId, Setups = outList.Select(i => i.SetupFile).ToList(), KeepGoing = a_keepGoing };
+		using var hold = Runner.HoldIfFree();
+		if (hold == null) {
+			outList[0] = outList[0] with { Outcome = new RunOutcome(RunState.Failed, "another run is going - wait for it, or stop it in the window", null) };
+			a_after?.Invoke(outList[0]);
+			return outList;
+		}
+		// the lock is this thread's: each run takes it again inside (a mutex its owner takes twice)
+		var run = a_run ?? (r => Runner.Run(r));
+		var state = new State { Pid = Environment.ProcessId, PidStarted = StartOf(Environment.ProcessId), Setups = outList.Select(i => i.SetupFile).ToList() };
 		Directory.CreateDirectory(Runner.RunsDir(a_dataDir));
 		try {
 			for (int i = 0; i < outList.Count; ++i) {
@@ -53,12 +70,14 @@ public static class QueueRun
 				Files.WriteAtomic(File(a_dataDir), JsonSerializer.Serialize(state));
 				var o = run(new RunRequest(outList[i].SetupFile, a_dataDir));
 				outList[i] = outList[i] with { Outcome = o };
+				a_after?.Invoke(outList[i]);
 				if (o.State == RunState.Stopped || (o.State != RunState.Finished && !a_keepGoing)) {
 					break;
 				}
 			}
 		} finally {
 			try {
+				Files.WriteAtomic(LastFile(a_dataDir), string.Join("\n", Summary(outList)) + "\n");
 				System.IO.File.Delete(File(a_dataDir));
 			} catch (IOException) {
 			} catch (UnauthorizedAccessException) {
@@ -72,6 +91,6 @@ public static class QueueRun
 		$"{Path.GetFileNameWithoutExtension(i.SetupFile)}: " + (i.Outcome is not { } o ? "not run" : o.State switch {
 			RunState.Finished => "finished",
 			RunState.Stopped => "stopped - " + o.Verdict,
-			_ => "failed - " + o.Verdict,
+			_ => (o.Folder == null ? "not started - " : "failed - ") + o.Verdict,
 		}));
 }

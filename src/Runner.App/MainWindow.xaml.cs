@@ -408,7 +408,7 @@ public partial class MainWindow : Window
 			return;
 		}
 		if (QueueDialog.Run(this, _vm.Setups.Select(s => s.File).ToList()) is { } q) {
-			_vm.StartQueue(q.Files, q.KeepGoing);
+			_ = _vm.StartQueue(q.Files, q.KeepGoing);
 		}
 	}
 

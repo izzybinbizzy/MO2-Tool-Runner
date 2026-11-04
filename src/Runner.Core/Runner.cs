@@ -3,7 +3,7 @@ using ToolRunner.Steps;
 
 namespace ToolRunner;
 
-public sealed record RunRequest(string SetupFile, string DataDir, string? Only = null, string? From = null, string? Until = null);
+public sealed record RunRequest(string SetupFile, string DataDir, string? Only = null, string? From = null, string? Until = null, string? ReturnMarker = null);
 
 public sealed record RunOutcome(RunState State, string Verdict, string? Folder);
 
@@ -132,7 +132,7 @@ public static class Runner
 			Id = id, Folder = Path.Combine(runs, id), SetupFile = Path.GetFullPath(a_req.SetupFile), SetupName = setup.Name, Profile = setup.Profile,
 			Mo2Exe = setup.Mo2Exe, Mo2Instance = setup.Mo2Instance, BackupDir = Path.Combine(setup.BackupDir, id), Pid = Environment.ProcessId,
 			PidStarted = Process.GetCurrentProcess().StartTime.ToUniversalTime(),
-			Started = DateTime.Now, State = RunState.Running,
+			Started = DateTime.Now, State = RunState.Running, ReturnMarker = a_req.ReturnMarker,
 			Steps = todo.Select(s => new StepRecord { Key = s.Key, Name = StepCatalog.Name(s.Key), State = StepState.Pending }).ToList(),
 		};
 		Directory.CreateDirectory(journal.Folder);

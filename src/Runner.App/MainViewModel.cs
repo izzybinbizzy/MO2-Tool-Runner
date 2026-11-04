@@ -219,8 +219,8 @@ public sealed partial class MainViewModel : Observable
 		}
 		_polling = true;
 		try {
-			var (mo2, game, runs) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs()));
-			Poll(mo2, game, runs);
+			var (mo2, game, runs, queue) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs(), QueueLook()));
+			Poll(mo2, game, runs, queue);
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException) {
 			// a file or process that changed mid-read: the next tick reads it again
 		} finally {
@@ -228,9 +228,31 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
-	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs());
+	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs(), QueueLook());
 
-	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs)
+	// the queue going (its line for the window), else the last queue's summary while nothing has started since it ended
+	sealed record QueueSeen(QueueRun.State? Going, string Text);
+
+	DateTime _queueShownSince = DateTime.MinValue;
+
+	QueueSeen QueueLook()
+	{
+		var q = QueueRun.Read(AppPaths.Data);
+		if (q?.Running is { } now) {
+			var next = q.Setups.Skip(q.Current + 1).Select(Path.GetFileNameWithoutExtension).ToList();
+			return new QueueSeen(q, $"Queue: setup {q.Current + 1} of {q.Setups.Count} ({Path.GetFileNameWithoutExtension(now)})" + (next.Count > 0 ? ", then " + string.Join(", ", next) : ""));
+		}
+		var last = QueueRun.LastFile(AppPaths.Data);
+		try {
+			if (File.Exists(last) && File.GetLastWriteTime(last) > _queueShownSince) {
+				return new QueueSeen(null, "Last queue - " + string.Join("; ", Files.ReadSharedText(last).Split('\n', StringSplitOptions.RemoveEmptyEntries)));
+			}
+		} catch (IOException) {
+		}
+		return new QueueSeen(null, "");
+	}
+
+	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs, QueueSeen a_queue)
 	{
 		Mo2Open = a_mo2;
 		GameRunning = a_game;
@@ -239,9 +261,8 @@ public sealed partial class MainViewModel : Observable
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
 		_run = active ?? (_run is { } r && Directory.Exists(r.Folder) ? Fresh(runs, r) : Engine.Latest(SelectedSetup?.File, runs));
-		var queue = QueueRun.Read(AppPaths.Data);
-		QueueText = queue == null ? "" : $"Queue: setup {queue.Current + 1} of {queue.Setups.Count} ({Path.GetFileNameWithoutExtension(queue.Setups[queue.Current])})" +
-			(queue.Current + 1 < queue.Setups.Count ? ", then " + string.Join(", ", queue.Setups.Skip(queue.Current + 1).Select(Path.GetFileNameWithoutExtension)) : "");
+		var queue = a_queue.Going;
+		QueueText = a_queue.Text;
 		var interrupted = Engine.Interrupted(runs);
 		Interrupted = interrupted == null ? "" : $"The run of {interrupted.Started:ddd HH:mm} ({interrupted.SetupName}) did not finish - your profile may still have outputs switched off.";
 		if (_run == null) {
@@ -349,14 +370,19 @@ public sealed partial class MainViewModel : Observable
 	// ---------------------------------------------------------------- actions
 	void Start() => _ = StartWith(null, null, null);
 
+	// true: the engine's "retry" (the last run again, its clean-save marker carried over), with the preview of from .. until
+
 	// his checklist 270: what the run will do, shown before anything changes (the setup's "previewBeforeRun", on unless switched
 	// off); the window answers it (true = start)
 	public Func<string, bool>? ConfirmRun { get; set; }
 	bool _previewing;
 
 	string? CannotStart() =>
-		SelectedSetup == null || Setup == null ? "Make or pick a setup first." :
-		Engine.Active() != null ? "A run is going already." :
+		SelectedSetup == null || Setup == null ? "Make or pick a setup first." : CannotStartAny();
+
+	// what stops any start, a single run or a queue
+	static string? CannotStartAny() =>
+		Engine.Active() != null || QueueRun.Read(AppPaths.Data) != null ? "A run is going already." :
 		Engine.Interrupted() != null ? "The last run did not finish - put your profile back first (the button at the top)." : null;
 
 	// the profile's mod list and plugin list as they are on disk (unreadable = a stamp of its own, so it never matches)
@@ -370,7 +396,7 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
-	public async Task StartWith(string? a_only, string? a_from, string? a_until)
+	public async Task StartWith(string? a_only, string? a_from, string? a_until, bool a_retry = false)
 	{
 		if (_previewing) {
 			return;
@@ -443,15 +469,16 @@ public sealed partial class MainViewModel : Observable
 				return;
 			}
 			// the very file previewed, never whatever is selected by now
-			StartNow(file, a_only, a_from, a_until);
+			StartNow(file, a_only, a_from, a_until, a_retry);
 			return;
 		}
-		StartNow(SelectedSetup!.File, a_only, a_from, a_until);
+		StartNow(SelectedSetup!.File, a_only, a_from, a_until, a_retry);
 	}
 
-	void StartNow(string a_file, string? a_only, string? a_from, string? a_until)
+	void StartNow(string a_file, string? a_only, string? a_from, string? a_until, bool a_retry = false)
 	{
-		var (ok, text) = Engine.StartRun(a_file, a_only, a_from, a_until);
+		_queueShownSince = DateTime.Now;
+		var (ok, text) = a_retry ? Engine.StartRetry(a_file) : Engine.StartRun(a_file, a_only, a_from, a_until);
 		if (!ok) {
 			Say("Could not start: " + text, "bad");
 			return;
@@ -488,23 +515,47 @@ public sealed partial class MainViewModel : Observable
 		if (_run == null || Retry.Request(_run, AppPaths.Data) is not { } req) {
 			return Task.CompletedTask;
 		}
-		return StartWith(null, req.From, req.Until);
+		return StartWith(null, req.From, req.Until, true);
 	}
 
-	// several setups one after another (the queue box picked them; the window follows each run as it goes)
-	public void StartQueue(List<string> a_files, bool a_keepGoing)
+	// several setups one after another (the queue box picked them; the window follows each run as it goes). Each setup's
+	// preview is shown first, in one box, unless every one of them has the preview switched off.
+	public async Task StartQueue(List<string> a_files, bool a_keepGoing)
 	{
-		if (Engine.Active() != null) {
-			Say("A run is going already.", "bad");
+		if (CannotStartAny() is { } why) {
+			Say(why, "bad");
 			return;
 		}
-		if (Engine.Interrupted() != null) {
-			Say("The last run did not finish - put your profile back first (the button at the top).", "bad");
+		string text;
+		try {
+			text = await Task.Run(() => {
+				var parts = new List<string>();
+				var any = false;
+				foreach (var (f, i) in a_files.Select((f, i) => (f, i))) {
+					var setup = Setup.Load(f);
+					any |= Setup.Bool(setup.Root, "previewBeforeRun") != false;
+					var usual = Engine.UsualTimes(f);
+					var mo2 = Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance);
+					parts.Add($"{i + 1}. {setup.Name}\n" + string.Join("\n", RunPreview.Build(setup, mo2, Runner.Plan(setup, null, null, null)).Lines(k => usual.TryGetValue(k, out var t) ? t : null)));
+				}
+				return any ? string.Join("\n\n", parts) + "\n\n" + (a_keepGoing ? "A failed run is skipped and the next setup starts." : "The queue ends at the first run that does not finish.") : "";
+			});
+		} catch (Exception e) {
+			Say("Could not work out what the queue would do: " + e.Message, "bad");
 			return;
 		}
-		var (ok, text) = Engine.StartQueue(a_files, a_keepGoing);
+		if (text != "" && ConfirmRun != null && !ConfirmRun(text)) {
+			Say("Not started - nothing was changed.", "");
+			return;
+		}
+		if (CannotStartAny() is { } now) {
+			Say(now, "bad");
+			return;
+		}
+		_queueShownSince = DateTime.Now;
+		var (ok, started) = Engine.StartQueue(a_files, a_keepGoing);
 		if (!ok) {
-			Say("Could not start the queue: " + text, "bad");
+			Say("Could not start the queue: " + started, "bad");
 			return;
 		}
 		Say($"Queue of {a_files.Count} setups starting - checking the first one ...", "");
