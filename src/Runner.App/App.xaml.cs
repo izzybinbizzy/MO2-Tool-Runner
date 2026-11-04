@@ -29,7 +29,9 @@ public partial class App : Application
 			LogCrash(e.Exception);
 			e.Handled = true;
 			if (headless) {
-				// said where the command was started too (exit 1 alone reads like a plain refusal)
+				// said where the command was started too (exit 1 alone reads like a plain refusal); --snapshot / --page never
+				// attached to that console, a command already did (a second attach changes nothing)
+				ConsoleAttach.ToParent();
 				try {
 					Console.Error.WriteLine("Something went wrong: " + e.Exception.Message + " (written in crash.txt in the data folder)");
 				} catch (IOException) {
