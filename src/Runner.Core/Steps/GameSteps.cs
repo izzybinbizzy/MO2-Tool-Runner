@@ -231,7 +231,7 @@ public sealed class ShaderStep : IStep
 
 	public sealed record Cache(string ShaderMod, string OutputMod, string? SettingsMod);
 
-	static List<Cache> Caches(StepSettings a_s)
+	internal static List<Cache> Caches(StepSettings a_s)
 	{
 		var list = (a_s.Raw["caches"] as JsonArray)?.OfType<JsonObject>()
 			.Select(o => new Cache(Setup.Str(o, "shader_mod") ?? "", Setup.Str(o, "output_mod") ?? "", Setup.Str(o, "settings_mod"))).Where(c => c.ShaderMod != "" && c.OutputMod != "").ToList() ?? [];

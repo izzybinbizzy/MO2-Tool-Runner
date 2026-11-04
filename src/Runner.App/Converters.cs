@@ -45,6 +45,7 @@ public sealed class KindToBrush : IValueConverter
 		"good" => Brushes2.Get("Good"),
 		"bad" => Brushes2.Get("Bad"),
 		"warn" => Brushes2.Get("Warn"),
+		"muted" => Brushes2.Get("Muted"),
 		_ => Brushes2.Get("Text"),
 	};
 

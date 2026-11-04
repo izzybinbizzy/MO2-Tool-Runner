@@ -18,6 +18,9 @@ public sealed partial class StepRow : Observable
 	public int Number { get; set => Set(ref field, value); }
 	// ticked, but left out of every run: the setup is set to a new game and this is a save step
 	public bool LeftOut { get; set => Set(ref field, value); }
+	// its last run in one line: when, how it ended, and whether its output is still current ("" = it never ran)
+	public string LastRun { get; set => Set(ref field, value); } = "";
+	public string LastKind { get; set => Set(ref field, value); } = "";
 	public bool Runs => On && !LeftOut;
 
 	public string Glyph => State switch {
@@ -44,12 +47,12 @@ public sealed partial class MainViewModel : Observable
 	public ObservableCollection<string> Issues { get; } = [];
 
 	public SetupItem? SelectedSetup { get; set { if (Set(ref field, value)) LoadSteps(); } }
-	public StepRow? SelectedStep { get; set => Set(ref field, value); }
+	public StepRow? SelectedStep { get; set { if (Set(ref field, value)) ShowLastCard(); } }
 	public bool Mo2Open { get; set { if (Set(ref field, value)) OnPropertyChanged(nameof(Mo2Text)); } }
 	public bool GameRunning { get; set { if (Set(ref field, value)) OnPropertyChanged(nameof(GameText)); } }
 	public string Mo2Text => Mo2Open ? "Mod Organizer open" : "Mod Organizer closed";
 	public string GameText => GameRunning ? "Skyrim running" : "Skyrim not running";
-	public bool IsRunning { get; set { if (Set(ref field, value)) { OnPropertyChanged(nameof(ShowProgress)); OnPropertyChanged(nameof(CanStart)); } } }
+	public bool IsRunning { get; set { if (Set(ref field, value)) { OnPropertyChanged(nameof(ShowProgress)); OnPropertyChanged(nameof(CanStart)); OnPropertyChanged(nameof(LastCardText)); } } }
 	// START needs a setup that reads and no run going
 	public bool CanStart => !IsRunning && Setup != null;
 	// no moving bar while the run waits for the player: nothing is working then
@@ -73,6 +76,14 @@ public sealed partial class MainViewModel : Observable
 	public string RetryText => RetryFrom == "" ? "" : "Run _again from " + StepCatalog.Name(RetryFrom);
 	// a queue of setups going: which one runs ("" = none)
 	public string QueueText { get; set => Set(ref field, value); } = "";
+	// his checklist 450: the picked step's last run and what it did, and the steps out of date (hidden while a run goes - the log
+	// is what matters then)
+	public string LastCardTitle { get; set => Set(ref field, value); } = "";
+	public string LastCardText => IsRunning ? "" : _lastCard;
+	string _lastCard = "";
+	string _outOfDate = "";
+	Dictionary<string, string> _lastDetail = [];
+	int _lastLoad;
 
 	public Cmd StartCommand => field ??= new(Start);
 	public Cmd StopAfterCommand => field ??= new(StopAfter);
@@ -118,6 +129,9 @@ public sealed partial class MainViewModel : Observable
 	{
 		Steps.Clear();
 		Setup = null;
+		_lastDetail = [];
+		_outOfDate = "";
+		ShowLastCard();
 		if (SelectedSetup == null) {
 			return;
 		}
@@ -137,6 +151,46 @@ public sealed partial class MainViewModel : Observable
 		MarkLeftOut();
 		Estimate();
 		LoadHistory();
+		_ = LoadLastRuns();
+	}
+
+	// each step's last run, worked out off the window's thread (old run logs and the profile's mod list are read); a newer load
+	// or another setup picked meanwhile wins
+	public async Task LoadLastRuns()
+	{
+		if (Setup is not { } setup) {
+			return;
+		}
+		var load = ++_lastLoad;
+		List<(LastRuns.Section Section, string Line, string Text)> got;
+		try {
+			got = await Task.Run(() => LastRuns.Build(setup, Mo2Instance.Load(setup.Mo2Exe, setup.Mo2Instance), Engine.Runs(), AppPaths.Data)
+				.Select(s => (s, LastRuns.Line(s), string.Join("\n", LastRuns.Detail(s, setup.Profile, LastRuns.LogOf(s))))).ToList());
+		} catch (Exception) {
+			// a setup whose Mod Organizer does not read: the section stays empty (Check says why)
+			return;
+		}
+		if (load != _lastLoad || !ReferenceEquals(setup, Setup)) {
+			return;
+		}
+		_lastDetail = got.ToDictionary(g => g.Section.Key, g => g.Text);
+		foreach (var row in Steps) {
+			var (s, line, _) = got.FirstOrDefault(g => g.Section.Key == row.Key);
+			row.LastRun = s?.Latest == null ? "" : line;
+			row.LastKind = s == null ? "" : s.OutOfDate ? "warn" : s.Latest?.State is StepState.Failed or StepState.Stopped ? "bad" : s.Current ? "good" : "muted";
+		}
+		var stale = got.Where(g => g.Section.OutOfDate && Steps.Any(r => r.Key == g.Section.Key && r.Runs)).Select(g => StepCatalog.Name(g.Section.Key)).ToList();
+		_outOfDate = stale.Count == 0 ? "" :
+			$"Changed in Mod Organizer since they last finished: {string.Join(", ", stale)}. Run them again to bring their output up to date (right-click a step to run only it, or START for every step).";
+		ShowLastCard();
+	}
+
+	void ShowLastCard()
+	{
+		var text = SelectedStep is { } r && _lastDetail.TryGetValue(r.Key, out var d) ? d : "";
+		LastCardTitle = text != "" ? "LAST RUN - " + SelectedStep!.Name.ToUpperInvariant() : _outOfDate != "" ? "OUT OF DATE" : "";
+		_lastCard = _outOfDate == "" ? text : text == "" ? _outOfDate : text + "\n\n" + _outOfDate;
+		OnPropertyChanged(nameof(LastCardText));
 	}
 
 	// a new game (the dashboard's tick beside START, kept in the setup): no save of the player's to keep clean, so the clean
@@ -321,6 +375,7 @@ public sealed partial class MainViewModel : Observable
 		if (_lastState == RunState.Running && _run.State != RunState.Running) {
 			Alert?.Invoke(NowTitle, _run.Verdict);
 			LoadHistory();
+			_ = LoadLastRuns();
 		}
 		if (Waiting != "" && Waiting != _lastWaiting) {
 			Alert?.Invoke("Your turn in the game", Waiting);
@@ -790,6 +845,7 @@ public sealed partial class MainViewModel : Observable
 	{
 		IsRunning = true;
 		Message = "";
+		ClearLastRuns();
 		var current = a_waiting ? "cleansave" : a_frame >= 6 ? "acmos" : "xlodgen";
 		// a setup without that step shows nothing running (never another step under its text)
 		var cur = Steps.ToList().FindIndex(s => s.Key == current);
@@ -850,6 +906,7 @@ public sealed partial class MainViewModel : Observable
 	public void DemoReady()
 	{
 		_usual = Steps.ToDictionary(s => s.Key, s => TimeSpan.FromMinutes(DemoMinutes.GetValueOrDefault(s.Key, 5)));
+		ClearLastRuns();
 		foreach (var s in Steps) {
 			s.Usual = Short(_usual[s.Key]);
 			s.State = null;
@@ -865,6 +922,19 @@ public sealed partial class MainViewModel : Observable
 		GameRunning = false;
 		Message = "";
 		LogChanged?.Invoke("", true);
+	}
+
+	// the made-up runs of the pictures carry no last runs (a load still going is dropped)
+	void ClearLastRuns()
+	{
+		++_lastLoad;
+		_lastDetail = [];
+		_outOfDate = "";
+		foreach (var s in Steps) {
+			s.LastRun = "";
+			s.LastKind = "";
+		}
+		ShowLastCard();
 	}
 
 	// the page's pictures (--page): past runs of a made-up setup; their logs are written by the caller into each Folder
