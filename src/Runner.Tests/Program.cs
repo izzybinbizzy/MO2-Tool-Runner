@@ -2737,4 +2737,149 @@ public static class Program
 		}
 		Check(read.Contains("Logo") && read.Any(n => n.EndsWith(".png", StringComparison.OrdinalIgnoreCase)), "the header logo and its file are among them: " + string.Join(", ", read));
 	}
+
+	// ------------------------------------------------------------------ each step's last run (his checklist 450)
+	static StepRecord Ran(string a_key, StepState a_state, DateTime? a_started, int a_minutes = 5, string a_note = "") => new() {
+		Key = a_key, Name = StepCatalog.Name(a_key), State = a_state, Started = a_started, Ended = a_started?.AddMinutes(a_minutes), Note = a_note,
+	};
+
+	static void T_LastRunsFindEachStepsLastRunAndLastFinish()
+	{
+		var t = new DateTime(2026, 11, 1, 20, 0, 0, DateTimeKind.Local);
+		const string setup = @"C:\Setups\Test.json";
+		var older = new Journal { SetupFile = setup, Started = t, Folder = "older", Steps = [Ran("texgen", StepState.Done, t), Ran("dyndolod", StepState.Done, t.AddMinutes(6))] };
+		var newer = new Journal { SetupFile = setup.ToUpperInvariant(), Started = t.AddDays(1), Folder = "newer",
+			Steps = [Ran("texgen", StepState.Failed, t.AddDays(1), 2, "it said no"), Ran("dyndolod", StepState.Skipped, null), Ran("pandora", StepState.Pending, null)] };
+		var other = new Journal { SetupFile = @"C:\Setups\Other.json", Started = t.AddDays(2), Steps = [Ran("pandora", StepState.Done, t.AddDays(2))] };
+		// the order runs come in does not matter
+		var of = LastRuns.Of([older, other, newer], setup);
+		Equal(StepState.Failed, of["texgen"].Latest?.State, "texgen's last run is the newer one that failed");
+		Equal("older", of["texgen"].LastDone?.RunFolder, "and it last finished in the older run");
+		Equal("older", of["dyndolod"].Latest?.RunFolder, "a step the newer run never reached keeps its older run as its last");
+		Check(!of.ContainsKey("pandora"), "a step that never started in this setup has no last run (another setup's run is not its)");
+		var failed = new LastRuns.Section("texgen", of["texgen"].Latest, of["texgen"].LastDone, []);
+		Check(failed.Current && !failed.OutOfDate, "no change since it last finished: its output is current, even after a failed run");
+		Check(LastRuns.Line(failed).Contains("failed", StringComparison.Ordinal) && LastRuns.Line(failed).Contains("last finished", StringComparison.Ordinal) &&
+		      LastRuns.Line(failed).EndsWith(" - current", StringComparison.Ordinal), "the line: failed last time, finished before, current: " + LastRuns.Line(failed));
+		var detail = string.Join("\n", LastRuns.Detail(failed, "Test", ["one line it wrote"]));
+		Check(detail.Contains("it said no", StringComparison.Ordinal) && detail.Contains("its output is from then", StringComparison.Ordinal) &&
+		      detail.Contains("What it did:\n  one line it wrote", StringComparison.Ordinal), "the card names the failure, the finished run and what it did: " + detail);
+		var never = new LastRuns.Section("pandora", null, null, null);
+		Equal("never run", LastRuns.Line(never), "a step that never ran");
+		var unfinished = new LastRuns.Section("texgen", of["texgen"].Latest, null, null);
+		Check(LastRuns.Line(unfinished).EndsWith("it has not finished yet", StringComparison.Ordinal) && !unfinished.Current && !unfinished.OutOfDate,
+			"a step that never finished is neither current nor out of date");
+	}
+
+	static void T_LastRunsCountOnlyChangesMadeOutsideInTheProfile()
+	{
+		var since = new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Local);
+		Mo2Changes.Change Row(int a_min, string a_who, string a_mod, string a_what, params string[] a_profiles) =>
+			new(since.AddMinutes(a_min), a_who, a_mod, a_what, a_profiles);
+		var rows = new[] {
+			Row(-1, Mo2Changes.Outside, "Before", "ticked", "Test"),
+			Row(1, Mo2Changes.Outside, "Grass Mod", "added (ticked, under Grass)", "test", "Other"),
+			Row(2, "run of Tuesday", "By The Run", "unticked", "Test"),
+			Row(3, Mo2Changes.Outside, "Elsewhere", "ticked", "Other"),
+			Row(4, Mo2Changes.Outside, "Test", "profile added", "Test"),
+			Row(5, Mo2Changes.Outside, "DynDOLOD Output", "unticked", "Test"),
+			Row(6, Mo2Changes.Outside, "Tree Mod", "moved within Trees", "Test"),
+			Row(7, Mo2Changes.Outside, "Looked At", "ticked", "Test"),
+			Row(8, Mo2Changes.Outside, "Looked At", "unticked", "Test"),
+		};
+		var changes = LastRuns.ChangesSince(rows, [("New Mod", "removed (was under Misc)")], "Test", since, m => m == "DynDOLOD Output")!;
+		Equal("Grass Mod,Tree Mod,New Mod", string.Join(",", changes.Select(c => c.Mod)),
+			"only changes made outside the runner, in this profile (any case), after it finished, not the setup's own mods, not one undone again - then the ones not kept yet");
+		Equal("Looked At ticked", string.Join(",", LastRuns.ChangesSince(rows.Take(8), [], "Test", since, _ => false)!.Where(c => c.Mod == "Looked At").Select(c => c.Mod + " " + c.What)),
+			"a tick not undone still counts");
+		Equal("1 added, 1 moved, 1 removed", LastRuns.Counted(changes), "counted by kind");
+		Equal<IReadOnlyList<(string, string)>?>(null, LastRuns.ChangesSince(rows, null, "Test", since, _ => false), "a mod list that could not be read now: not known, never \"current\"");
+		var t = since.AddHours(-1);
+		var done = new LastRuns.Ran(t, "run", "DynDOLOD", StepState.Done, t, t.AddMinutes(24), "");
+		var stale = new LastRuns.Section("dyndolod", done, done, changes);
+		Check(stale.OutOfDate && LastRuns.Line(stale).EndsWith("3 changes in Mod Organizer since", StringComparison.Ordinal), "out of date: " + LastRuns.Line(stale));
+		var card = string.Join("\n", LastRuns.Detail(stale, "Test", []));
+		Check(card.Contains("Out of date: 3 changes in the profile Test since it finished (1 added, 1 moved, 1 removed), e.g. Grass Mod added", StringComparison.Ordinal) &&
+		      card.Contains("Run it again", StringComparison.Ordinal) && !card.Contains("What it did", StringComparison.Ordinal), "the card says what changed: " + card);
+		Check(LastRuns.Line(stale with { ChangedSince = null }).EndsWith("changes since: not known", StringComparison.Ordinal), "unknown is said as unknown");
+	}
+
+	static void T_LastRunsReadTheStepsOwnLinesOfItsLog()
+	{
+		string[] log = [
+			"21:00:00  === Synthesis ===",
+			"21:00:01  synthesis said hello",
+			"21:01:00  === Synthesis done in 1.0 min ===",
+			"21:01:01  ",
+			"21:01:02  === TexGen ===",
+			"21:01:02  ",
+			"21:01:03    a detail line nobody needs here",
+			"21:01:04  ! a warning it gave",
+			"21:02:00  made 1,234 textures",
+			"21:06:00  === TexGen done in 5.0 min ===",
+			"21:06:01  === DynDOLOD ===",
+			"21:06:02  dyndolod line",
+		];
+		Equal("! a warning it gave|made 1,234 textures|=== TexGen done in 5.0 min ===", string.Join("|", LastRuns.LogLines(log, "TexGen")),
+			"its own lines from its start to its done line, no detail lines, nothing of the steps around it");
+		Equal("made 1,234 textures|=== TexGen done in 5.0 min ===", string.Join("|", LastRuns.LogLines(log, "TexGen", 2)), "at most the last few");
+		string[] failed = ["10:00:00  === DynDOLOD ===", "10:00:05  starting", "10:01:00  !!! DynDOLOD FAILED: out of memory", "10:01:01  the run stopped"];
+		Equal("starting|!!! DynDOLOD FAILED: out of memory", string.Join("|", LastRuns.LogLines(failed, "DynDOLOD")), "a failed step ends at its FAILED line");
+		Equal(0, LastRuns.LogLines(log, "Pandora").Count, "a step the log never names has no lines");
+	}
+
+	static void T_LastRunsOwnModsAreTheSetupsOutputs()
+	{
+		var setup = Setup.FromJson(new JsonObject {
+			["lodOutputs"] = new JsonArray("Old LOD"),
+			["steps"] = new JsonArray(
+				new JsonObject { ["step"] = "texgen", ["settings"] = new JsonObject { ["output_mod"] = "TexGen Output", ["replaces"] = new JsonArray("Older TexGen") } },
+				new JsonObject { ["step"] = "shaders", ["settings"] = new JsonObject { ["caches"] = new JsonArray(
+					new JsonObject { ["shader_mod"] = "Shader Mod", ["output_mod"] = "Shader Cache", ["settings_mod"] = "Shader Settings" }) } }),
+		});
+		var own = LastRuns.OwnMods(setup);
+		Check(own.SetEquals(["Old LOD", "TexGen Output", "Older TexGen", "Shader Cache", "Shader Settings"]), "outputs, what they replace, the LOD outputs, each cache and its settings: " + string.Join(", ", own));
+		Check(own.Contains("texgen output") && !own.Contains("Shader Mod"), "names in any case; the shader mod itself is the player's (its change matters)");
+	}
+
+	// the whole section off the disk: a run record, Mod Organizer's looks, the profile changed after the last look (read only)
+	static void T_LastRunsBuildOffTheDisk()
+	{
+		using var f = new FakeMo2();
+		var setup = f.WriteSetup(("texgen", new JsonObject { ["output_mod"] = "Output A" }), ("dyndolod", new JsonObject()));
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		var t = DateTime.Now.AddMinutes(-30);
+		var j = new Journal { SetupFile = setup.File, Started = t, Ended = t.AddMinutes(6), State = RunState.Finished, Folder = Path.Combine(Runner.RunsDir(f.Data), "2026-11-02 21-00-00 Test"),
+			Steps = [Ran("texgen", StepState.Done, t)] };
+		Directory.CreateDirectory(j.Folder);
+		j.Save();
+		File.WriteAllLines(Path.Combine(j.Folder, "log.txt"), [$"{t:HH:mm:ss}  === TexGen ===", $"{t:HH:mm:ss}  made the textures", $"{t:HH:mm:ss}  === TexGen done in 5.0 min ==="]);
+		var never = LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data);
+		Equal<IReadOnlyList<(string, string)>?>(null, never.Single(s => s.Key == "texgen").ChangedSince, "Mod Organizer never looked at: not known");
+		Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		var looked = LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data);
+		var texgen = looked.Single(s => s.Key == "texgen");
+		Check(texgen.Current, "nothing changed since the look: current");
+		Equal<LastRuns.Ran?>(null, looked.Single(s => s.Key == "dyndolod").Latest, "a step that never ran");
+		Equal("made the textures|=== TexGen done in 5.0 min ===", string.Join("|", LastRuns.LogOf(texgen)), "what it did, off its run's log");
+		var list = Path.Combine(f.ProfileDir, "modlist.txt");
+		var before = File.ReadAllText(list);
+		File.WriteAllText(list, before.Replace("+Base Mod", "-Base Mod", StringComparison.Ordinal).Replace("+Output A", "-Output A", StringComparison.Ordinal));
+		var pending = LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data).Single(s => s.Key == "texgen");
+		Equal("Base Mod unticked", string.Join(",", pending.ChangedSince!.Select(c => c.Mod + " " + c.What)), "a change not looked at yet counts; the setup's own output does not");
+		Mo2Changes.Record(mo2, f.Data, Mo2Changes.Outside);
+		var kept = LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data).Single(s => s.Key == "texgen");
+		Equal("Base Mod unticked", string.Join(",", kept.ChangedSince!.Select(c => c.Mod + " " + c.What)), "once kept, it still counts (once)");
+		Equal(before.Replace("+Base Mod", "-Base Mod", StringComparison.Ordinal).Replace("+Output A", "-Output A", StringComparison.Ordinal), File.ReadAllText(list),
+			"the profile is only read");
+		var logs = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+		Equal(string.Join("|", LastRuns.LogOf(texgen)), string.Join("|", LastRuns.LogOf(texgen, logs)), "the same lines when each log is read once");
+		Equal(1, logs.Count, "and the log is kept for the next step of that run");
+		// a run going (or one that stopped before its last look) switches mods itself: what changed since the look is not known
+		var going = new Journal { SetupFile = setup.File, Started = DateTime.Now, State = RunState.Running, Folder = Path.Combine(Runner.RunsDir(f.Data), "2026-11-02 22-00-00 Test") };
+		Directory.CreateDirectory(going.Folder);
+		going.Save();
+		Equal<IReadOnlyList<(string, string)>?>(null, LastRuns.Build(setup, mo2, Journal.All(Runner.RunsDir(f.Data)), f.Data).Single(s => s.Key == "texgen").ChangedSince,
+			"not known while a run is unfinished");
+	}
 }

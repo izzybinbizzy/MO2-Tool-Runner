@@ -136,6 +136,9 @@
                   <TextBlock Text="{Binding Note}" Style="{StaticResource MutedText}" TextWrapping="Wrap"
                              Foreground="{Binding State, Converter={StaticResource StateBrush}}"
                              Visibility="{Binding Note, Converter={StaticResource NotEmpty}}"/>
+                  <TextBlock Text="{Binding LastRun}" Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                             Foreground="{Binding LastKind, Converter={StaticResource KindBrush}}"
+                             Visibility="{Binding LastRun, Converter={StaticResource NotEmpty}}"/>
                 </StackPanel>
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Elapsed}" Foreground="{DynamicResource GoldLight}" Margin="0,0,8,0"/>
@@ -212,6 +215,16 @@
               <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,2"/></DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
+        </Border>
+        <!-- the picked step's last run and what it did, and the steps whose output is out of date -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Margin="0,0,0,12" Visibility="{Binding LastCardText, Converter={StaticResource NotEmpty}}">
+          <StackPanel>
+            <TextBlock Text="{Binding LastCardTitle}" Style="{StaticResource H2}" Margin="0,0,0,6"/>
+            <!-- held to a few lines so the log keeps its room in the smallest window -->
+            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <TextBlock Text="{Binding LastCardText}" TextWrapping="Wrap" AutomationProperties.Name="Last run"/>
+            </ScrollViewer>
+          </StackPanel>
         </Border>
         <!-- the log -->
         <DockPanel>

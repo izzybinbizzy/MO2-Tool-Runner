@@ -37,6 +37,8 @@ public partial class MainWindow : Window
 		Footer.Text = $"Ctrl+Enter start  ·  F5 check  ·  Ctrl+H history  ·  Ctrl+M MO2 changes  ·  Ctrl+, settings  ·  Alt+Up / Down move a step   ·   version {AppVersion}";
 		Footer.ToolTip = "Data folder: " + AppPaths.Data;
 		PreviewKeyDown += OnKeys;
+		// a mod ticked in Mod Organizer while the window was in the background: each step's last run is worked out again
+		Activated += async (_, _) => await _vm.LoadLastRunsIfStale();
 		if (_vm.Setups.Count == 0) {
 			_vm.Say("No setup yet: press New setup and pick your Mod Organizer and profile.", "warn");
 		}
