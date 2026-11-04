@@ -73,7 +73,7 @@ public sealed unsafe partial class Tray : IDisposable
 	{
 		if (_added) {
 			_added = false;
-			Show(_tip == "" ? "MO2 Tool Runner" : _tip);
+			Show(_tip == "" ? "Patcher Unification Project" : _tip);
 		}
 	}
 
@@ -108,7 +108,7 @@ public sealed unsafe partial class Tray : IDisposable
 	public bool Notify(string a_title, string a_text, bool a_sound)
 	{
 		if (!_added) {
-			Show("MO2 Tool Runner");
+			Show("Patcher Unification Project");
 		}
 		if (!_added) {
 			return false;

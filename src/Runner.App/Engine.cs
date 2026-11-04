@@ -7,7 +7,7 @@ namespace ToolRunner.App;
 // runs), else in the user's local app data.
 public static class AppPaths
 {
-	public static string Exe => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "MO2 Tool Runner.exe");
+	public static string Exe => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, Brand.Name + ".exe");
 
 	public static string Data { get; } = Resolve();
 
@@ -16,18 +16,19 @@ public static class AppPaths
 
 	static string Resolve()
 	{
-		var beside = Path.Combine(AppContext.BaseDirectory, "MO2 Tool Runner Data");
 		try {
 			if (Files.IsUnder(AppContext.BaseDirectory, Path.GetTempPath())) {
 				throw new UnauthorizedAccessException("a temporary folder");
 			}
+			// one made under the program's old name is taken over (DataFolder.Adopt)
+			var beside = DataFolder.Adopt(AppContext.BaseDirectory, " Data");
 			Directory.CreateDirectory(beside);
 			var probe = Path.Combine(beside, ".write test");
 			File.WriteAllText(probe, "");
 			File.Delete(probe);
 			return beside;
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-			var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MO2 Tool Runner");
+			var local = DataFolder.Adopt(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "");
 			Directory.CreateDirectory(local);
 			return local;
 		}

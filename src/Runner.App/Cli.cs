@@ -1,14 +1,14 @@
 namespace ToolRunner.App;
 
 // The command line (for players who script, and for agents under watch.py):
-//   "MO2 Tool Runner.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
-//   "MO2 Tool Runner.exe" check --setup <file>                                                  the pre-check, printed
-//   "MO2 Tool Runner.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
-//   "MO2 Tool Runner.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
-//   "MO2 Tool Runner.exe" restore [--setup <file>]                                              put back an interrupted run
-//   "MO2 Tool Runner.exe" stop | stop-after                                                     ask the running run to stop
-//   "MO2 Tool Runner.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
-//   "MO2 Tool Runner.exe" changes --setup <file> [--look]                                       what Mod Organizer changed, newest first
+//   "Patcher Unification Project.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]   a run, no window
+//   "Patcher Unification Project.exe" check --setup <file>                                                  the pre-check, printed
+//   "Patcher Unification Project.exe" preview --setup <file> [--only | --from | --until <step>]              what a run would do (nothing changed)
+//   "Patcher Unification Project.exe" lod --setup <file> --step <step>                                      the mods a LOD step builds from, with their pages
+//   "Patcher Unification Project.exe" restore [--setup <file>]                                              put back an interrupted run
+//   "Patcher Unification Project.exe" stop | stop-after                                                     ask the running run to stop
+//   "Patcher Unification Project.exe" updates --setup <file>                                                its tools' newest versions (asks their pages)
+//   "Patcher Unification Project.exe" changes --setup <file> [--look]                                       what Mod Organizer changed, newest first
 // exit 0 = finished / clean, 1 = failed / refused, 2 = stopped, 3 = bad arguments, 4 = (updates) a tool has a newer version
 public static class Cli
 {
@@ -23,6 +23,12 @@ public static class Cli
 	public static int Execute(string[] a_args)
 	{
 		ConsoleAttach.ToParent();
+		// runs at a set time are gone: a task an older version left is cleared on the command line too (a player who never
+		// opens the window), before the command itself
+		try {
+			Schedule.RemoveLeftovers();
+		} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) {
+		}
 		try {
 			return a_args[0] switch {
 				"run" => Run(a_args),
@@ -37,11 +43,11 @@ public static class Cli
 				_ => Help(),
 			};
 		} catch (Exception e) when (e is ArgumentException or IOException or InvalidDataException) {
-			Console.WriteLine("MO2 Tool Runner: " + e.Message);
+			Console.WriteLine("Patcher Unification Project: " + e.Message);
 			return 3;
 		} catch (Exception e) {
 			// never Windows' crash box (a window on the player's screen): said, logged, exit 1
-			Console.WriteLine("MO2 Tool Runner: something went wrong - " + e.GetType().Name + ": " + e.Message);
+			Console.WriteLine("Patcher Unification Project: something went wrong - " + e.GetType().Name + ": " + e.Message);
 			App.LogCrash(e);
 			return 1;
 		}
@@ -49,7 +55,7 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("MO2 Tool Runner - run | check | preview | lod | restore | stop | stop-after | updates | changes   (see the readme)");
+		Console.WriteLine("Patcher Unification Project - run | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
 		return 0;
 	}
 
@@ -166,11 +172,15 @@ public static class Cli
 		return r.State == RunState.Restored ? 0 : 1;
 	}
 
-	// an MO2 Updater profile file (or a setup) brought in as a setup: import --file <json> [--name <setup name>]
+	// a setup file from elsewhere brought into the Setups folder: import --file <setup json> [--name <setup name>]
 	static int Import(string[] a_args)
 	{
-		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <profile file> is needed");
+		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <setup file> is needed");
 		var s = Setup.Load(Path.GetFullPath(file));
+		if (s.Root["steps"] is not System.Text.Json.Nodes.JsonArray || s.Root["mo2"] is not System.Text.Json.Nodes.JsonObject) {
+			Console.WriteLine("not a setup file (no steps list, no Mod Organizer): " + file);
+			return 1;
+		}
 		// the name becomes a file name in the Setups folder: no folder parts, no characters Windows refuses
 		var name = Opt(a_args, "--name") ?? s.Name;
 		name = string.Concat(Path.GetFileName(name).Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c)).Trim();

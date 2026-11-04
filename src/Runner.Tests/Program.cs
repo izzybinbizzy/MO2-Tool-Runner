@@ -225,17 +225,17 @@ public static class Program
 		Equal(@"-o:""D:\LOD\"" -x \\srv\share", ini["customExecutables"]["1\\arguments"], "quotes and backslashes unescaped once");
 	}
 
-	// a real Mod Organizer, read only: MO2TR_REAL_MO2 = its ModOrganizer.exe, MO2TR_REAL_BASE = its instance folder (skipped
+	// a real Mod Organizer, read only: PUP_REAL_MO2 = its ModOrganizer.exe, PUP_REAL_BASE = its instance folder (skipped
 	// when unset - a build machine has none)
 	static void T_RealIniReads()
 	{
-		var exe = Environment.GetEnvironmentVariable("MO2TR_REAL_MO2");
+		var exe = Environment.GetEnvironmentVariable("PUP_REAL_MO2");
 		if (exe == null || !File.Exists(exe)) {
-			Console.WriteLine("      (skipped: MO2TR_REAL_MO2 not set)");
+			Console.WriteLine("      (skipped: PUP_REAL_MO2 not set)");
 			return;
 		}
 		var mo2 = Mo2Instance.Load(exe);
-		if (Environment.GetEnvironmentVariable("MO2TR_REAL_BASE") is { } b) {
+		if (Environment.GetEnvironmentVariable("PUP_REAL_BASE") is { } b) {
 			Equal(b, mo2.BaseDir, "the instance folder");
 		}
 		Check(mo2.Executables.Any(e => e.Title == "SKSE"), "an SKSE entry");
@@ -367,26 +367,6 @@ public static class Program
 	}
 
 	// ------------------------------------------------------------------ setups and order
-	// an old MO2 Updater profile file converts (MO2TR_OLD_PROFILE = that file; skipped when unset)
-	static void T_OldUpdaterProfileConverts()
-	{
-		var old = Environment.GetEnvironmentVariable("MO2TR_OLD_PROFILE");
-		if (old == null || !File.Exists(old)) {
-			Console.WriteLine("      (skipped: MO2TR_OLD_PROFILE not set)");
-			return;
-		}
-		var s = Setup.Load(old);
-		var keys = s.Steps.Select(x => x.Key).ToList();
-		Equal("shaders", keys[0], "shader caches first");
-		Equal("cleansave", keys[1], "then the clean save");
-		Check(keys.IndexOf("synthesis") < keys.IndexOf("dyndolod"), "Synthesis before DynDOLOD");
-		Check(keys.IndexOf("pgpatcher") < keys.IndexOf("xlodgen"), "xLODGen after the patchers");
-		Equal(0, StepCatalog.OrderWarnings(keys).Count, "his converted setup is in a safe order");
-		Check(!string.IsNullOrEmpty(new StepSettings(s.StepSettings("pgpatcher")!).OutputMod), "settings carried");
-		Equal(0, s.Problems().Count, "no problems: " + string.Join("; ", s.Problems()));
-		Equal(5, s.Placement.Count, "placement rules carried");
-	}
-
 	static void T_OrderWarningsCatchTheOldOrder()
 	{
 		var old = new[] { "cleansave", "xlodgen", "acmos", "grass", "snowfixer", "autoblend", "pgpatcher", "treelodgen", "texgen", "dyndolod", "synthesis", "pandora", "shaders" };
@@ -648,10 +628,10 @@ public static class Program
 	{
 		var mon = new DateTime(2026, 10, 26, 3, 0, 0, DateTimeKind.Utc);
 		var thu = mon.AddDays(3);
-		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom("MO2 Tool Runner - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
+		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom("Patcher Unification Project - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
 		Equal("Named", InGame.PlaySaveFrom(null, "Named", mon, "Save9", thu).Save, "then the one the setup names");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, mon, "Save9", thu).Save, "an old clean save loses to newer progress of the player's");
-		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
+		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
 		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
 		// only the runner's GAME steps count as its own time - a save the player made while a tool step ran is theirs
@@ -691,27 +671,6 @@ public static class Program
 		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
 		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
 		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
-		var xml = Schedule.TaskXml(@"C:\R\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
-		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
-		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
-		// a setup file is "gone" only when Windows could look and it is not there
-		var dir = Path.Combine(Path.GetTempPath(), "MO2TR orphan " + Guid.NewGuid().ToString("N"));
-		Directory.CreateDirectory(dir);
-		try {
-			var here = Path.Combine(dir, "Here.json");
-			File.WriteAllText(here, "{}");
-			Check(!Schedule.ConfirmedGone(here), "a file that is there is not gone");
-			Check(!Schedule.ConfirmedGone(here.Replace('\\', '/')), "nor in another path form");
-			Check(Schedule.ConfirmedGone(Path.Combine(dir, "Gone.json")), "missing from a folder that was read: gone");
-			Check(Schedule.ConfirmedGone(Path.Combine(dir, "No Folder", "Gone.json")), "its folder missing on a present drive: gone");
-			Check(!Schedule.ConfirmedGone("Relative.json"), "a relative path proves nothing");
-			var noDrive = Enumerable.Range('D', 23).Select(c => $"{(char)c}:\\").FirstOrDefault(r => !Directory.Exists(r));
-			if (noDrive != null) {
-				Check(!Schedule.ConfirmedGone(noDrive + @"Setups\X.json"), "an unplugged drive proves nothing");
-			}
-		} finally {
-			Directory.Delete(dir, true);
-		}
 	}
 
 	static void T_CheckBoxPixels()
@@ -1447,7 +1406,7 @@ public static class Program
 	// ("Invalid Path to LOD") - ACMOS paints the terrain LOD wherever it is
 	static void T_AcmosFindsTheTerrainLodWhereItIs()
 	{
-		var dir = Path.Combine(Path.GetTempPath(), "MO2TR acmos " + Guid.NewGuid().ToString("N"));
+		var dir = Path.Combine(Path.GetTempPath(), "PUP acmos " + Guid.NewGuid().ToString("N"));
 		var scratch = Path.Combine(dir, "Terrain LOD");
 		var mod = Path.Combine(dir, "mods", "SSELODGen_Output - X");
 		try {
@@ -2146,51 +2105,142 @@ public static class Program
 		Check(left.Contains("2026-01-01 00-00-00 Other") && left.Contains("my own folder"), "another setup's and a folder not of a run stay");
 	}
 
-	// his checklist 270: a run at a set time - its Windows task definition reads back as written
-	static void T_ScheduleDefinitionReadsBack()
+	// the rename (his order 2026-11-03): saves, tasks and stamps made under the old name are still the runner's own
+	static void T_OldNameIsStillOurs()
 	{
-		var now = new DateTime(2026, 10, 27, 14, 0, 0);
-		Equal(new DateTime(2026, 10, 28, 3, 0, 0), Schedule.Next(TimeSpan.FromHours(3), now), "03:00 is tomorrow at 14:00");
-		Equal(new DateTime(2026, 10, 27, 22, 30, 0), Schedule.Next(new TimeSpan(22, 30, 0), now), "22:30 is still today");
-		var daily = Schedule.Parse(Schedule.TaskXml(@"C:\Some Folder\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true)));
-		Equal(new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true), daily, "every day at 03:00");
-		var once = Schedule.Parse(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false)));
-		Equal(new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false), once, "once");
-		Check(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(now, true)).Contains("<StartWhenAvailable>false</StartWhenAvailable>", StringComparison.Ordinal),
-			"a missed time is skipped, never run later");
-		using (var f = new FakeMo2()) {
-			var a = f.WriteSetup(("snowfixer", []));
-			var b = Setup.FromJson((JsonObject)a.Root.DeepClone(), Path.Combine(f.Data, "Setups", "Copy of Test.json"));
-			Check(Schedule.TaskName(a) != Schedule.TaskName(b), "two setups with one name get two tasks");
-			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.Load(f.SetupFile)), "the same setup file always gets the same task");
-			var renamed = (JsonObject)a.Root.DeepClone();
-			renamed["name"] = "A New Name";
-			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.FromJson(renamed, f.SetupFile)), "a setup renamed inside keeps its task");
-		}
-		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
-		if (Environment.GetEnvironmentVariable("MO2TR_SCHEDULE_PROBE") != "1") {
+		Check(Brand.Made(InGame.SaveClean), "a new save of ours");
+		Check(Brand.Made("MO2 Tool Runner - clean save"), "a save made under the old name");
+		Check(!Brand.Made("Save9 - Lydia"), "a player's save");
+		Check(!Brand.Made(Brand.Name + "clean save"), "only the name followed by \" - \"");
+		Check(Brand.AllNames.First() == Brand.Name && Brand.AllNames.Contains("MO2 Tool Runner"), "both names known, the new one first");
+	}
+
+	// runs at a set time are gone (his checklist answer 451): only a task an older version made is recognised, and removed
+	static void T_OldTimedRunsAreClearedAway()
+	{
+		Check(Schedule.IsOurs("Patcher Unification Project - Bottled Shaders 1A2B3C"), "a task of ours");
+		Check(Schedule.IsOurs("\\MO2 Tool Runner - Bottled Shaders 1A2B3C"), "one made under the old name");
+		Check(!Schedule.IsOurs("MicrosoftEdgeUpdateTaskMachineCore"), "anyone else's task");
+		Check(!Schedule.IsOurs("MO2 Tool Runner"), "only the name followed by \" - \"");
+		Check(Schedule.IsOurs("mo2 tool runner - Bottled 1A2B3C"), "any case");
+		Check(Schedule.StartsOurs("<Exec><Command>\"C:\\Some Folder\\MO2 Tool Runner.exe\"</Command></Exec>"), "a task starting the old program");
+		Check(Schedule.StartsOurs("<Exec><Command>C:\\x\\Patcher Unification Project.exe</Command></Exec>"), "or the new one");
+		Check(!Schedule.StartsOurs("<Exec><Command>cmd.exe</Command></Exec>"), "a task of the player's own that only shares the name");
+		// Windows itself, only where asked (harmless tasks a year ahead, removed at once)
+		if (Environment.GetEnvironmentVariable("PUP_SCHEDULE_PROBE") != "1") {
 			return;
 		}
-		const string name = "MO2 Tool Runner - zz offline test";
-		var when = new Schedule.RunTime(DateTime.Now.Date.AddYears(1).AddHours(3), true);
+		const string probe = "MO2 Tool Runner - zz offline leftover", theirs = "MO2 Tool Runner - zz offline not ours";
 		try {
-			Schedule.Register(name, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit", when));
-			Equal(when, Schedule.ReadTask(name), "Windows has it as written");
+			Check(Schedule.AddProbe(probe) && Schedule.Exists(probe), "a leftover task made");
+			Check(Schedule.AddProbe(theirs, "cmd.exe") && Schedule.Exists(theirs), "a same-named task of the player's made");
+			Check(Schedule.RemoveLeftovers(n => n == probe || n == theirs).SequenceEqual([probe]), "only ours is removed");
+			Check(!Schedule.Exists(probe) && Schedule.Exists(theirs), "Windows no longer has ours, still has theirs");
 		} finally {
-			Schedule.RemoveTask(name);
+			Schedule.DeleteProbe(probe);
+			Schedule.DeleteProbe(theirs);
 		}
-		Equal(null, Schedule.ReadTask(name), "and it is gone again");
-		// a task whose setup file is gone is found and removed; a cmd task of ours with no setup is left alone
-		const string orphan = "MO2 Tool Runner - zz offline orphan";
-		var missing = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner missing " + Guid.NewGuid().ToString("N") + ".json");
+	}
+
+	// the rename: the takeover's own check for an old copy, as the program runs it (no stand-in): a running program file under
+	// the old name keeps the old folder where it is; once it ends, the folder is taken over
+	static void T_DataFolderWaitsForARunningOldCopy()
+	{
+		var parent = Path.Combine(Path.GetTempPath(), "PUP old copy " + Guid.NewGuid().ToString("N"));
+		var fake = Path.Combine(parent, "bin", Brand.OldNames[0] + ".exe");
+		Directory.CreateDirectory(Path.Combine(parent, Brand.OldNames[0] + " Data", "Setups"));
+		Directory.CreateDirectory(Path.GetDirectoryName(fake)!);
+		File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), fake);
+		using var p = Process.Start(new ProcessStartInfo(fake, "-n 30 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true })!;
 		try {
-			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
-			// only the test's own task is looked at - a task of the player's is never touched by a test
-			Check(Schedule.RemoveOrphans(n => n == orphan).SequenceEqual([orphan]), "an orphaned task is removed");
-			Equal(null, Schedule.ReadTask(orphan), "and Windows no longer has it");
+			Equal(Path.Combine(parent, Brand.OldNames[0] + " Data"), DataFolder.Adopt(parent, " Data"), "an old copy runs: its folder is used");
+			Check(!Directory.Exists(Path.Combine(parent, Brand.Name + " Data")), "nothing moved");
+			p.Kill();
+			p.WaitForExit();
+			Equal(Path.Combine(parent, Brand.Name + " Data"), DataFolder.Adopt(parent, " Data"), "it ended: the folder is taken over");
 		} finally {
-			Schedule.RemoveTask(orphan);
+			if (!p.HasExited) {
+				p.Kill();
+			}
+			p.WaitForExit();
+			Directory.Delete(parent, true);
 		}
+	}
+
+	// the rename: an old data folder is taken over and every path inside it repointed - escaping, letters outside English and
+	// an apostrophe in the path never matter, a sibling folder sharing the name is left, a cut-off repoint is finished
+	static void T_DataFolderTakenOverUnderTheNewName()
+	{
+		var parent = Path.Combine(Path.GetTempPath(), "PUP adopt " + Guid.NewGuid().ToString("N"), "Bob's José");
+		try {
+			string Old(string a_rest = "") => Path.Combine(parent, Brand.OldNames[0] + " Data") + a_rest;
+			string New(string a_rest = "") => Path.Combine(parent, Brand.Name + " Data") + a_rest;
+			void Write(string a_file, string a_json)
+			{
+				Directory.CreateDirectory(Path.GetDirectoryName(a_file)!);
+				File.WriteAllText(a_file, a_json);
+			}
+			var sibling = Path.Combine(parent, Brand.OldNames[0] + " Data2", "x");
+			var relaxed = new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+			Write(Old(@"\Setups\A.json"), new JsonObject { ["backups"] = Old(@"\Backups"), ["scratch"] = Old(), ["other"] = sibling,
+				["list"] = new JsonArray(Old(@"\Runs\1")) }.ToJsonString(relaxed));
+			Write(Old(@"\Runs\1\journal.json"), new JsonObject { ["folder"] = Old(@"\Runs\1") }.ToJsonString());
+			Equal(Old(), DataFolder.Adopt(parent, " Data", () => true), "an old copy running: the old folder is used, nothing moved");
+			Check(Directory.Exists(Old()) && !Directory.Exists(New()), "left where it was");
+			Directory.CreateDirectory(New());
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "an empty new folder does not hide the old one");
+			Check(!Directory.Exists(Old()), "the old folder moved");
+			var a = JsonNode.Parse(File.ReadAllText(New(@"\Setups\A.json")))!;
+			Equal(New(@"\Backups"), a["backups"]!.ToString(), "a path inside (written with literal letters)");
+			Equal(New(), a["scratch"]!.ToString(), "the folder itself");
+			Equal(sibling, a["other"]!.ToString(), "a sibling folder sharing the name is left");
+			Equal(New(@"\Runs\1"), a["list"]![0]!.ToString(), "a path in a list");
+			Equal(New(@"\Runs\1"), JsonNode.Parse(File.ReadAllText(New(@"\Runs\1\journal.json")))!["folder"]!.ToString(), "a path written escaped");
+			Check(!File.Exists(New(@"\.renamed from.txt")), "the repoint finished, its mark gone");
+			// a repoint cut off half way: the mark makes the next start finish it
+			Write(New(@"\Setups\B.json"), new JsonObject { ["backups"] = Old(@"\Backups") }.ToJsonString());
+			File.WriteAllText(New(@"\.renamed from.txt"), Old());
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "the new folder in use");
+			Equal(New(@"\Backups"), JsonNode.Parse(File.ReadAllText(New(@"\Setups\B.json")))!["backups"]!.ToString(), "the cut-off repoint finished");
+			// a new folder in use is never replaced by an old one that turns up beside it
+			Write(Old(@"\Setups\C.json"), "{}");
+			Equal(New(), DataFolder.Adopt(parent, " Data", () => false), "a new folder with files is kept");
+			Check(File.Exists(Old(@"\Setups\C.json")), "the old one left alone");
+		} finally {
+			Directory.Delete(Path.GetDirectoryName(parent)!, true);
+		}
+	}
+
+	// the rename: the run lock is held under the old name too, so an old copy of the program never runs beside this one
+	static void T_RunLockCoversTheOldName()
+	{
+		var oldLock = "Local\\" + Brand.OldNames[0] + " run";
+		using (var hold = Runner.HoldIfFree()) {
+			Check(hold != null, "free: taken");
+			var open = Mutex.TryOpenExisting(oldLock, out var m);
+			m?.Dispose();
+			Check(open, "the old name's lock is held too");
+		}
+		using var taken = new ManualResetEventSlim();
+		using var done = new ManualResetEventSlim();
+		var t = new Thread(() => {
+			using var m = new Mutex(true, oldLock);
+			taken.Set();
+			done.Wait();
+			m.ReleaseMutex();
+		});
+		t.Start();
+		taken.Wait();
+		try {
+			using var hold = Runner.HoldIfFree();
+			Check(hold == null, "an old copy holding its lock: no run");
+			Check(Runner.HoldIfFree() is null, "still none");
+		} finally {
+			done.Set();
+			t.Join();
+		}
+		using var after = Runner.HoldIfFree();
+		Check(after != null, "free again once the old copy let go");
 	}
 
 	// his lesson 2026-10-27 (checklist 271): the mods a LOD step builds from are found off their plugins' record groups, each with

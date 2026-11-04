@@ -106,11 +106,7 @@ public sealed class Setup
 	{
 		var node = JsonNode.Parse(a_text, documentOptions: ReadOptions) as JsonObject ??
 		           throw new InvalidDataException("not a setup file (no JSON object): " + a_file);
-		var s = new Setup { File = a_file, Root = node };
-		if (s.Root["schema"] == null && s.Root["steps"] is JsonObject) {
-			s.Root = FromUpdater(node, Path.GetFileNameWithoutExtension(a_file));
-		}
-		return s;
+		return new Setup { File = a_file, Root = node };
 	}
 
 	public static Setup FromJson(JsonObject a_root, string a_file = "") => new() { Root = a_root, File = a_file };
@@ -147,41 +143,4 @@ public sealed class Setup
 
 	public Setup Clone() => FromJson((JsonObject)Root.DeepClone(), File);
 
-	// the MO2 Updater's old profile file (steps as an object, order fixed in code) -> a v2 setup in the researched order
-	public static JsonObject FromUpdater(JsonObject a_old, string a_name)
-	{
-		var root = new JsonObject {
-			["schema"] = Schema,
-			["name"] = a_name,
-			["mo2"] = new JsonObject {
-				["exe"] = Str(a_old, "mo2_exe") ?? "",
-				["instance"] = Str(a_old, "instance_dir") ?? "",
-				["profile"] = Str(a_old, "profile") ?? a_name,
-			},
-			["backups"] = Str(a_old, "backup_dir") ?? "",
-			["shaderRebuild"] = "whenChanged",
-			["idleMinutes"] = 2,
-			["minFreeGb"] = 20,
-			["alerts"] = new JsonObject { ["notification"] = true, ["sound"] = true, ["flash"] = false },
-		};
-		foreach (var k in new[] { "lod_outputs", "lod_outputs_off_before", "place_after", "placement" }) {
-			if (a_old[k] != null) {
-				root[k switch { "lod_outputs" => "lodOutputs", "lod_outputs_off_before" => "lodOutputsOffBefore", "place_after" => "placeAfter", _ => k }] = a_old[k]!.DeepClone();
-			}
-		}
-		var oldSteps = (JsonObject)a_old["steps"]!;
-		var steps = new JsonArray();
-		foreach (var key in StepCatalog.DefaultOrder) {
-			if (oldSteps[key] is JsonObject so) {
-				steps.Add(new JsonObject { ["step"] = key, ["on"] = true, ["settings"] = so.DeepClone() });
-			}
-		}
-		foreach (var (key, so) in oldSteps) {
-			if (!StepCatalog.DefaultOrder.Contains(key) && so is JsonObject) {
-				steps.Add(new JsonObject { ["step"] = key, ["on"] = true, ["settings"] = so.DeepClone() });
-			}
-		}
-		root["steps"] = steps;
-		return root;
-	}
 }

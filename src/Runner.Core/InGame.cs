@@ -9,9 +9,9 @@ namespace ToolRunner;
 public static partial class InGame
 {
 	public const string GameImage = "SkyrimSE.exe";
-	public const string SaveOff = "MO2 Tool Runner - DynDOLOD off";
-	public const string SaveClean = "MO2 Tool Runner - clean save";
-	public const string SaveReady = "MO2 Tool Runner - ready to play";
+	public const string SaveOff = Brand.Name + " - DynDOLOD off";
+	public const string SaveClean = Brand.Name + " - clean save";
+	public const string SaveReady = Brand.Name + " - ready to play";
 
 	public static readonly string[] ShaderLogNames = ["CommunityShaders.log", "BottledShaders.log", "OpenShaders.log"];
 
@@ -196,7 +196,7 @@ public static partial class InGame
 			return null;
 		}
 		var f = new DirectoryInfo(d).EnumerateFiles("*.ess")
-			.Where(x => !x.Name.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("MO2 Updater - ", StringComparison.OrdinalIgnoreCase))
+			.Where(x => !Brand.Made(x.Name) && !x.Name.StartsWith("MO2 Updater - ", StringComparison.OrdinalIgnoreCase))
 			.Where(x => !(a_ourRuns ?? []).Any(r => x.LastWriteTimeUtc >= r.From && x.LastWriteTimeUtc <= r.To))
 			.OrderByDescending(x => x.LastWriteTimeUtc).FirstOrDefault();
 		return f == null ? null : Path.GetFileNameWithoutExtension(f.Name);
@@ -254,10 +254,10 @@ public static partial class InGame
 	{
 		try {
 			var newest = NewestSave(a_ctx.Profile);
-			if (newest == null || newest.Equals(SaveReady, StringComparison.OrdinalIgnoreCase)) {
+			if (newest == null || Brand.AllNames.Any(b => newest.Equals(b + " - ready to play", StringComparison.OrdinalIgnoreCase))) {
 				return null;
 			}
-			var ours = newest.StartsWith("MO2 Tool Runner - ", StringComparison.OrdinalIgnoreCase) ||
+			var ours = Brand.Made(newest) ||
 			           SaveTime(a_ctx.Profile, newest) is { } t && GameTimes(a_ctx.Journal.Steps, DateTime.Now).Any(r => t >= r.From && t <= r.To);
 			if (!ours) {
 				return null;

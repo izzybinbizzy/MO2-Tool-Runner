@@ -272,69 +272,6 @@ public static class SettingsPanel
 		stack.Children.Add(updCheck);
 		stack.Children.Add(updRows);
 
-		// his checklist 270: a run at a set time, nothing to click (a Windows scheduled task of the player's own)
-		Head("A RUN AT A SET TIME");
-		stack.Children.Add(new TextBlock { Text = "Windows starts this setup's run at the time below - only while you are signed in, your PC on. " +
-			"Nothing is changed if the game or another run is going then (the reason shows here next time). Mod Organizer is closed for the run.",
-			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
-		var schedState = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
-		var schedRow = new StackPanel { Orientation = Orientation.Horizontal };
-		var schedTime = new TextBox { Text = "03:00", Width = 70, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-		System.Windows.Automation.AutomationProperties.SetName(schedTime, "Run time (hours:minutes)");
-		var schedDaily = new CheckBox { Content = "every day", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-		var schedSet = new Button { Content = "Schedule it", Style = (Style)a_w.FindResource("Ghost"), Margin = new Thickness(0, 0, 8, 0) };
-		var schedOff = new Button { Content = "Remove it", Style = (Style)a_w.FindResource("Ghost") };
-		schedRow.Children.Add(schedTime);
-		schedRow.Children.Add(schedDaily);
-		schedRow.Children.Add(schedSet);
-		schedRow.Children.Add(schedOff);
-		stack.Children.Add(schedState);
-		stack.Children.Add(schedRow);
-		var current = a_vm.Setup!;
-		async Task ShowSchedule()
-		{
-			try {
-				var (when, gone) = await Task.Run(() => (Schedule.Read(current), Schedule.RemoveOrphans()));
-				schedState.Text = (when == null ? "No run is scheduled for this setup." :
-					when.Daily ? $"Scheduled: every day at {when.At.ToString("HH:mm", InvariantCulture)}." :
-					when.At > DateTime.Now ? $"Scheduled: once, {when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}." :
-					$"Its one run time ({when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}) has passed.") +
-					(gone.Count > 0 ? $" Removed {gone.Count} scheduled run(s) whose setup file was moved or deleted." : "");
-				if (when != null) {
-					schedTime.Text = when.At.ToString("HH:mm", InvariantCulture);
-					schedDaily.IsChecked = when.Daily;
-				}
-			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception or System.Xml.XmlException) {
-				schedState.Text = "Could not read the scheduled run: " + e.Message;
-			}
-		}
-		_ = ShowSchedule();
-		schedSet.Click += async (_, _) => {
-			if (!TimeSpan.TryParseExact(schedTime.Text.Trim(), [@"h\:mm", @"hh\:mm"], InvariantCulture, out var t) || t >= TimeSpan.FromDays(1)) {
-				schedState.Text = "Write the time as hours:minutes, e.g. 03:00 or 22:30.";
-				return;
-			}
-			var exe = Environment.ProcessPath ?? "";
-			var daily = schedDaily.IsChecked == true;
-			schedSet.IsEnabled = false;
-			try {
-				await Task.Run(() => Schedule.Set(current, exe, new Schedule.RunTime(Schedule.Next(t, DateTime.Now), daily)));
-				await ShowSchedule();
-			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException) {
-				schedState.Text = "Not scheduled: " + e.Message;
-			} finally {
-				schedSet.IsEnabled = true;
-			}
-		};
-		schedOff.Click += async (_, _) => {
-			try {
-				await Task.Run(() => Schedule.Remove(current));
-				await ShowSchedule();
-			} catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception) {
-				schedState.Text = "Not removed: " + e.Message;
-			}
-		};
-
 		Head("A STEP");
 		var steps = (work["steps"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
 		var pick = new ComboBox { ItemsSource = steps.Select(s => StepCatalog.Name(Setup.Str(s, "step") ?? "")).ToList(), Margin = new Thickness(0, 0, 0, 8) };

@@ -11,7 +11,10 @@ public sealed record RunOutcome(RunState State, string Verdict, string? Folder);
 // its own put-back, put back a step that did not finish, and leave the profile as it was with this run's outputs on.
 public static class Runner
 {
-	public const string MutexName = "Local\\MO2 Tool Runner run";
+	public const string MutexName = "Local\\" + Brand.Name + " run";
+
+	// the run lock under every name the program had: a copy of the old version never runs beside this one
+	static IEnumerable<string> MutexNames => Brand.AllNames.Select(n => "Local\\" + n + " run");
 
 	public static string RunsDir(string a_dataDir) => Path.Combine(a_dataDir, "Runs");
 
@@ -48,24 +51,39 @@ public static class Runner
 	// another holds it. Released by the thread that took it.
 	public static IDisposable? HoldIfFree()
 	{
-		var m = new Mutex(false, MutexName, out _);
+		var held = new List<Mutex>();
 		try {
-			if (m.WaitOne(0)) {
-				return new Held(m);
+			foreach (var name in MutexNames) {
+				var m = new Mutex(false, name, out _);
+				bool got;
+				try {
+					got = m.WaitOne(0);
+				} catch (AbandonedMutexException) {
+					got = true;
+				}
+				if (!got) {
+					m.Dispose();
+					new Held(held).Dispose();
+					return null;
+				}
+				held.Add(m);
 			}
-		} catch (AbandonedMutexException) {
-			return new Held(m);
+		} catch {
+			// a lock that would not open (access, a bad name) never leaves the ones already taken held
+			new Held(held).Dispose();
+			throw;
 		}
-		m.Dispose();
-		return null;
+		return new Held(held);
 	}
 
-	sealed class Held(Mutex a_m) : IDisposable
+	sealed class Held(List<Mutex> a_m) : IDisposable
 	{
 		public void Dispose()
 		{
-			a_m.ReleaseMutex();
-			a_m.Dispose();
+			for (var i = a_m.Count - 1; i >= 0; i--) {
+				a_m[i].ReleaseMutex();
+				a_m[i].Dispose();
+			}
 		}
 	}
 
@@ -126,7 +144,7 @@ public static class Runner
 			Setup = setup, Mo2 = mo2, Profile = profile, Control = control, Log = log, Journal = journal, Cancel = cts.Token,
 			BackupFolder = journal.BackupDir, Guide = a_guide?.Invoke(journal) ?? new FileGuide(journal, commands.TakeContinue, commands.ClearContinue),
 		};
-		log.Say($"MO2 Tool Runner - {setup.Name} (profile {setup.Profile}), steps: {string.Join(", ", todo.Select(s => StepCatalog.Name(s.Key)))}");
+		log.Say($"Patcher Unification Project - {setup.Name} (profile {setup.Profile}), steps: {string.Join(", ", todo.Select(s => StepCatalog.Name(s.Key)))}");
 		foreach (var w in check) {
 			log.Warn($"{StepCatalog.Name(w.Step)}: {w.Text}");
 		}

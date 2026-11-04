@@ -30,7 +30,7 @@ public partial class MainWindow : Window
 			await _vm.PollAsync();
 			// the notification-area icon (there once a run started or a notification was shown) says what runs
 			if (_vm.IsRunning || _tray?.Shown == true) {
-				_tray?.Show("MO2 Tool Runner - " + _vm.NowTitle);
+				_tray?.Show("Patcher Unification Project - " + _vm.NowTitle);
 			}
 		};
 		_timer.Start();
@@ -69,7 +69,9 @@ public partial class MainWindow : Window
 		var s = _vm.Setup;
 		var toast = s?.AlertNotification ?? true;
 		var sound = s?.AlertSound ?? true;
-		var shown = toast && _tray != null && _tray.Notify("MO2 Tool Runner - " + a_title, a_text.Length > 250 ? a_text[..250] + " ..." : a_text, sound);
+		// Windows keeps 63 characters of a notification's title: the program's name goes only where the title still fits
+		var title = (Brand.Name + " - " + a_title).Length <= 63 ? Brand.Name + " - " + a_title : a_title;
+		var shown = toast && _tray != null && _tray.Notify(title, a_text.Length > 250 ? a_text[..250] + " ..." : a_text, sound);
 		if (!shown && sound) {
 			SystemSounds.Asterisk.Play();
 		}
