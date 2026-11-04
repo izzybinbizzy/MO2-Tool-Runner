@@ -294,7 +294,7 @@ public static class SettingsPanel
 		async Task ShowSchedule()
 		{
 			try {
-				var (when, gone) = await Task.Run(() => (Schedule.Read(current), Schedule.RemoveOrphans()));
+				var (when, gone) = await Task.Run(() => (Schedule.Read(current, Environment.ProcessPath), Schedule.RemoveOrphans()));
 				schedState.Text = (when == null ? "No run is scheduled for this setup." :
 					when.Daily ? $"Scheduled: every day at {when.At.ToString("HH:mm", InvariantCulture)}." :
 					when.At > DateTime.Now ? $"Scheduled: once, {when.At.ToString("ddd MMM d HH:mm", InvariantCulture)}." :

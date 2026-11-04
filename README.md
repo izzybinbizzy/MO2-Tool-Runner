@@ -1,11 +1,11 @@
-# MO2 Tool Runner
+# Patcher Unification Project
 
 Runs the generators of a Mod Organizer 2 setup for Skyrim Special Edition / Anniversary Edition in the right order, unattended, and puts your profile back exactly as it was.
 
 Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, AutoBlend, PGPatcher, xLODGen with ACMOS roads, the grass cache, TreeLODGen, TexGen, DynDOLOD or AnvilLOD, Pandora, and a save to play at the end.
 
 - **Download:** the Nexus page (the zip holds the program, its readme, its changelog and the licence).
-- **The full guide:** [the wiki](https://github.com/izzybinbizzy/MO2-Tool-Runner/wiki).
+- **The full guide:** [the wiki](https://github.com/izzybinbizzy/Patcher-Unification-Project/wiki).
 
 ## What it does
 
@@ -60,7 +60,7 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 ## Quick start
 
 1. Unpack the zip anywhere outside the game folder and outside Mod Organizer.
-2. Start `MO2 Tool Runner.exe` on its own, not from Mod Organizer. It closes and starts Mod Organizer itself.
+2. Start `Patcher Unification Project.exe` on its own, not from Mod Organizer. It closes and starts Mod Organizer itself.
 3. **New setup** (Ctrl+N): pick `ModOrganizer.exe`, its instance and a profile. The steps are found from your Executables list.
 4. **Settings** (Ctrl+,): for each step, **Learn its settings (opens its own window)**.
 5. **Check** (F5), then **Start** (Ctrl+Enter).
@@ -68,14 +68,14 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 ## Command line
 
 ```
-"MO2 Tool Runner.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]
-"MO2 Tool Runner.exe" check --setup <file>
-"MO2 Tool Runner.exe" preview --setup <file>
-"MO2 Tool Runner.exe" lod --setup <file> --step <step>
-"MO2 Tool Runner.exe" updates --setup <file>
-"MO2 Tool Runner.exe" restore [--setup <file>]
-"MO2 Tool Runner.exe" stop | stop-after
-"MO2 Tool Runner.exe" changes --setup <file> [--look]
+"Patcher Unification Project.exe" run --setup <file> [--only <step> | --from <step> | --until <step>]
+"Patcher Unification Project.exe" check --setup <file>
+"Patcher Unification Project.exe" preview --setup <file>
+"Patcher Unification Project.exe" lod --setup <file> --step <step>
+"Patcher Unification Project.exe" updates --setup <file>
+"Patcher Unification Project.exe" restore [--setup <file>]
+"Patcher Unification Project.exe" stop | stop-after
+"Patcher Unification Project.exe" changes --setup <file> [--look]
 ```
 
 | exit code | meaning |
@@ -91,19 +91,19 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 Windows, .NET 10 SDK.
 
 ```
-dotnet build "src/MO2 Tool Runner.slnx" -c Release
+dotnet build "src/Patcher Unification Project.slnx" -c Release
 dotnet run --project src/Runner.Tests -c Release
 ```
 
 - `src/Runner.Core` - the engine: setups, the run and its record, the steps, Mod Organizer and the game (no window).
-- `src/Runner.App` - the window and the command line (`MO2 Tool Runner.exe`).
+- `src/Runner.App` - the window and the command line (`Patcher Unification Project.exe`).
 - `src/Runner.Tests` - the offline tests, against a fake Mod Organizer folder in a scratch directory. They need no MO2 and no game.
 
 The release is one framework-dependent, single-file exe: `dotnet publish src/Runner.App -c Release`.
 
 ## Credits
 
-The tools it runs belong to their authors. MO2 Tool Runner only starts the copy the player downloaded and presses its buttons; none of their files are in this repository or the download.
+The tools it runs belong to their authors. Patcher Unification Project only starts the copy the player downloaded and presses its buttons; none of their files are in this repository or the download.
 
 - DynDOLOD, TexGen and xLODGen - sheson
 - PGPatcher - hakasapl and its contributors

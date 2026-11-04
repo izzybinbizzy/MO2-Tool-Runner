@@ -17,10 +17,10 @@ public static partial class Schedule
 	static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
 	// one task per setup FILE, named only from that file (its name inside the setup can change - the task must still be found)
-	public static string TaskName(Setup a_setup)
+	public static string TaskName(Setup a_setup, string a_brand = Brand.Name)
 	{
 		var mark = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(a_setup.File).ToUpperInvariant())))[..6];
-		return "MO2 Tool Runner - " + string.Concat(Path.GetFileNameWithoutExtension(a_setup.File).Select(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ? '-' : c)).Trim() + " " + mark;
+		return a_brand + " - " + string.Concat(Path.GetFileNameWithoutExtension(a_setup.File).Select(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ? '-' : c)).Trim() + " " + mark;
 	}
 
 	// the next time a clock time comes round (today if still ahead, else tomorrow)
@@ -37,7 +37,7 @@ public static partial class Schedule
 			? new XElement(Ns + "CalendarTrigger", start, new XElement(Ns + "Enabled", "true"), new XElement(Ns + "ScheduleByDay", new XElement(Ns + "DaysInterval", 1)))
 			: new XElement(Ns + "TimeTrigger", start, new XElement(Ns + "Enabled", "true"));
 		var task = new XElement(Ns + "Task", new XAttribute("version", "1.2"),
-			new XElement(Ns + "RegistrationInfo", new XElement(Ns + "Description", "MO2 Tool Runner: a run at a set time (made in its Settings - remove it there).")),
+			new XElement(Ns + "RegistrationInfo", new XElement(Ns + "Description", Brand.Name + ": a run at a set time (made in its Settings - remove it there).")),
 			new XElement(Ns + "Triggers", trigger),
 			new XElement(Ns + "Principals", new XElement(Ns + "Principal", new XAttribute("id", "Author"),
 				new XElement(Ns + "UserId", Environment.UserDomainName + "\\" + Environment.UserName),
@@ -75,12 +75,17 @@ public static partial class Schedule
 		return null;
 	}
 
-	public static void Set(Setup a_setup, string a_exe, RunTime a_when) =>
+	public static void Set(Setup a_setup, string a_exe, RunTime a_when)
+	{
 		Register(TaskName(a_setup), TaskXml(a_exe, $"run --setup \"{a_setup.File}\"", a_when));
+		foreach (var old in Brand.OldNames) {
+			RemoveTask(TaskName(a_setup, old));
+		}
+	}
 
 	public static void Register(string a_name, string a_xml)
 	{
-		var file = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner task " + Guid.NewGuid().ToString("N") + ".xml");
+		var file = Path.Combine(Path.GetTempPath(), Brand.Name + " task " + Guid.NewGuid().ToString("N") + ".xml");
 		File.WriteAllText(file, a_xml, Encoding.Unicode);
 		try {
 			var (code, text) = Schtasks("/Create", "/TN", a_name, "/XML", file, "/F");
@@ -92,8 +97,23 @@ public static partial class Schedule
 		}
 	}
 
-	// the setup's scheduled run as Windows has it (null: none)
-	public static RunTime? Read(Setup a_setup) => ReadTask(TaskName(a_setup));
+	// the setup's scheduled run as Windows has it (null: none). A task made under the old name starts the old program file, which
+	// the rename took away: with this program's exe given it is made again under the new name, the old one removed.
+	public static RunTime? Read(Setup a_setup, string? a_exe = null)
+	{
+		if (ReadTask(TaskName(a_setup)) is { } now) {
+			return now;
+		}
+		foreach (var old in Brand.OldNames) {
+			if (ReadTask(TaskName(a_setup, old)) is { } was) {
+				if (!string.IsNullOrEmpty(a_exe)) {
+					Set(a_setup, a_exe, was);
+				}
+				return was;
+			}
+		}
+		return null;
+	}
 
 	public static RunTime? ReadTask(string a_name)
 	{
@@ -101,7 +121,12 @@ public static partial class Schedule
 		return code == 0 ? Parse(text) : null;
 	}
 
-	public static void Remove(Setup a_setup) => RemoveTask(TaskName(a_setup));
+	public static void Remove(Setup a_setup)
+	{
+		foreach (var brand in Brand.AllNames) {
+			RemoveTask(TaskName(a_setup, brand));
+		}
+	}
 
 	public static void RemoveTask(string a_name)
 	{
@@ -136,7 +161,7 @@ public static partial class Schedule
 		if (code != 0) {
 			return removed;
 		}
-		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith("\"\\MO2 Tool Runner - ", StringComparison.Ordinal))
+		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => Brand.AllNames.Any(b => l.StartsWith("\"\\" + b + " - ", StringComparison.Ordinal)))
 			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(n => a_only == null || a_only(n)).ToList();
 		foreach (var n in names) {
 			try {

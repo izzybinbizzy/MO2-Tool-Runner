@@ -327,11 +327,15 @@ public sealed class ShaderStep : IStep
 		return Convert.ToHexString(sha.Hash!);
 	}
 
-	static string StampFile(Mo2Instance a_mo2, Cache a_c) => Path.Combine(a_mo2.ModDir(a_c.OutputMod), "MO2 Tool Runner cache.json");
+	static string StampFile(Mo2Instance a_mo2, Cache a_c, string a_brand = Brand.Name) => Path.Combine(a_mo2.ModDir(a_c.OutputMod), a_brand + " cache.json");
+
+	// the stamp written under the new name, else one an older version wrote under the old name
+	static string ReadStampFile(Mo2Instance a_mo2, Cache a_c) =>
+		Brand.AllNames.Select(b => StampFile(a_mo2, a_c, b)).FirstOrDefault(File.Exists) ?? StampFile(a_mo2, a_c);
 
 	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null, IReadOnlyCollection<string>? a_otherCaches = null)
 	{
-		var stamp = StampFile(a_mo2, a_c);
+		var stamp = ReadStampFile(a_mo2, a_c);
 		if (!File.Exists(stamp) || Files.CountFiles(Path.Combine(a_mo2.ModDir(a_c.OutputMod), "ShaderCache")) < 50) {
 			return false;
 		}

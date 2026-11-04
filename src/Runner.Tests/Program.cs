@@ -225,17 +225,17 @@ public static class Program
 		Equal(@"-o:""D:\LOD\"" -x \\srv\share", ini["customExecutables"]["1\\arguments"], "quotes and backslashes unescaped once");
 	}
 
-	// a real Mod Organizer, read only: MO2TR_REAL_MO2 = its ModOrganizer.exe, MO2TR_REAL_BASE = its instance folder (skipped
+	// a real Mod Organizer, read only: PUP_REAL_MO2 = its ModOrganizer.exe, PUP_REAL_BASE = its instance folder (skipped
 	// when unset - a build machine has none)
 	static void T_RealIniReads()
 	{
-		var exe = Environment.GetEnvironmentVariable("MO2TR_REAL_MO2");
+		var exe = Environment.GetEnvironmentVariable("PUP_REAL_MO2");
 		if (exe == null || !File.Exists(exe)) {
-			Console.WriteLine("      (skipped: MO2TR_REAL_MO2 not set)");
+			Console.WriteLine("      (skipped: PUP_REAL_MO2 not set)");
 			return;
 		}
 		var mo2 = Mo2Instance.Load(exe);
-		if (Environment.GetEnvironmentVariable("MO2TR_REAL_BASE") is { } b) {
+		if (Environment.GetEnvironmentVariable("PUP_REAL_BASE") is { } b) {
 			Equal(b, mo2.BaseDir, "the instance folder");
 		}
 		Check(mo2.Executables.Any(e => e.Title == "SKSE"), "an SKSE entry");
@@ -367,26 +367,6 @@ public static class Program
 	}
 
 	// ------------------------------------------------------------------ setups and order
-	// an old MO2 Updater profile file converts (MO2TR_OLD_PROFILE = that file; skipped when unset)
-	static void T_OldUpdaterProfileConverts()
-	{
-		var old = Environment.GetEnvironmentVariable("MO2TR_OLD_PROFILE");
-		if (old == null || !File.Exists(old)) {
-			Console.WriteLine("      (skipped: MO2TR_OLD_PROFILE not set)");
-			return;
-		}
-		var s = Setup.Load(old);
-		var keys = s.Steps.Select(x => x.Key).ToList();
-		Equal("shaders", keys[0], "shader caches first");
-		Equal("cleansave", keys[1], "then the clean save");
-		Check(keys.IndexOf("synthesis") < keys.IndexOf("dyndolod"), "Synthesis before DynDOLOD");
-		Check(keys.IndexOf("pgpatcher") < keys.IndexOf("xlodgen"), "xLODGen after the patchers");
-		Equal(0, StepCatalog.OrderWarnings(keys).Count, "his converted setup is in a safe order");
-		Check(!string.IsNullOrEmpty(new StepSettings(s.StepSettings("pgpatcher")!).OutputMod), "settings carried");
-		Equal(0, s.Problems().Count, "no problems: " + string.Join("; ", s.Problems()));
-		Equal(5, s.Placement.Count, "placement rules carried");
-	}
-
 	static void T_OrderWarningsCatchTheOldOrder()
 	{
 		var old = new[] { "cleansave", "xlodgen", "acmos", "grass", "snowfixer", "autoblend", "pgpatcher", "treelodgen", "texgen", "dyndolod", "synthesis", "pandora", "shaders" };
@@ -648,10 +628,10 @@ public static class Program
 	{
 		var mon = new DateTime(2026, 10, 26, 3, 0, 0, DateTimeKind.Utc);
 		var thu = mon.AddDays(3);
-		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom("MO2 Tool Runner - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
+		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom("Patcher Unification Project - clean save", null, mon, "Save9", thu).Save, "this run's clean save first");
 		Equal("Named", InGame.PlaySaveFrom(null, "Named", mon, "Save9", thu).Save, "then the one the setup names");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, mon, "Save9", thu).Save, "an old clean save loses to newer progress of the player's");
-		Equal("MO2 Tool Runner - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
+		Equal("Patcher Unification Project - clean save", InGame.PlaySaveFrom(null, null, thu, "Save9", mon).Save, "a clean save newer than every save of theirs is used");
 		Equal("Save9", InGame.PlaySaveFrom(null, null, null, "Save9", mon).Save, "no clean save: the player's newest");
 		Equal<string?>(null, InGame.PlaySaveFrom(null, null, null, null, null).Save, "nothing at all: no save");
 		// only the runner's GAME steps count as its own time - a save the player made while a tool step ran is theirs
@@ -691,11 +671,11 @@ public static class Program
 		Equal("0x0000003B", DevBench.FormKey(JsonValue.Create(59)), "a JSON number");
 		var s = Setup.Parse(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes("{\"schema\":1,\"name\":\"From bytes\"}")).ToArray(), @"C:\x.json");
 		Equal("From bytes", s.Name, "a setup read from its bytes (a BOM in front)");
-		var xml = Schedule.TaskXml(@"C:\R\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
+		var xml = Schedule.TaskXml(@"C:\R\Patcher Unification Project.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true));
 		Equal(@"C:\x y\Bottled.json", Schedule.SetupOf(xml), "a task's setup file read back");
 		Equal<string?>(null, Schedule.SetupOf(Schedule.TaskXml("cmd.exe", "/c exit", new Schedule.RunTime(DateTime.Now, false))), "not one of ours");
 		// a setup file is "gone" only when Windows could look and it is not there
-		var dir = Path.Combine(Path.GetTempPath(), "MO2TR orphan " + Guid.NewGuid().ToString("N"));
+		var dir = Path.Combine(Path.GetTempPath(), "PUP orphan " + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(dir);
 		try {
 			var here = Path.Combine(dir, "Here.json");
@@ -1447,7 +1427,7 @@ public static class Program
 	// ("Invalid Path to LOD") - ACMOS paints the terrain LOD wherever it is
 	static void T_AcmosFindsTheTerrainLodWhereItIs()
 	{
-		var dir = Path.Combine(Path.GetTempPath(), "MO2TR acmos " + Guid.NewGuid().ToString("N"));
+		var dir = Path.Combine(Path.GetTempPath(), "PUP acmos " + Guid.NewGuid().ToString("N"));
 		var scratch = Path.Combine(dir, "Terrain LOD");
 		var mod = Path.Combine(dir, "mods", "SSELODGen_Output - X");
 		try {
@@ -2147,12 +2127,22 @@ public static class Program
 	}
 
 	// his checklist 270: a run at a set time - its Windows task definition reads back as written
+	// the rename (his order 2026-11-03): saves, tasks and stamps made under the old name are still the runner's own
+	static void T_OldNameIsStillOurs()
+	{
+		Check(Brand.Made(InGame.SaveClean), "a new save of ours");
+		Check(Brand.Made("MO2 Tool Runner - clean save"), "a save made under the old name");
+		Check(!Brand.Made("Save9 - Lydia"), "a player's save");
+		Check(!Brand.Made(Brand.Name + "clean save"), "only the name followed by \" - \"");
+		Check(Brand.AllNames.First() == Brand.Name && Brand.AllNames.Contains("MO2 Tool Runner"), "both names known, the new one first");
+	}
+
 	static void T_ScheduleDefinitionReadsBack()
 	{
 		var now = new DateTime(2026, 10, 27, 14, 0, 0);
 		Equal(new DateTime(2026, 10, 28, 3, 0, 0), Schedule.Next(TimeSpan.FromHours(3), now), "03:00 is tomorrow at 14:00");
 		Equal(new DateTime(2026, 10, 27, 22, 30, 0), Schedule.Next(new TimeSpan(22, 30, 0), now), "22:30 is still today");
-		var daily = Schedule.Parse(Schedule.TaskXml(@"C:\Some Folder\MO2 Tool Runner.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true)));
+		var daily = Schedule.Parse(Schedule.TaskXml(@"C:\Some Folder\Patcher Unification Project.exe", "run --setup \"C:\\x y\\Bottled.json\"", new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true)));
 		Equal(new Schedule.RunTime(new DateTime(2026, 10, 28, 3, 0, 0), true), daily, "every day at 03:00");
 		var once = Schedule.Parse(Schedule.TaskXml("x.exe", "", new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false)));
 		Equal(new Schedule.RunTime(new DateTime(2026, 11, 1, 22, 15, 0), false), once, "once");
@@ -2166,12 +2156,16 @@ public static class Program
 			var renamed = (JsonObject)a.Root.DeepClone();
 			renamed["name"] = "A New Name";
 			Equal(Schedule.TaskName(a), Schedule.TaskName(Setup.FromJson(renamed, f.SetupFile)), "a setup renamed inside keeps its task");
+			// the rename (his order 2026-11-03): a task made under the old name is its own task, found by the same file
+			Check(Schedule.TaskName(a).StartsWith(Brand.Name + " - ", StringComparison.Ordinal), "a new task carries the new name");
+			Equal(Schedule.TaskName(a)[Brand.Name.Length..], Schedule.TaskName(a, Brand.OldNames[0])[Brand.OldNames[0].Length..],
+				"the old-name task of the same setup file differs only in the name");
 		}
 		// Windows itself, only where asked (it adds a real scheduled task, removed at once): a harmless command, a year ahead
-		if (Environment.GetEnvironmentVariable("MO2TR_SCHEDULE_PROBE") != "1") {
+		if (Environment.GetEnvironmentVariable("PUP_SCHEDULE_PROBE") != "1") {
 			return;
 		}
-		const string name = "MO2 Tool Runner - zz offline test";
+		const string name = "Patcher Unification Project - zz offline test";
 		var when = new Schedule.RunTime(DateTime.Now.Date.AddYears(1).AddHours(3), true);
 		try {
 			Schedule.Register(name, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit", when));
@@ -2181,8 +2175,8 @@ public static class Program
 		}
 		Equal(null, Schedule.ReadTask(name), "and it is gone again");
 		// a task whose setup file is gone is found and removed; a cmd task of ours with no setup is left alone
-		const string orphan = "MO2 Tool Runner - zz offline orphan";
-		var missing = Path.Combine(Path.GetTempPath(), "MO2 Tool Runner missing " + Guid.NewGuid().ToString("N") + ".json");
+		const string orphan = "Patcher Unification Project - zz offline orphan";
+		var missing = Path.Combine(Path.GetTempPath(), "Patcher Unification Project missing " + Guid.NewGuid().ToString("N") + ".json");
 		try {
 			Schedule.Register(orphan, Schedule.TaskXml(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"run --setup \"{missing}\"", when));
 			// only the test's own task is looked at - a task of the player's is never touched by a test

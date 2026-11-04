@@ -101,7 +101,7 @@ public sealed class Profile(Mo2Instance a_mo2, string a_name, Func<bool> a_mo2Ru
 		var d = Mo2.ModDir(a_mod);
 		if (!Directory.Exists(d)) {
 			Directory.CreateDirectory(d);
-			Files.WriteAtomic(Path.Combine(d, "meta.ini"), "[General]\r\nmodid=0\r\nversion=\r\ncomments=made by MO2 Tool Runner\r\n");
+			Files.WriteAtomic(Path.Combine(d, "meta.ini"), "[General]\r\nmodid=0\r\nversion=\r\ncomments=made by Patcher Unification Project\r\n");
 			a_log?.Detail($"made the output mod {a_mod}");
 		}
 		if (!States().ContainsKey(a_mod)) {

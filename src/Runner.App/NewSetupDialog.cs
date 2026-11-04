@@ -4,8 +4,7 @@ using Microsoft.Win32;
 
 namespace ToolRunner.App;
 
-// A new setup: Mod Organizer's program, its profile, a name - the steps are found from MO2's Executables list. Or an old
-// MO2 Updater profile file brought over as it is (put in the researched order).
+// A new setup: Mod Organizer's program, its profile, a name - the steps are found from MO2's Executables list.
 public static class NewSetupDialog
 {
 	public static string? Run(Window a_owner)
@@ -116,7 +115,6 @@ public static class NewSetupDialog
 		}
 
 		var create = new Button { Content = "_Make the setup", Style = (Style)a_owner.FindResource("Primary"), Margin = new Thickness(0, 0, 10, 0), IsDefault = true };
-		var import = new Button { Content = "Bring over an MO2 Updater profile ...", Style = (Style)a_owner.FindResource("Ghost"), Margin = new Thickness(0, 0, 10, 0) };
 		var cancel = new Button { Content = "Cancel", Style = (Style)a_owner.FindResource("Ghost"), IsCancel = true };
 		create.Click += async (_, _) => {
 			if (profile.SelectedItem is not string p || name.Text.Trim() == "") {
@@ -145,28 +143,8 @@ public static class NewSetupDialog
 				create.IsEnabled = true;
 			}
 		};
-		import.Click += (_, _) => {
-			var d = new OpenFileDialog { Filter = "MO2 Updater profile|*.json", Title = "An MO2 Updater profile file" };
-			if (d.ShowDialog(w) != true) {
-				return;
-			}
-			try {
-				var s = Setup.Load(d.FileName);
-				var file = Path.Combine(AppPaths.Setups, Safe(s.Name) + ".json");
-				if (File.Exists(file) && !Ask.Show(w, "Replace that setup?", $"A setup called {s.Name} exists. Replace it?", "Replace", "Keep it")) {
-					return;
-				}
-				s.Save(file);
-				made = file;
-				w.Close();
-			} catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException or UnauthorizedAccessException) {
-				note.Text = "Not brought over: " + e.Message;
-				note.Foreground = Brushes2.Get("Bad");
-			}
-		};
 		var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 18, 0, 0) };
 		bar.Children.Add(create);
-		bar.Children.Add(import);
 		bar.Children.Add(cancel);
 		stack.Children.Add(bar);
 		w.Content = stack;

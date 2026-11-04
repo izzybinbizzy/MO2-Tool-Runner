@@ -11,7 +11,7 @@ public sealed record RunOutcome(RunState State, string Verdict, string? Folder);
 // its own put-back, put back a step that did not finish, and leave the profile as it was with this run's outputs on.
 public static class Runner
 {
-	public const string MutexName = "Local\\MO2 Tool Runner run";
+	public const string MutexName = "Local\\Patcher Unification Project run";
 
 	public static string RunsDir(string a_dataDir) => Path.Combine(a_dataDir, "Runs");
 
@@ -126,7 +126,7 @@ public static class Runner
 			Setup = setup, Mo2 = mo2, Profile = profile, Control = control, Log = log, Journal = journal, Cancel = cts.Token,
 			BackupFolder = journal.BackupDir, Guide = a_guide?.Invoke(journal) ?? new FileGuide(journal, commands.TakeContinue, commands.ClearContinue),
 		};
-		log.Say($"MO2 Tool Runner - {setup.Name} (profile {setup.Profile}), steps: {string.Join(", ", todo.Select(s => StepCatalog.Name(s.Key)))}");
+		log.Say($"Patcher Unification Project - {setup.Name} (profile {setup.Profile}), steps: {string.Join(", ", todo.Select(s => StepCatalog.Name(s.Key)))}");
 		foreach (var w in check) {
 			log.Warn($"{StepCatalog.Name(w.Step)}: {w.Text}");
 		}
