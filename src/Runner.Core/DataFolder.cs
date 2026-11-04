@@ -36,22 +36,27 @@ public static class DataFolder
 		if ((a_oldRunning ?? OldRunning)()) {
 			return old;
 		}
+		// the mark goes in BEFORE the move and travels with the folder, so a stop at any moment after it leaves a repoint to finish
 		try {
-			Directory.Move(old, now);
+			Files.WriteAtomic(Path.Combine(old, Pending), old);
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 			return old;
 		}
 		try {
-			File.WriteAllText(Path.Combine(now, Pending), old);
+			Directory.Move(old, now);
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-			// the repoint below still runs; only its resume after a crash is lost
+			try {
+				File.Delete(Path.Combine(old, Pending));
+			} catch (Exception e2) when (e2 is IOException or UnauthorizedAccessException) {
+			}
+			return old;
 		}
 		Repoint(now, old);
 		return now;
 	}
 
-	// a copy of the program under an old name is running (by its program file: this version also holds the old-name run lock,
-	// so the lock says nothing about an old copy)
+	// a copy of the program under an old name is running: its program file, or the old-name run lock held without the new-name
+	// one (this version holds both while it runs)
 	static bool OldRunning()
 	{
 		foreach (var n in Brand.OldNames) {
@@ -61,7 +66,15 @@ public static class DataFolder
 				return true;
 			}
 		}
-		return false;
+		static bool Open(string a_name)
+		{
+			if (Mutex.TryOpenExisting(a_name, out var m)) {
+				m.Dispose();
+				return true;
+			}
+			return false;
+		}
+		return !Open(Runner.MutexName) && Brand.OldNames.Any(n => Open("Local\\" + n + " run"));
 	}
 
 	static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -72,15 +85,24 @@ public static class DataFolder
 	{
 		var from = Path.TrimEndingDirectorySeparator(Path.GetFullPath(a_old));
 		var to = Path.TrimEndingDirectorySeparator(Path.GetFullPath(a_now));
+		var failed = false;
 		foreach (var f in Directory.EnumerateFiles(a_now, "*.json", SearchOption.AllDirectories)) {
 			try {
 				var node = JsonNode.Parse(Files.ReadSharedText(f));
 				if (node != null && Swap(node, from, to)) {
 					Files.WriteAtomic(f, node.ToJsonString(WriteOptions));
 				}
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
-				// a file that does not read keeps its old paths; the pre-check names a folder that is gone
+			} catch (IOException) {
+				// locked or unreadable now: the mark stays, the next start tries it again
+				failed = true;
+			} catch (UnauthorizedAccessException) {
+				failed = true;
+			} catch (JsonException) {
+				// not JSON this can read: nothing in it to repoint, and trying again would never change that
 			}
+		}
+		if (failed) {
+			return;
 		}
 		try {
 			File.Delete(Path.Combine(a_now, Pending));

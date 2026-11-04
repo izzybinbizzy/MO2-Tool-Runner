@@ -329,9 +329,10 @@ public sealed class ShaderStep : IStep
 
 	static string StampFile(Mo2Instance a_mo2, Cache a_c, string a_brand = Brand.Name) => Path.Combine(a_mo2.ModDir(a_c.OutputMod), a_brand + " cache.json");
 
-	// the stamp written under the new name, else one an older version wrote under the old name
+	// the newest stamp under any name the program had (an older copy may have rebuilt the cache after this one did)
 	static string ReadStampFile(Mo2Instance a_mo2, Cache a_c) =>
-		Brand.AllNames.Select(b => StampFile(a_mo2, a_c, b)).FirstOrDefault(File.Exists) ?? StampFile(a_mo2, a_c);
+		Brand.AllNames.Select(b => StampFile(a_mo2, a_c, b)).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc)
+			.FirstOrDefault() ?? StampFile(a_mo2, a_c);
 
 	public static bool UpToDate(Mo2Instance a_mo2, Cache a_c, Profile? a_profile = null, IReadOnlyCollection<string>? a_otherCaches = null)
 	{

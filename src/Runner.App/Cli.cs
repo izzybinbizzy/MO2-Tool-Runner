@@ -23,6 +23,12 @@ public static class Cli
 	public static int Execute(string[] a_args)
 	{
 		ConsoleAttach.ToParent();
+		// runs at a set time are gone: a task an older version left is cleared on the command line too (a player who never
+		// opens the window), before the command itself
+		try {
+			Schedule.RemoveLeftovers();
+		} catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) {
+		}
 		try {
 			return a_args[0] switch {
 				"run" => Run(a_args),
@@ -49,7 +55,7 @@ public static class Cli
 
 	static int Help()
 	{
-		Console.WriteLine("Patcher Unification Project - run | check | preview | lod | restore | stop | stop-after | updates | changes   (see the readme)");
+		Console.WriteLine("Patcher Unification Project - run | check | preview | lod | restore | stop | stop-after | updates | changes | import   (see the readme)");
 		return 0;
 	}
 
@@ -169,7 +175,7 @@ public static class Cli
 	// a setup file from elsewhere brought into the Setups folder: import --file <setup json> [--name <setup name>]
 	static int Import(string[] a_args)
 	{
-		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <profile file> is needed");
+		var file = Opt(a_args, "--file") ?? throw new ArgumentException("--file <setup file> is needed");
 		var s = Setup.Load(Path.GetFullPath(file));
 		if (s.Root["steps"] is not System.Text.Json.Nodes.JsonArray || s.Root["mo2"] is not System.Text.Json.Nodes.JsonObject) {
 			Console.WriteLine("not a setup file (no steps list, no Mod Organizer): " + file);

@@ -37,7 +37,7 @@
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
           <Image Source="{DynamicResource Logo}" Width="30" Height="30" Margin="0,0,12,0" AutomationProperties.Name="Patcher Unification Project"/>
-          <TextBlock Text="MO2 TOOL RUNNER" Style="{StaticResource H1}" VerticalAlignment="Center"/>
+          <TextBlock Text="PATCHER UNIFICATION PROJECT" Style="{StaticResource H1}" VerticalAlignment="Center"/>
         </StackPanel>
         <DockPanel Grid.Column="1" VerticalAlignment="Center" Margin="28,0,16,0">
           <TextBlock DockPanel.Dock="Left" Text="Setup" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"/>

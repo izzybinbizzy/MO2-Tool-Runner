@@ -52,20 +52,26 @@ public static class Runner
 	public static IDisposable? HoldIfFree()
 	{
 		var held = new List<Mutex>();
-		foreach (var name in MutexNames) {
-			var m = new Mutex(false, name, out _);
-			bool got;
-			try {
-				got = m.WaitOne(0);
-			} catch (AbandonedMutexException) {
-				got = true;
+		try {
+			foreach (var name in MutexNames) {
+				var m = new Mutex(false, name, out _);
+				bool got;
+				try {
+					got = m.WaitOne(0);
+				} catch (AbandonedMutexException) {
+					got = true;
+				}
+				if (!got) {
+					m.Dispose();
+					new Held(held).Dispose();
+					return null;
+				}
+				held.Add(m);
 			}
-			if (!got) {
-				m.Dispose();
-				new Held(held).Dispose();
-				return null;
-			}
-			held.Add(m);
+		} catch {
+			// a lock that would not open (access, a bad name) never leaves the ones already taken held
+			new Held(held).Dispose();
+			throw;
 		}
 		return new Held(held);
 	}

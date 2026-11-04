@@ -75,6 +75,7 @@ Shader caches, DynDOLOD's clean save, Wrye Bash (guided), Synthesis, SnowFixer, 
 "Patcher Unification Project.exe" restore [--setup <file>]
 "Patcher Unification Project.exe" stop | stop-after
 "Patcher Unification Project.exe" changes --setup <file> [--look]
+"Patcher Unification Project.exe" import --file <setup file> [--name <name>]
 ```
 
 | exit code | meaning |

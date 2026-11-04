@@ -10,7 +10,15 @@ public static class Schedule
 {
 	// a task name an older version gave a setup's timed run
 	public static bool IsOurs(string a_task) =>
-		Brand.AllNames.Any(b => a_task.TrimStart('\\').StartsWith(b + " - ", StringComparison.Ordinal));
+		Brand.AllNames.Any(b => a_task.TrimStart('\\').StartsWith(b + " - ", StringComparison.OrdinalIgnoreCase));
+
+	// a task definition that starts this program (its file named after the program under any of its names) - so a task of the
+	// player's own that only shares the name is never removed
+	public static bool StartsOurs(string a_xml)
+	{
+		var m = System.Text.RegularExpressions.Regex.Match(a_xml, @"<Command>\s*""?(?<c>[^<""]+)""?\s*</Command>");
+		return m.Success && Brand.AllNames.Any(b => Path.GetFileName(m.Groups["c"].Value.Trim()).Equals(b + ".exe", StringComparison.OrdinalIgnoreCase));
+	}
 
 	// every such task removed -> their names (only those a_only lets through, for the test)
 	public static List<string> RemoveLeftovers(Func<string, bool>? a_only = null)
@@ -23,7 +31,8 @@ public static class Schedule
 		var names = csv.Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith('"') && l.IndexOf('"', 1) > 1)
 			.Select(l => l[1..l.IndexOf('"', 1)].TrimStart('\\')).Distinct().Where(IsOurs).Where(n => a_only == null || a_only(n)).ToList();
 		foreach (var n in names) {
-			if (Schtasks("/Delete", "/TN", n, "/F").Code == 0) {
+			var (c, xml) = Schtasks("/Query", "/TN", n, "/XML");
+			if (c == 0 && StartsOurs(xml) && Schtasks("/Delete", "/TN", n, "/F").Code == 0) {
 				removed.Add(n);
 			}
 		}
@@ -31,13 +40,13 @@ public static class Schedule
 	}
 
 	// a harmless task under a given name (the test's own, a year ahead), so RemoveLeftovers can be proven against Windows itself
-	public static bool AddProbe(string a_name)
+	public static bool AddProbe(string a_name, string a_command = @"C:\Test Folder\MO2 Tool Runner.exe")
 	{
 		// as XML: nothing in it depends on the Windows language (a date typed on the command line does)
 		var at = DateTime.Now.Date.AddYears(1).AddHours(3).ToString("yyyy-MM-dd'T'HH:mm:ss", InvariantCulture);
 		var xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
 		          $"<Triggers><TimeTrigger><StartBoundary>{at}</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>" +
-		          "<Actions><Exec><Command>cmd.exe</Command><Arguments>/c exit</Arguments></Exec></Actions></Task>";
+		          $"<Actions><Exec><Command>{System.Security.SecurityElement.Escape(a_command)}</Command><Arguments>/c exit</Arguments></Exec></Actions></Task>";
 		var file = Path.Combine(Path.GetTempPath(), Brand.Name + " probe " + Guid.NewGuid().ToString("N") + ".xml");
 		File.WriteAllText(file, xml, Encoding.Unicode);
 		try {
@@ -48,6 +57,9 @@ public static class Schedule
 	}
 
 	public static bool Exists(string a_name) => Schtasks("/Query", "/TN", a_name).Code == 0;
+
+	// the test's own task removed whatever it runs
+	public static void DeleteProbe(string a_name) => Schtasks("/Delete", "/TN", a_name, "/F");
 
 	// schtasks writes in the console's code page, not UTF-8 (a localized Windows' messages came out garbled - the fourth review, L6)
 	static Encoding ConsoleText()

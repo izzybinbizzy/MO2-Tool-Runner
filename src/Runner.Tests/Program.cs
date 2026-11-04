@@ -2122,17 +2122,48 @@ public static class Program
 		Check(Schedule.IsOurs("\\MO2 Tool Runner - Bottled Shaders 1A2B3C"), "one made under the old name");
 		Check(!Schedule.IsOurs("MicrosoftEdgeUpdateTaskMachineCore"), "anyone else's task");
 		Check(!Schedule.IsOurs("MO2 Tool Runner"), "only the name followed by \" - \"");
-		// Windows itself, only where asked (a harmless task a year ahead, removed at once)
+		Check(Schedule.IsOurs("mo2 tool runner - Bottled 1A2B3C"), "any case");
+		Check(Schedule.StartsOurs("<Exec><Command>\"C:\\Some Folder\\MO2 Tool Runner.exe\"</Command></Exec>"), "a task starting the old program");
+		Check(Schedule.StartsOurs("<Exec><Command>C:\\x\\Patcher Unification Project.exe</Command></Exec>"), "or the new one");
+		Check(!Schedule.StartsOurs("<Exec><Command>cmd.exe</Command></Exec>"), "a task of the player's own that only shares the name");
+		// Windows itself, only where asked (harmless tasks a year ahead, removed at once)
 		if (Environment.GetEnvironmentVariable("PUP_SCHEDULE_PROBE") != "1") {
 			return;
 		}
-		const string probe = "MO2 Tool Runner - zz offline leftover";
+		const string probe = "MO2 Tool Runner - zz offline leftover", theirs = "MO2 Tool Runner - zz offline not ours";
 		try {
 			Check(Schedule.AddProbe(probe) && Schedule.Exists(probe), "a leftover task made");
-			Check(Schedule.RemoveLeftovers(n => n == probe).SequenceEqual([probe]), "it is removed");
-			Check(!Schedule.Exists(probe), "and Windows no longer has it");
+			Check(Schedule.AddProbe(theirs, "cmd.exe") && Schedule.Exists(theirs), "a same-named task of the player's made");
+			Check(Schedule.RemoveLeftovers(n => n == probe || n == theirs).SequenceEqual([probe]), "only ours is removed");
+			Check(!Schedule.Exists(probe) && Schedule.Exists(theirs), "Windows no longer has ours, still has theirs");
 		} finally {
-			Schedule.RemoveLeftovers(n => n == probe);
+			Schedule.DeleteProbe(probe);
+			Schedule.DeleteProbe(theirs);
+		}
+	}
+
+	// the rename: the takeover's own check for an old copy, as the program runs it (no stand-in): a running program file under
+	// the old name keeps the old folder where it is; once it ends, the folder is taken over
+	static void T_DataFolderWaitsForARunningOldCopy()
+	{
+		var parent = Path.Combine(Path.GetTempPath(), "PUP old copy " + Guid.NewGuid().ToString("N"));
+		var fake = Path.Combine(parent, "bin", Brand.OldNames[0] + ".exe");
+		Directory.CreateDirectory(Path.Combine(parent, Brand.OldNames[0] + " Data", "Setups"));
+		Directory.CreateDirectory(Path.GetDirectoryName(fake)!);
+		File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), fake);
+		using var p = Process.Start(new ProcessStartInfo(fake, "-n 30 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true })!;
+		try {
+			Equal(Path.Combine(parent, Brand.OldNames[0] + " Data"), DataFolder.Adopt(parent, " Data"), "an old copy runs: its folder is used");
+			Check(!Directory.Exists(Path.Combine(parent, Brand.Name + " Data")), "nothing moved");
+			p.Kill();
+			p.WaitForExit();
+			Equal(Path.Combine(parent, Brand.Name + " Data"), DataFolder.Adopt(parent, " Data"), "it ended: the folder is taken over");
+		} finally {
+			if (!p.HasExited) {
+				p.Kill();
+			}
+			p.WaitForExit();
+			Directory.Delete(parent, true);
 		}
 	}
 
