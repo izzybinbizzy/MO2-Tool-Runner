@@ -2611,4 +2611,43 @@ public static class Program
 		Check(p.IsOn("Base Mod"), "and put back");
 		Equal(7, SystemChecks.CountPlugins(p).Full, "its plugins counted");
 	}
+
+	// ------------------------------------------------------------------ after the run: sleep or shut down (his checklist 461)
+	static void T_PowerAfterDecidesAndCanBeCancelled()
+	{
+		using var f = new FakeMo2();
+		var setup = f.WriteSetup(("pandora", new JsonObject()));
+		Equal(PowerAfter.Kind.None, PowerAfter.Read(setup), "off unless set");
+		Check(PowerAfter.OnlyFinished(setup), "only after a finished run, unless set");
+		setup.Root["afterRunPower"] = "shutdown";
+		Equal(PowerAfter.Kind.Shutdown, PowerAfter.Read(setup), "shut down");
+		Equal(PowerAfter.Kind.Shutdown, PowerAfter.Decide(PowerAfter.Kind.Shutdown, true, RunState.Finished), "a finished run");
+		Equal(PowerAfter.Kind.None, PowerAfter.Decide(PowerAfter.Kind.Shutdown, true, RunState.Failed), "a failed run keeps the PC on");
+		Equal(PowerAfter.Kind.Sleep, PowerAfter.Decide(PowerAfter.Kind.Sleep, false, RunState.Failed), "unless the setup says any run");
+		Equal(PowerAfter.Kind.None, PowerAfter.Decide(PowerAfter.Kind.Sleep, false, RunState.Stopped), "a run the player stopped never does");
+		// the notice: the window sees it, the action comes after it; a cancel stops it
+		var done = new List<PowerAfter.Kind>();
+		var waits = 0;
+		Check(PowerAfter.Carry(PowerAfter.Kind.Sleep, f.Data, RunLog.Null, done.Add, _ => {
+			if (waits++ == 0) {
+				Check(PowerAfter.Look(f.Data) is { Action: "Sleep" }, "the notice is there for the window");
+			}
+		}), "done after the notice");
+		Equal(1, done.Count, "the action once");
+		Equal(60, waits, "a minute of notice, a second at a time");
+		Equal<PowerAfter.Pending?>(null, PowerAfter.Look(f.Data), "the notice is gone");
+		done.Clear();
+		waits = 0;
+		Check(!PowerAfter.Carry(PowerAfter.Kind.Shutdown, f.Data, RunLog.Null, done.Add, _ => {
+			if (++waits == 10) {
+				PowerAfter.Cancel(f.Data);
+			}
+		}), "cancelled");
+		Equal(0, done.Count, "nothing done");
+		Check(!File.Exists(PowerAfter.CancelFile(f.Data)) && !File.Exists(PowerAfter.File(f.Data)), "nothing left behind");
+		// a cancel left from before never stops the next one
+		PowerAfter.Cancel(f.Data);
+		Check(PowerAfter.Carry(PowerAfter.Kind.Sleep, f.Data, RunLog.Null, done.Add, _ => { }), "an old cancel is not this one's");
+		Check(!PowerAfter.Carry(PowerAfter.Kind.None, f.Data, RunLog.Null, done.Add, _ => throw new InvalidOperationException("no wait for nothing")), "none does nothing");
+	}
 }

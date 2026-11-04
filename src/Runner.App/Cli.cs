@@ -68,6 +68,10 @@ public static class Cli
 		var req = new RunRequest(setup, AppPaths.Data, Opt(a_args, "--only"), Opt(a_args, "--from"), Opt(a_args, "--until"));
 		var outcome = Runner.Run(req);
 		Console.WriteLine(outcome.Verdict);
+		// a run that was refused (nothing changed) never shuts the PC down
+		if (outcome.Folder != null) {
+			PowerAfterRun(setup, outcome.State);
+		}
 		if (outcome.Folder == null) {
 			// refused before anything changed: the window reads the reason here
 			try {
@@ -81,6 +85,23 @@ public static class Cli
 			RunState.Stopped => 2,
 			_ => 1,
 		};
+	}
+
+	// the setup's "after the run" power setting, with its minute of notice; a setup that does not read is left alone
+	static void PowerAfterRun(string a_setupFile, RunState a_state)
+	{
+		try {
+			var s = Setup.Load(a_setupFile);
+			var what = PowerAfter.Decide(PowerAfter.Read(s), PowerAfter.OnlyFinished(s), a_state);
+			if (what != PowerAfter.Kind.None) {
+				var logDir = Path.Combine(AppPaths.Runs, "after run power");
+				Directory.CreateDirectory(logDir);
+				using var log = new RunLog(logDir);
+				PowerAfter.Carry(what, AppPaths.Data, log);
+			}
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) {
+			Console.WriteLine("the after-run power setting was not read: " + e.Message);
+		}
 	}
 
 	static int Check(string[] a_args)

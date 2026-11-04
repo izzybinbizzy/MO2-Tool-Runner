@@ -54,8 +54,15 @@
       </Grid>
     </Border>
 
-    <!-- banners: an interrupted run; a message -->
+    <!-- banners: the PC about to sleep or shut down; an interrupted run; a message -->
     <StackPanel Grid.Row="1">
+      <Border Background="{DynamicResource BannerBad}" BorderBrush="{DynamicResource Warn}" BorderThickness="0,0,0,1" Padding="20,10"
+              Visibility="{Binding PowerText, Converter={StaticResource NotEmpty}}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Content="_Cancel - keep the PC on" Style="{StaticResource Primary}" Command="{Binding CancelPowerCommand}"/>
+          <TextBlock Text="{Binding PowerText}" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.LiveSetting="Assertive"/>
+        </DockPanel>
+      </Border>
       <Border Background="{DynamicResource BannerBad}" BorderBrush="{DynamicResource Bad}" BorderThickness="0,0,0,1" Padding="20,10"
               Visibility="{Binding Interrupted, Converter={StaticResource NotEmpty}}">
         <DockPanel>

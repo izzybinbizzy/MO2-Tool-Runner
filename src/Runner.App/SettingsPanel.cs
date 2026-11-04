@@ -165,6 +165,13 @@ public static class SettingsPanel
 		Field(stack, apply, "Alert: Windows notification", alerts, "notification", JsonValueKind.True);
 		Field(stack, apply, "Alert: sound", alerts, "sound", JsonValueKind.True);
 		Field(stack, apply, "Alert: flash the taskbar button", alerts, "flash", JsonValueKind.True);
+		// his checklist 461 / 463: both optional, off unless set
+		Choice(stack, apply, "After the run, the PC", work, "afterRunPower", [("none", "stays on"), ("sleep", "goes to sleep (a minute's notice, cancel in this window)"),
+			("shutdown", "shuts down (a minute's notice, cancel in this window)")]);
+		work["afterRunPowerOnlyFinished"] ??= true;
+		Field(stack, apply, "Only after a run that finished (a failed run keeps the PC on, so you see why)", work, "afterRunPowerOnlyFinished", JsonValueKind.True);
+		work["guidedReminderMin"] ??= 0;
+		Field(stack, apply, "Remind me while a step waits for me in the game, every (minutes; 0 = no reminders)", work, "guidedReminderMin", JsonValueKind.Number);
 		// his checklist 270 ("all 3."): the preview before a run, and only the last few runs' backups kept
 		work["previewBeforeRun"] ??= true;
 		work["keepBackups"] ??= 5;

@@ -75,6 +75,9 @@ public sealed partial class MainViewModel : Observable
 	public Cmd ContinueCommand => field ??= new(Continue);
 	public Cmd RestoreCommand => field ??= new(() => _ = RunRestore());
 	public Cmd CheckCommand => field ??= new(() => _ = RunCheck());
+	public Cmd CancelPowerCommand => field ??= new(CancelPower);
+	// the PC about to sleep or shut down after a run ("" = nothing pending): the banner with its Cancel button
+	public string PowerText { get; set => Set(ref field, value); } = "";
 	Task RunRestore() => Restore();
 	Task RunCheck() => Check();
 
@@ -228,6 +231,13 @@ public sealed partial class MainViewModel : Observable
 	{
 		Mo2Open = a_mo2;
 		GameRunning = a_game;
+		var power = PowerAfter.Look(AppPaths.Data);
+		var newPower = power == null ? "" :
+			$"The PC will {(power.Action == nameof(PowerAfter.Kind.Sleep) ? "go to sleep" : "shut down")} in {Math.Max(0, (int)(power.At - DateTime.Now).TotalSeconds)} s, as this setup asks after a run.";
+		if (newPower != "" && PowerText == "") {
+			Alert?.Invoke("The PC is about to " + (power!.Action == nameof(PowerAfter.Kind.Sleep) ? "sleep" : "shut down"), newPower);
+		}
+		PowerText = newPower;
 		var runs = a_runs;
 		FollowStart(runs);
 		var active = Engine.Active(runs);
@@ -283,12 +293,32 @@ public sealed partial class MainViewModel : Observable
 		}
 		if (Waiting != "" && Waiting != _lastWaiting) {
 			Alert?.Invoke("Your turn in the game", Waiting);
+			_remindedAt = DateTime.Now;
+		} else if (Waiting != "" && ReminderDue(Setup.Int(Setup?.Root ?? [], "guidedReminderMin") ?? 0, _remindedAt, DateTime.Now)) {
+			// his checklist 463: the same step still waits - said again, every so many minutes as the setup asks
+			Alert?.Invoke("Still your turn in the game", Waiting);
+			_remindedAt = DateTime.Now;
 		}
 		_lastWaiting = Waiting;
 		_lastState = _run.State;
 	}
 
 	static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+	DateTime _remindedAt;
+
+	// a reminder is due once every a_everyMin minutes (0 or less = never)
+	public static bool ReminderDue(int a_everyMin, DateTime a_last, DateTime a_now) => a_everyMin > 0 && a_now - a_last >= TimeSpan.FromMinutes(a_everyMin);
+
+	void CancelPower()
+	{
+		try {
+			PowerAfter.Cancel(AppPaths.Data);
+			Say("Cancelled - the PC stays on.", "good");
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+			Say("Could not cancel: " + e.Message, "bad");
+		}
+	}
 
 	// the watched run's newest record (the cache re-reads it only when its file changed)
 	static Journal Fresh(List<Journal> a_runs, Journal a_j) =>
