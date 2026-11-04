@@ -202,7 +202,8 @@ public static class SettingsPanel
 					// the theme in use stays listed beside the built-in one, so the picker shows what is on screen and the built-in
 					// look can still be picked (CodeRabbit on PR #4)
 					var keep = new List<(string Name, string? File)> { (Theme.Default, null) };
-					if (Theme.Current != Theme.Default) {
+					keep.AddRange(Theme.BuiltInNames.Select(b => (b, (string?)null)));
+					if (Theme.Current != Theme.Default && !Theme.BuiltInNames.Contains(Theme.Current)) {
 						keep.Add((Theme.Current, null));
 					}
 					return (keep, "The Themes folder could not be read: " + e.Message);
@@ -217,6 +218,14 @@ public static class SettingsPanel
 			filling = false;
 		}
 		FillThemes();
+		// a look changed by Windows (high contrast followed) shows in the picker while Settings is open
+		void OnChanged() => themes.Dispatcher.BeginInvoke(() => {
+			filling = true;
+			themes.SelectedItem = Theme.Current;
+			filling = false;
+		});
+		Theme.Changed += OnChanged;
+		themes.Unloaded += (_, _) => Theme.Changed -= OnChanged;
 		themes.SelectionChanged += async (_, _) => {
 			if (filling || themes.SelectedItem is not string name || name == Theme.Current) {
 				return;
@@ -233,6 +242,20 @@ public static class SettingsPanel
 		themeRow.Children.Add(reload);
 		stack.Children.Add(themeNote);
 		stack.Children.Add(themeRow);
+		// his checklist 473: bigger text for every theme, kept for the next start
+		stack.Children.Add(new TextBlock { Text = "Text size", Foreground = Brushes2.Get("Gold"), Margin = new Thickness(0, 12, 0, 4) });
+		var size = new ComboBox { MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Left, ItemsSource = Theme.TextScales.Select(s => $"{s * 100:0} %").ToList(),
+			SelectedIndex = Math.Max(0, Array.IndexOf(Theme.TextScales, Theme.TextScale)) };
+		System.Windows.Automation.AutomationProperties.SetName(size, "Text size");
+		size.SelectionChanged += (_, _) => {
+			if (size.SelectedIndex >= 0) {
+				Theme.SetTextScale(Theme.TextScales[size.SelectedIndex]);
+			}
+		};
+		stack.Children.Add(size);
+		stack.Children.Add(new TextBlock { Text = "The \"High contrast\" theme takes Windows' own high-contrast colors and is used by itself while Windows has high contrast on " +
+			"and no theme was picked here. \"Color-blind safe\" keeps finished, warning and failed apart by more than red and green. Every state also has its own mark.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
 
 		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
 		Head("TOOL UPDATES");
@@ -451,7 +474,7 @@ public static class SettingsPanel
 			t.TextChanged += (_, _) => Changed();
 			edit = t;
 		} else if (kind is JsonValueKind.Object or JsonValueKind.Array) {
-			var t = new TextBox { Text = cur?.ToJsonString(Pretty) ?? "", AcceptsReturn = true, MinHeight = 80, FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 12 };
+			var t = new TextBox { Text = cur?.ToJsonString(Pretty) ?? "", AcceptsReturn = true, MinHeight = 80, FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = (double)Application.Current.FindResource("SizeLog") };
 			a_apply.Add(() => {
 				try {
 					a_obj[a_key] = JsonNode.Parse(t.Text);

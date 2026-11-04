@@ -17,6 +17,10 @@
     <KeyBinding Gesture="Ctrl+Return" Command="{Binding StartCommand}"/>
     <KeyBinding Gesture="F5" Command="{Binding CheckCommand}"/>
   </Window.InputBindings>
+  <!-- the run's progress on the taskbar button: seen while the window is behind the game or minimised -->
+  <Window.TaskbarItemInfo>
+    <TaskbarItemInfo ProgressState="{Binding TaskbarState}" ProgressValue="{Binding TaskbarValue}"/>
+  </Window.TaskbarItemInfo>
 
   <!-- its own background: the Fluent theme may make the window itself see-through (Mica) -->
   <Grid Background="{DynamicResource Bg}">
@@ -140,7 +144,7 @@
                   <TextBlock Text="{Binding Elapsed}" Foreground="{DynamicResource GoldLight}" Margin="0,0,8,0"/>
                   <TextBlock Text="{Binding Usual}" Style="{StaticResource MutedText}" ToolTip="its usual time"/>
                 </StackPanel>
-                <TextBlock Grid.Column="4" Text="{Binding Glyph}" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="14"
+                <TextBlock Grid.Column="4" Text="{Binding Glyph}" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="{DynamicResource SizeBody}"
                            Foreground="{Binding State, Converter={StaticResource StateBrush}}"/>
               </Grid>
             </DataTemplate>

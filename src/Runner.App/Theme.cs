@@ -16,6 +16,115 @@ public static class Theme
 
 	public static string Folder => Path.Combine(AppPaths.Data, "Themes");
 	static string ChoiceFile => Path.Combine(AppPaths.Data, "theme.txt");
+	static string TextSizeFile => Path.Combine(AppPaths.Data, "text size.txt");
+
+	// the looks built into the program beside the default (his checklist 473): Windows' own high-contrast colors, taken from
+	// Windows each time it is applied, and a palette whose good / warning / bad states stay apart for color-blind eyes
+	// (blue / yellow / orange, the Okabe-Ito set); every state keeps its own glyph as well
+	public const string HighContrast = "High contrast", ColorBlind = "Color-blind safe";
+
+	static readonly string[] BuiltIns = [HighContrast, ColorBlind];
+
+	public static IReadOnlyList<string> BuiltInNames => BuiltIns;
+
+	static string Hex(Color a_c) => $"#{a_c.R:X2}{a_c.G:X2}{a_c.B:X2}";
+
+	static JsonObject Colors(params (string Key, string Value)[] a_values)
+	{
+		var o = new JsonObject();
+		foreach (var (k, v) in a_values) {
+			o[k] = new JsonObject { ["value"] = v };
+		}
+		return o;
+	}
+
+	static JsonObject BuiltIn(string a_name)
+	{
+		if (a_name == ColorBlind) {
+			return new JsonObject { ["colors"] = Colors(("Good", "#56B4E9"), ("Warn", "#F0E442"), ("Bad", "#D55E00"), ("BannerBad", "#3A2410")) };
+		}
+		var win = Hex(SystemColors.WindowColor);
+		var text = Hex(SystemColors.WindowTextColor);
+		var high = Hex(SystemColors.HighlightColor);
+		var onHigh = Hex(SystemColors.HighlightTextColor);
+		var w = SystemColors.WindowColor;
+		var dark = 0.2126 * w.R + 0.7152 * w.G + 0.0722 * w.B < 128;
+		return new JsonObject {
+			["windowsMode"] = dark ? "Dark" : "Light",
+			["colors"] = Colors(("Bg", win), ("Panel", win), ("Panel2", win), ("Line", text), ("Accent", high), ("AccentLight", text), ("AccentDim", text),
+				("Text", text), ("Muted", text), ("Good", text), ("Warn", text), ("Bad", text), ("OnAccent", onHigh), ("HoverFill", win), ("BannerBad", win),
+				("GuidedFill", win), ("Shade", "#99000000")),
+			["highContrastPairs"] = true,
+			["gradients"] = new JsonObject { ["PrimaryAndProgress"] = new JsonObject { ["stops"] = new JsonArray(
+				new JsonObject { ["color"] = high, ["at"] = 0.0 }, new JsonObject { ["color"] = high, ["at"] = 1.0 }) } },
+			["windowsAccent"] = new JsonObject { ["Light3"] = high, ["Light2"] = high, ["Light1"] = high, ["Base"] = high, ["Dark1"] = high, ["Dark2"] = high, ["Dark3"] = high },
+		};
+	}
+
+	// the text size, a share of the theme's own sizes (1 = as the theme has them)
+	public static double TextScale { get; private set; } = 1;
+
+	public static readonly double[] TextScales = [1, 1.15, 1.3, 1.5];
+
+	public static void SetTextScale(double a_scale)
+	{
+		TextScale = TextScales.Contains(a_scale) ? a_scale : 1;
+		try {
+			Files.WriteAtomic(TextSizeFile, TextScale.ToString(InvariantCulture));
+		} catch (IOException) {
+		} catch (UnauthorizedAccessException) {
+		}
+		ApplyScale();
+	}
+
+	// the "Size..." values as the theme set them (before the text size), taken each time a theme is applied
+	static Dictionary<string, double> s_sizes = [];
+
+	static void TakeSizes()
+	{
+		var res = Application.Current.Resources;
+		s_sizes = res.Keys.OfType<string>().Where(k => k.StartsWith("Size", StringComparison.Ordinal) && res[k] is double).ToDictionary(k => k, k => (double)res[k]);
+	}
+
+	// every "Size..." value the theme set, times the text size
+	static void ApplyScale()
+	{
+		var res = Application.Current.Resources;
+		foreach (var (k, d) in s_sizes) {
+			res[k] = Math.Round(d * TextScale, 1);
+		}
+	}
+
+	// Windows' high contrast switched on or off while the window is open: a player who never picked a theme follows it
+	static bool s_followHighContrast;
+
+	// Windows' colors changed (high contrast on or off, or another high-contrast theme): once WPF has taken Windows' new colors
+	// (a low-priority turn after the change), a player who never picked a theme follows high contrast, and the High contrast
+	// look takes the new colors. Nothing here may escape: it runs on the window's thread.
+	static void FollowHighContrast()
+	{
+		Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, e) => {
+			if (e.Category is not (Microsoft.Win32.UserPreferenceCategory.Color or Microsoft.Win32.UserPreferenceCategory.Accessibility or
+			    Microsoft.Win32.UserPreferenceCategory.General)) {
+				return;
+			}
+			Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => {
+				try {
+					if (s_followHighContrast && (SystemParameters.HighContrast ? Current != HighContrast : Current == HighContrast)) {
+						Apply(SystemParameters.HighContrast ? HighContrast : Default, false);
+					} else if (Current == HighContrast) {
+						Apply(HighContrast, false);
+					}
+					Changed?.Invoke();
+				} catch (Exception ex) when (ex is not OutOfMemoryException) {
+					Reset();
+				}
+			});
+		};
+	}
+
+	// the look changed without the player picking it (Settings shows the new one)
+	public static event Action? Changed;
 
 	// the template's colour names -> the window's resource keys (a brush, and the same name + "Color")
 	static readonly Dictionary<string, string> ColorKeys = new(StringComparer.Ordinal) {
@@ -67,6 +176,7 @@ public static class Theme
 	public static List<(string Name, string? File)> List()
 	{
 		var outList = new List<(string, string?)> { (Default, null) };
+		outList.AddRange(BuiltIns.Select(b => (b, (string?)null)));
 		if (!Directory.Exists(Folder)) {
 			return outList;
 		}
@@ -77,7 +187,9 @@ public static class Theme
 			try {
 				var o = JsonNode.Parse(Files.ReadSharedText(f)) as JsonObject;
 				var name = (o?["name"] as JsonObject)?["value"]?.ToString() ?? o?["name"]?.ToString();
-				outList.Add((string.IsNullOrWhiteSpace(name) || name == Default ? Path.GetFileNameWithoutExtension(f) : name, f));
+				// a theme named like a built-in look (by its name or its file name) gets "(file)" added, so both can be picked
+				var shown = string.IsNullOrWhiteSpace(name) || name == Default || BuiltIns.Contains(name) ? Path.GetFileNameWithoutExtension(f) : name;
+				outList.Add((shown == Default || BuiltIns.Contains(shown) ? shown + " (file)" : shown, f));
 			} catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
 				outList.Add((Path.GetFileNameWithoutExtension(f) + " (does not read)", f));
 			}
@@ -90,10 +202,15 @@ public static class Theme
 	public static void ApplySaved()
 	{
 		try {
-			var name = File.Exists(ChoiceFile) ? File.ReadAllText(ChoiceFile).Trim() : Default;
-			if (name != Default) {
-				Apply(name, false);
+			if (File.Exists(TextSizeFile) && double.TryParse(File.ReadAllText(TextSizeFile).Trim(), System.Globalization.NumberStyles.Float, InvariantCulture, out var scale) &&
+			    TextScales.Contains(scale)) {
+				TextScale = scale;
 			}
+			// no theme picked yet: Windows' high contrast, when it is on, is followed (and keeps being followed while unpicked)
+			s_followHighContrast = !File.Exists(ChoiceFile);
+			FollowHighContrast();
+			var name = File.Exists(ChoiceFile) ? File.ReadAllText(ChoiceFile).Trim() : SystemParameters.HighContrast ? HighContrast : Default;
+			Apply(name, false);
 		} catch (Exception e) when (e is not OutOfMemoryException) {
 			Reset();
 		}
@@ -124,6 +241,9 @@ public static class Theme
 
 	static Read ReadTheme(string a_name)
 	{
+		if (BuiltIns.Contains(a_name)) {
+			return new(BuiltIn(a_name), Folder, null);
+		}
 		var file = List().FirstOrDefault(t => t.Name == a_name).File;
 		if (file == null) {
 			return new(null, null, $"no theme called \"{a_name}\" in the Themes folder - the built-in one is used");
@@ -164,7 +284,11 @@ public static class Theme
 			}
 		}
 		Current = a_name;
+		TakeSizes();
+		ApplyScale();
 		if (a_keep) {
+			// a theme the player picked: Windows' high contrast is no longer followed
+			s_followHighContrast = false;
 			try {
 				Files.WriteAtomic(ChoiceFile, a_name);
 			} catch (IOException) {
@@ -264,6 +388,18 @@ public static class Theme
 					a_problems.Add($"shape.{name}: {d} is out of range");
 				}
 			}
+		}
+		if (a_t["highContrastPairs"] is JsonValue hc && hc.TryGetValue<bool>(out var pairs) && pairs) {
+			// a selected or hovered row and the attention banner: Windows' highlight behind its highlight text, as Windows draws them
+			var hb = new SolidColorBrush(SystemColors.HighlightColor);
+			var ht = new SolidColorBrush(SystemColors.HighlightTextColor);
+			hb.Freeze();
+			ht.Freeze();
+			foreach (var k in new[] { "ListBoxItemSelectedBackgroundThemeBrush", "ListBoxItemSelectedBackgroundPointerOverThemeBrush", "ListBoxItemSelectedBackgroundPressedThemeBrush",
+				         "ListBoxItemBackgroundSelectedPressedThemeBrush" }) {
+				res[k] = hb;
+			}
+			res["ListBoxItemSelectedForegroundThemeBrush"] = ht;
 		}
 		if (a_t["glyphs"] is JsonObject glyphs) {
 			foreach (var key in DefaultGlyphs.Keys) {
