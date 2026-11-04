@@ -2487,15 +2487,32 @@ public static class Program
 		Check(!SystemChecks.IsNetworkPath(Path.GetTempPath()), "the temp folder is local");
 		Check(!SystemChecks.IsNetworkPath(@"\\?\" + Path.GetTempPath()), "a long-form local path is local");
 		Check(SystemChecks.IsNetworkPath(@"\\server\share\mods") && SystemChecks.IsNetworkPath(@"\\?\UNC\server\share\mods"), "a share is a network folder");
-		// a probe that throws leaves only its own part out
+		Check(SystemChecks.IsNetworkPath(@"\\.\UNC\server\share\mods"), "the device form of a share is a network folder");
+		Check(!SystemChecks.IsNetworkPath(@"\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\mods"), "a volume named by its id is local");
+		// the same folder under two names is named once; cloud folders are taken once, a folder inside another left out
+		var twice = SystemChecks.TroubleFolders(In(a_mods: @"C:\Users\p\OneDrive\x", a_out: @"C:\Users\p\OneDrive\x\")).Single();
+		Equal(1, twice.Text.Split(@"OneDrive\x").Length - 1, "one folder, one mention");
+		Equal(@"C:\Users\p\Dropbox", string.Join("|", SystemChecks.Roots([@"C:\Users\p\Dropbox\", @"c:\users\p\dropbox", @"C:\Users\p\Dropbox\Sub", ""])), "the cloud roots");
+		// a probe that throws leaves only its own part out (every probe stubbed: the test never reads this PC)
 		var notes = new List<ToolRunner.Steps.Issue>();
 		var was = SystemChecks.ControlledFolderAccess;
+		var clouds = SystemChecks.CloudFolders;
+		var docs = SystemChecks.Documents;
+		var pfs = SystemChecks.ProgramFolders;
 		try {
 			SystemChecks.ControlledFolderAccess = () => throw new System.Security.SecurityException("locked down");
+			SystemChecks.CloudFolders = () => throw new InvalidOperationException("a settings file of the wrong shape");
+			SystemChecks.Documents = () => @"C:\Users\p\Documents";
+			SystemChecks.ProgramFolders = () => [@"C:\Program Files"];
 			var input = SystemChecks.ReadTrouble([("the game", @"C:\Program Files\Skyrim")], notes);
-			Check(!input.ControlledAccess && notes.Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "the failing probe is told");
+			Check(!input.ControlledAccess && input.CloudFolders.Count == 0, "the failing probes give nothing");
+			Equal(2, notes.Count, "each failing probe told once");
+			Check(SystemChecks.TroubleFolders(input).Single().Text.Contains("Program Files", StringComparison.Ordinal), "the probes that read still warn");
 		} finally {
 			SystemChecks.ControlledFolderAccess = was;
+			SystemChecks.CloudFolders = clouds;
+			SystemChecks.Documents = docs;
+			SystemChecks.ProgramFolders = pfs;
 		}
 	}
 

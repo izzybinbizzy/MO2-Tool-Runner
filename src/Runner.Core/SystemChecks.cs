@@ -17,7 +17,8 @@ public static partial class SystemChecks
 		{
 			try {
 				outList.AddRange(a_check());
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception) {
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception or
+			                            ArgumentException or NotSupportedException or InvalidOperationException) {
 				outList.Add(new Issue("", false, $"could not check {a_what}: {e.Message}"));
 			}
 		}
@@ -27,7 +28,9 @@ public static partial class SystemChecks
 		Guard("the plugin limit", () => PluginLimit(CountPlugins(a_profile)));
 		Guard("Windows' restart and the battery", () => Power(RestartPending(), Battery()));
 		Guard("the folders' path lengths", () => LongPaths(folders.Select(f => f.Dir)));
-		Guard("for folders that cause trouble", () => TroubleFolders(ReadTrouble(folders, outList)));
+		var notes = new List<Issue>();
+		Guard("for folders that cause trouble", () => TroubleFolders(ReadTrouble(folders, notes)).ToList());
+		outList.AddRange(notes);
 		return outList;
 	}
 
@@ -184,48 +187,79 @@ public static partial class SystemChecks
 		new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }.Select(Environment.GetFolderPath).Where(d => d != "").Distinct().ToList();
 
 	// the folders cloud apps keep in step with the internet: OneDrive's own variables, Dropbox's folder as its info.json names it,
-	// the usual Google Drive / iCloud folders, and a drive Google Drive puts up as a letter of its own
+	// the usual Google Drive / iCloud folders, and a local drive Google Drive puts up as a letter of its own. Each source on its
+	// own: one that cannot be read leaves only itself out.
 	public static Func<List<string>> CloudFolders { get; set; } = () => {
 		var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 		var outList = new List<string?> { Environment.GetEnvironmentVariable("OneDrive"), Environment.GetEnvironmentVariable("OneDriveConsumer"),
 			Environment.GetEnvironmentVariable("OneDriveCommercial"), Path.Combine(home, "Dropbox"), Path.Combine(home, "Google Drive"), Path.Combine(home, "iCloudDrive") };
 		foreach (var info in new[] { Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.LocalApplicationData }
-			         .Select(f => Path.Combine(Environment.GetFolderPath(f), "Dropbox", "info.json")).Where(File.Exists)) {
+			         .Select(f => Path.Combine(Environment.GetFolderPath(f), "Dropbox", "info.json"))) {
 			try {
+				if (!File.Exists(info)) {
+					continue;
+				}
 				using var doc = System.Text.Json.JsonDocument.Parse(Files.ReadShared(info));
+				if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) {
+					continue;
+				}
 				foreach (var acct in doc.RootElement.EnumerateObject()) {
-					if (acct.Value.ValueKind == System.Text.Json.JsonValueKind.Object && acct.Value.TryGetProperty("path", out var path)) {
+					if (acct.Value.ValueKind == System.Text.Json.JsonValueKind.Object && acct.Value.TryGetProperty("path", out var path) &&
+					    path.ValueKind == System.Text.Json.JsonValueKind.String) {
 						outList.Add(path.GetString());
 					}
 				}
-			} catch (System.Text.Json.JsonException) {
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) {
 			}
 		}
-		foreach (var d in DriveInfo.GetDrives()) {
-			try {
-				if (d.IsReady && d.VolumeLabel.Equals("Google Drive", StringComparison.OrdinalIgnoreCase)) {
-					outList.Add(d.RootDirectory.FullName);
+		try {
+			// only local disks: asking a mapped network drive whose server is gone waits for its time-out
+			foreach (var d in DriveInfo.GetDrives().Where(d => d.DriveType is DriveType.Fixed or DriveType.Removable)) {
+				try {
+					if (d.IsReady && d.VolumeLabel.Equals("Google Drive", StringComparison.OrdinalIgnoreCase)) {
+						outList.Add(d.RootDirectory.FullName);
+					}
+				} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 				}
-			} catch (IOException) {
-			} catch (UnauthorizedAccessException) {
 			}
+		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
 		}
-		return outList.OfType<string>().Where(d => d != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		return Roots(outList.OfType<string>());
 	};
 
-	// on by Windows Security, or by a policy of the PC's owner
-	public static Func<bool> ControlledFolderAccess { get; set; } = () =>
-		new[] { @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access",
-				@"HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access" }
-			.Any(k => Registry.GetValue(k, "EnableControlledFolderAccess", 0) is int v && v == 1);
+	// whole paths, each once, a folder inside another left out
+	public static List<string> Roots(IEnumerable<string> a_dirs)
+	{
+		var full = new List<string>();
+		foreach (var d in a_dirs.Where(d => d.Trim() != "")) {
+			try {
+				full.Add(Path.GetFullPath(d).TrimEnd('\\'));
+			} catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) {
+			}
+		}
+		full = full.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		return full.Where(d => !full.Any(o => !o.Equals(d, StringComparison.OrdinalIgnoreCase) && Files.IsUnder(d, o))).ToList();
+	}
 
-	// a share (\\server\..., \\?\UNC\...) or a mapped network drive; \\?\D:\... and \\.\D:\... are the local disk
+	// set by a policy of the PC's owner, that wins; else as Windows Security has it
+	public static Func<bool> ControlledFolderAccess { get; set; } = () => {
+		const string tail = @"Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access";
+		var policy = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\" + tail, "EnableControlledFolderAccess", null);
+		var value = policy ?? Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\" + tail, "EnableControlledFolderAccess", 0);
+		return value is int v && v == 1;
+	};
+
+	// a share (\\server\..., \\?\UNC\..., \\.\UNC\...) or a mapped network drive; \\?\D:\... and \\.\D:\... are the local disk, and so
+	// is a volume named by its id (\\?\Volume{...}\)
 	public static Func<string, bool> IsNetwork { get; set; } = IsNetworkPath;
 
 	public static bool IsNetworkPath(string a_dir)
 	{
-		if (a_dir.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) {
+		if (a_dir.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) || a_dir.StartsWith(@"\\.\UNC\", StringComparison.OrdinalIgnoreCase)) {
 			return true;
+		}
+		if (a_dir.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase) || a_dir.StartsWith(@"\\.\Volume{", StringComparison.OrdinalIgnoreCase)) {
+			return false;
 		}
 		var dir = a_dir.StartsWith(@"\\?\", StringComparison.Ordinal) || a_dir.StartsWith(@"\\.\", StringComparison.Ordinal) ? a_dir[4..] : a_dir;
 		if (dir.StartsWith(@"\\", StringComparison.Ordinal)) {
@@ -238,31 +272,39 @@ public static partial class SystemChecks
 	public sealed record TroubleInput(List<(string What, string Dir)> Places, string Documents, List<string> ProgramFolders, List<string> CloudFolders,
 		bool ControlledAccess, Func<string, bool> IsNetwork);
 
-	// each probe on its own: one that cannot read leaves its part out, never the whole check
+	// every probe read up front, each on its own: one that cannot read leaves its part out (said in a_notes), never the whole check
 	public static TroubleInput ReadTrouble(IEnumerable<(string What, string Dir)> a_places, List<Issue> a_notes)
 	{
 		T Safe<T>(string a_what, Func<T> a_probe, T a_none)
 		{
 			try {
 				return a_probe();
-			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception) {
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception or
+			                            ArgumentException or NotSupportedException or InvalidOperationException) {
 				a_notes.Add(new Issue("", false, $"could not check {a_what}: {e.Message}"));
 				return a_none;
 			}
 		}
-		bool Net(string a_dir) => Safe("whether " + a_dir + " is on a network drive", () => IsNetwork(a_dir), false);
-		return new TroubleInput(a_places.Where(p => p.Dir != "").ToList(), Safe("where Documents is", Documents, ""), Safe("where Program Files is", ProgramFolders, []),
-			Safe("the cloud folders", CloudFolders, []), Safe("Windows' controlled folder access", ControlledFolderAccess, false), Net);
+		var places = new List<(string What, string Dir)>();
+		foreach (var (what, dir) in a_places.Where(p => p.Dir != "")) {
+			if (Safe($"{what} ({dir})", () => Path.GetFullPath(dir), "") is { Length: > 0 } full) {
+				places.Add((what, full));
+			}
+		}
+		var net = places.Where(p => Safe($"whether {p.Dir} is on a network drive", () => IsNetwork(p.Dir), false)).Select(p => p.Dir).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		return new TroubleInput(places, Safe("where Documents is", Documents, ""), Safe("where Program Files is", ProgramFolders, []),
+			Safe("the cloud folders", CloudFolders, []), Safe("Windows' controlled folder access", ControlledFolderAccess, false), net.Contains);
 	}
 
 	public static IEnumerable<Issue> TroubleFolders(TroubleInput a_in)
 	{
 		static bool Under(string a_dir, string a_root) => a_dir != "" && a_root != "" && Files.IsUnder(a_dir, a_root);
-		// the places under one cause, named once each, a place inside another named place left out (the mods inside the instance)
+		// the places under one cause, each folder named once (two names for one folder: the first), a place inside another named
+		// place left out (the mods inside the instance)
 		static string Named(List<(string What, string Dir)> a_hits)
 		{
 			var top = a_hits.Where(h => !a_hits.Any(o => !Files.SamePath(o.Dir, h.Dir) && Files.IsUnder(h.Dir, o.Dir)))
-				.GroupBy(h => h.What).Select(g => g.First()).ToList();
+				.GroupBy(h => h.Dir.TrimEnd('\\'), StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
 			return string.Join(", ", top.Select(h => $"{h.What} ({h.Dir})")) + (top.Count == 1 ? " is" : " are");
 		}
 		foreach (var pf in a_in.ProgramFolders) {
