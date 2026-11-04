@@ -2176,8 +2176,8 @@ public static class Program
 			Check(!Directory.Exists(Path.Combine(parent, Brand.Name + " Data")), "nothing moved");
 			p.Kill();
 			p.WaitForExit();
-			// the check looks at the whole PC: another session running these tests beside us has its own old-name copy for a
-			// moment (2026-11-04: a full run failed here, the test alone passed) - waited for up to 10 s
+			// the check looks at the whole PC: 2026-11-04 a full run failed here once while the test alone passed - most likely
+			// another old-name program for a moment (a second test run beside this one; not measured) - waited for up to 10 s
 			var now = Path.Combine(parent, Brand.Name + " Data");
 			var got = DataFolder.Adopt(parent, " Data");
 			for (var i = 0; i < 20 && got != now; i++) {
@@ -2754,7 +2754,8 @@ public static class Program
 	{
 		var exe = Path.Combine(AppContext.BaseDirectory, Brand.Name + ".exe");
 		Check(File.Exists(exe), "the program sits beside the tests: " + exe);
-		var crash = Path.Combine(AppContext.BaseDirectory, Brand.Name + " Data", "crash.txt");
+		// the data folder as the program finds it beside the same folder (or its fallback when that cannot be written)
+		var crash = Path.Combine(ToolRunner.App.AppPaths.Data, "crash.txt");
 		var before = File.Exists(crash) ? new FileInfo(crash).Length : 0;
 		var keep = HiddenDesktop.GuardPoll;
 		HiddenDesktop.GuardPoll = TimeSpan.FromMilliseconds(50);
@@ -2762,8 +2763,6 @@ public static class Program
 			using var desk = new HiddenDesktop("SUP-test-windowless");
 			// a folder Windows refuses to make: the snapshot's first step throws
 			using var p = desk.Start($"\"{exe}\" --snapshot \"{Path.Combine(Path.GetTempPath(), "bad<name>")}\"", AppContext.BaseDirectory);
-			// its handle held from the start: a process this object did not start gives no exit code once it ended without one
-			_ = p.SafeHandle;
 			// each window named the moment it is seen (gone by the time a message is written); one with no size is Windows' own
 			// input helper (UAC_InputIndicatorOverlayWnd, 0x0 - measured 2026-11-04), nothing a player can see
 			var shown = new Dictionary<nint, string>();
