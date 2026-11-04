@@ -68,6 +68,11 @@ public sealed partial class MainViewModel : Observable
 	public string MessageKind { get; set => Set(ref field, value); } = "";
 	public string EstimateText { get; set => Set(ref field, value); } = "";
 	public bool StopAfterAsked { get; set => Set(ref field, value); }
+	// the step the setup's last run stopped at ("" = nothing to run again): the "Run again from ..." button
+	public string RetryFrom { get; set { if (Set(ref field, value)) OnPropertyChanged(nameof(RetryText)); } } = "";
+	public string RetryText => RetryFrom == "" ? "" : "Run _again from " + StepCatalog.Name(RetryFrom);
+	// a queue of setups going: which one runs ("" = none)
+	public string QueueText { get; set => Set(ref field, value); } = "";
 
 	public Cmd StartCommand => field ??= new(Start);
 	public Cmd StopAfterCommand => field ??= new(StopAfter);
@@ -75,6 +80,7 @@ public sealed partial class MainViewModel : Observable
 	public Cmd ContinueCommand => field ??= new(Continue);
 	public Cmd RestoreCommand => field ??= new(() => _ = RunRestore());
 	public Cmd CheckCommand => field ??= new(() => _ = RunCheck());
+	public Cmd RetryCommand => field ??= new(() => _ = RunRetry());
 	Task RunRestore() => Restore();
 	Task RunCheck() => Check();
 
@@ -233,13 +239,19 @@ public sealed partial class MainViewModel : Observable
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
 		_run = active ?? (_run is { } r && Directory.Exists(r.Folder) ? Fresh(runs, r) : Engine.Latest(SelectedSetup?.File, runs));
+		var queue = RunQueue.Read(AppPaths.Data);
+		QueueText = queue == null ? "" : $"Queue: setup {queue.Current + 1} of {queue.Setups.Count} ({Path.GetFileNameWithoutExtension(queue.Setups[queue.Current])})" +
+			(queue.Current + 1 < queue.Setups.Count ? ", then " + string.Join(", ", queue.Setups.Skip(queue.Current + 1).Select(Path.GetFileNameWithoutExtension)) : "");
 		var interrupted = Engine.Interrupted(runs);
 		Interrupted = interrupted == null ? "" : $"The run of {interrupted.Started:ddd HH:mm} ({interrupted.SetupName}) did not finish - your profile may still have outputs switched off.";
 		if (_run == null) {
+			RetryFrom = "";
 			ShowReady();
 			return;
 		}
 		IsRunning = _run.Unfinished && _run.OwnerAlive;
+		RetryFrom = !IsRunning && queue == null && SelectedSetup != null && string.Equals(_run.SetupFile, SelectedSetup.File, StringComparison.OrdinalIgnoreCase) &&
+		            Retry.FromStep(_run) is { } from ? from : "";
 		StopAfterAsked = _run.StopAfterStep;
 		var cur = _run.Steps.FirstOrDefault(s => s.State == StepState.Running);
 		NowTitle = IsRunning ? (cur?.Name ?? "Getting ready") : _run.State switch {
@@ -468,6 +480,36 @@ public sealed partial class MainViewModel : Observable
 			Say("The run did not start and gave no reason - nothing was changed. Press Check (F5) to see what is wrong.", "bad");
 			_startAsked = null;
 		}
+	}
+
+	// the last run again, from the step it stopped at, to where it ended (the preview shows what that means first)
+	Task RunRetry()
+	{
+		if (_run == null || Retry.Request(_run, AppPaths.Data) is not { } req) {
+			return Task.CompletedTask;
+		}
+		return StartWith(null, req.From, req.Until);
+	}
+
+	// several setups one after another (the queue box picked them; the window follows each run as it goes)
+	public void StartQueue(List<string> a_files, bool a_keepGoing)
+	{
+		if (Engine.Active() != null) {
+			Say("A run is going already.", "bad");
+			return;
+		}
+		if (Engine.Interrupted() != null) {
+			Say("The last run did not finish - put your profile back first (the button at the top).", "bad");
+			return;
+		}
+		var (ok, text) = Engine.StartQueue(a_files, a_keepGoing);
+		if (!ok) {
+			Say("Could not start the queue: " + text, "bad");
+			return;
+		}
+		Say($"Queue of {a_files.Count} setups starting - checking the first one ...", "");
+		_startAsked = DateTime.Now;
+		_run = null;
 	}
 
 	void StopAfter()

@@ -45,6 +45,23 @@ public static class Engine
 		if (a_only != null) args.AddRange(["--only", a_only]);
 		if (a_from != null) args.AddRange(["--from", a_from]);
 		if (a_until != null) args.AddRange(["--until", a_until]);
+		return StartEngine(args);
+	}
+
+	public static (bool Ok, string Text) StartQueue(IEnumerable<string> a_setupFiles, bool a_keepGoing)
+	{
+		var args = new List<string> { "queue" };
+		foreach (var f in a_setupFiles) {
+			args.AddRange(["--setup", f]);
+		}
+		if (a_keepGoing) {
+			args.Add("--keep-going");
+		}
+		return StartEngine(args);
+	}
+
+	static (bool Ok, string Text) StartEngine(List<string> args)
+	{
 		var psi = new ProcessStartInfo(AppPaths.Exe) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = AppPaths.Data };
 		foreach (var a in args) {
 			psi.ArgumentList.Add(a);
