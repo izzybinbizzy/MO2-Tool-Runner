@@ -144,7 +144,7 @@ public sealed class Journal
 	public bool OwnerAlive => Pid != 0 && Procs.Alive(Pid) && IsRunner(Pid) &&
 		(PidStarted == null || Procs.StartTime(Pid) is { } s && Math.Abs((s - PidStarted.Value).TotalSeconds) < 2);
 
-	static bool IsRunner(int a_pid)
+	public static bool IsRunner(int a_pid)
 	{
 		try {
 			using var p = System.Diagnostics.Process.GetProcessById(a_pid);

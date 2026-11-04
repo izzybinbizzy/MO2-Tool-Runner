@@ -2620,13 +2620,11 @@ public static class Program
 	static void T_RetryStartsAtTheStepThatDidNotFinish()
 	{
 		var failed = RunOf(RunState.Failed, ("synthesis", StepState.Done), ("texgen", StepState.Failed), ("dyndolod", StepState.Skipped));
-		failed.ReturnMarker = "FF000801";
 		Equal("texgen", Retry.FromStep(failed), "the failed step");
 		var req = Retry.Request(failed, @"C:\Data")!;
 		Equal("texgen", req.From, "from the failed step");
 		Equal("dyndolod", req.Until, "to where the run ended");
 		Equal<string?>(null, req.Only, "not one step only");
-		Equal("FF000801", req.ReturnMarker, "the clean save's marker goes along");
 		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("texgen", StepState.Done), ("dyndolod", StepState.Stopped))), "a stopped step");
 		// "stop after this step": the run writes the steps it never reached as Skipped - the first of them is where it carries on
 		Equal("dyndolod", Retry.FromStep(RunOf(RunState.Stopped, ("synthesis", StepState.Done), ("texgen", StepState.Done), ("dyndolod", StepState.Skipped))), "after a stop after");

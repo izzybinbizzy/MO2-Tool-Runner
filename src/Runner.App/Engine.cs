@@ -48,8 +48,6 @@ public static class Engine
 		return StartEngine(args);
 	}
 
-	public static (bool Ok, string Text) StartRetry(string a_setupFile) => StartEngine(["retry", "--setup", a_setupFile]);
-
 	public static (bool Ok, string Text) StartQueue(IEnumerable<string> a_setupFiles, bool a_keepGoing)
 	{
 		var args = new List<string> { "queue" };

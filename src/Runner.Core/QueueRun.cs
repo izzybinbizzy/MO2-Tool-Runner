@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ToolRunner;
 
@@ -19,22 +19,13 @@ public static class QueueRun
 		public List<string> Setups { get; set; } = [];
 		public int Current { get; set; }
 
+		[JsonIgnore]
 		public string? Running => Current >= 0 && Current < Setups.Count ? Setups[Current] : null;
 	}
 
 	public static string File(string a_dataDir) => Path.Combine(Runner.RunsDir(a_dataDir), "queue.json");
 
 	public static string LastFile(string a_dataDir) => Path.Combine(Runner.RunsDir(a_dataDir), "last queue.txt");
-
-	static DateTime? StartOf(int a_pid)
-	{
-		try {
-			using var p = Process.GetProcessById(a_pid);
-			return p.StartTime.ToUniversalTime();
-		} catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) {
-			return null;
-		}
-	}
 
 	// the queue going now (null = none, or one whose owner is gone)
 	public static State? Read(string a_dataDir)
@@ -44,7 +35,9 @@ public static class QueueRun
 				return null;
 			}
 			var s = JsonSerializer.Deserialize<State>(Files.ReadShared(File(a_dataDir)));
-			return s is { Pid: not 0, Running: not null } && StartOf(s.Pid) is { } t && s.PidStarted is { } w && Math.Abs((t - w).TotalSeconds) < 2 ? s : null;
+			// the owner by its start time when both are known, else alive and a copy of this program
+			return s is { Pid: not 0, Running: not null } && Procs.Alive(s.Pid) &&
+			       (s.PidStarted is { } w && Procs.StartTime(s.Pid) is { } t ? Math.Abs((t - w).TotalSeconds) < 2 : Journal.IsRunner(s.Pid)) ? s : null;
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
 			return null;
 		}
@@ -62,7 +55,7 @@ public static class QueueRun
 		}
 		// the lock is this thread's: each run takes it again inside (a mutex its owner takes twice)
 		var run = a_run ?? (r => Runner.Run(r));
-		var state = new State { Pid = Environment.ProcessId, PidStarted = StartOf(Environment.ProcessId), Setups = outList.Select(i => i.SetupFile).ToList() };
+		var state = new State { Pid = Environment.ProcessId, PidStarted = Procs.StartTime(Environment.ProcessId), Setups = outList.Select(i => i.SetupFile).ToList() };
 		Directory.CreateDirectory(Runner.RunsDir(a_dataDir));
 		try {
 			for (int i = 0; i < outList.Count; ++i) {
