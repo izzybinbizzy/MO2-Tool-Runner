@@ -2677,4 +2677,52 @@ public static class Program
 		Equal("A", string.Join(",", Ran(new() { ["A"] = RunState.Stopped }, true, out _)), "a stopped run always ends the queue");
 		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");
 	}
+
+	// every picture the window loads, read the way the window reads it: an Icon.ico WPF could not decode crashed the program at
+	// start (2026-11-03) - a picture like that fails here, never on a player's screen
+	static void T_EveryWindowPictureLoads()
+	{
+		string[] kinds = [".png", ".ico", ".jpg", ".jpeg", ".bmp", ".gif"];
+		var read = new List<string>();
+		Exception? failed = null;
+		var t = new Thread(() => {
+			try {
+				var asm = typeof(ToolRunner.App.App).Assembly;
+				// each picture compiled into the program
+				using (var s = asm.GetManifestResourceStream(asm.GetName().Name + ".g.resources") ?? throw new InvalidOperationException("the program has no resources")) {
+					using var r = new System.Resources.ResourceReader(s);
+					foreach (System.Collections.DictionaryEntry e in r) {
+						var name = (string)e.Key;
+						if (kinds.Any(k => name.EndsWith(k, StringComparison.OrdinalIgnoreCase)) && e.Value is Stream pic) {
+							using (pic) {
+								var frame = System.Windows.Media.Imaging.BitmapDecoder.Create(pic, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+									System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames[0];
+								Check(frame.PixelWidth > 0, name + " is a picture");
+							}
+							read.Add(name);
+						}
+					}
+				}
+				// the program's own resources made as its window makes them (App.xaml), each picture among them read
+				System.Windows.Application.ResourceAssembly = asm;
+				var app = new ToolRunner.App.App();
+				app.InitializeComponent();
+				foreach (var k in app.Resources.Keys) {
+					if (app.Resources[k] is System.Windows.Media.Imaging.BitmapSource b) {
+						Check(b.PixelWidth > 0, $"the {k} picture is read");
+						read.Add(k.ToString() ?? "");
+					}
+				}
+			} catch (Exception e) when (e is not OutOfMemoryException) {
+				failed = e;
+			}
+		});
+		t.SetApartmentState(ApartmentState.STA);
+		t.Start();
+		t.Join();
+		if (failed != null) {
+			throw new InvalidOperationException(failed.Message, failed);
+		}
+		Check(read.Contains("Logo") && read.Any(n => n.EndsWith(".png", StringComparison.OrdinalIgnoreCase)), "the header logo and its file are among them: " + string.Join(", ", read));
+	}
 }

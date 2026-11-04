@@ -22,9 +22,16 @@ public partial class App : Application
 	protected override void OnStartup(StartupEventArgs a_e)
 	{
 		base.OnStartup(a_e);
+		// with no window of its own (the command line, the off-screen pictures) an error ends the program with exit code 1: a box
+		// there would sit on the player's screen with nothing behind it, and the program would wait on it forever
+		var headless = Cli.Handles(a_e.Args) || a_e.Args is ["--snapshot" or "--page", _];
 		DispatcherUnhandledException += (_, e) => {
 			LogCrash(e.Exception);
 			e.Handled = true;
+			if (headless) {
+				Shutdown(1);
+				return;
+			}
 			MessageBox.Show("Something went wrong: " + e.Exception.Message + "\n\nIt is written in crash.txt in the data folder. A run that is going is not affected.",
 				"Skyrim Utility Patcher", MessageBoxButton.OK, MessageBoxImage.Warning);
 		};

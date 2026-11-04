@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Runner.Core\Runner.Core.csproj" />
+    <ProjectReference Include="..\Runner.App\Runner.App.csproj" />
   </ItemGroup>
 
 </Project>
