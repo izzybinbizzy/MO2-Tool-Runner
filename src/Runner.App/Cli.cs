@@ -106,12 +106,12 @@ public static class Cli
 		if (setups.Count == 0) {
 			throw new ArgumentException("--setup <setup file> is needed, once per setup, in the order they run");
 		}
-		var items = RunQueue.Run(setups, AppPaths.Data, a_args.Contains("--keep-going"));
+		var items = QueueRun.Run(setups, AppPaths.Data, a_args.Contains("--keep-going"));
 		// the first setup refused before anything changed: the window reads the reason as for a single run
 		if (items[0].Outcome is { Folder: null } refused) {
 			WriteRefusal(refused.Verdict);
 		}
-		foreach (var l in RunQueue.Summary(items)) {
+		foreach (var l in QueueRun.Summary(items)) {
 			Console.WriteLine(l);
 		}
 		// the first that did not finish names the queue's outcome

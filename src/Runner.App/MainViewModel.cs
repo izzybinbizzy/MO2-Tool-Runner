@@ -239,7 +239,7 @@ public sealed partial class MainViewModel : Observable
 		var active = Engine.Active(runs);
 		// the run going, else the one just watched, else this setup's last run (its log and verdict stay on screen)
 		_run = active ?? (_run is { } r && Directory.Exists(r.Folder) ? Fresh(runs, r) : Engine.Latest(SelectedSetup?.File, runs));
-		var queue = RunQueue.Read(AppPaths.Data);
+		var queue = QueueRun.Read(AppPaths.Data);
 		QueueText = queue == null ? "" : $"Queue: setup {queue.Current + 1} of {queue.Setups.Count} ({Path.GetFileNameWithoutExtension(queue.Setups[queue.Current])})" +
 			(queue.Current + 1 < queue.Setups.Count ? ", then " + string.Join(", ", queue.Setups.Skip(queue.Current + 1).Select(Path.GetFileNameWithoutExtension)) : "");
 		var interrupted = Engine.Interrupted(runs);

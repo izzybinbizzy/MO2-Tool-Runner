@@ -17,7 +17,7 @@ public static class Retry
 // Several setups run one after another, each a whole run of its own (its pre-check, its run record, its put-back). A run that
 // was stopped ends the queue; a failed one ends it too unless the queue is set to keep going. While it goes, "queue.json" in
 // the runs folder says which setups it holds and which one runs (the window shows it); it is removed at the end.
-public static class RunQueue
+public static class QueueRun
 {
 	public sealed record Item(string SetupFile, RunOutcome? Outcome);
 

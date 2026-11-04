@@ -2647,26 +2647,26 @@ public static class Program
 		using var f = new FakeMo2();
 		var data = f.Data;
 		var files = new[] { "A", "B", "C" }.Select(n => Path.Combine(data, "Setups", n + ".json")).ToList();
-		List<string> Ran(Dictionary<string, RunState> a_results, bool a_keep, out List<RunQueue.Item> a_items)
+		List<string> Ran(Dictionary<string, RunState> a_results, bool a_keep, out List<QueueRun.Item> a_items)
 		{
 			var ran = new List<string>();
-			a_items = RunQueue.Run(files, data, a_keep, r => {
+			a_items = QueueRun.Run(files, data, a_keep, r => {
 				var name = Path.GetFileNameWithoutExtension(r.SetupFile);
 				ran.Add(name);
-				var st = RunQueue.Read(data);
+				var st = QueueRun.Read(data);
 				Check(st != null && st.Setups[st.Current] == r.SetupFile, "the queue file names the setup that runs");
 				Check(r.From == null && r.Only == null, "each setup runs whole");
 				return new RunOutcome(a_results.TryGetValue(name, out var s) ? s : RunState.Finished, name + " verdict", "x");
 			});
-			Check(!File.Exists(RunQueue.File(data)), "the queue file is gone at the end");
+			Check(!File.Exists(QueueRun.File(data)), "the queue file is gone at the end");
 			return ran;
 		}
 		Equal("A,B,C", string.Join(",", Ran([], false, out var all)), "all three in order");
 		Check(all.All(i => i.Outcome?.State == RunState.Finished), "each one finished");
 		Equal("A,B", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, false, out var stopped)), "a failed run ends the queue");
-		Check(RunQueue.Summary(stopped).Last() == "C: not run", "the setup never run is said");
+		Check(QueueRun.Summary(stopped).Last() == "C: not run", "the setup never run is said");
 		Equal("A,B,C", string.Join(",", Ran(new() { ["B"] = RunState.Failed }, true, out _)), "keep going goes past a failed run");
 		Equal("A", string.Join(",", Ran(new() { ["A"] = RunState.Stopped }, true, out _)), "a stopped run always ends the queue");
-		Equal<RunQueue.State?>(null, RunQueue.Read(data), "no queue read once it ended");
+		Equal<QueueRun.State?>(null, QueueRun.Read(data), "no queue read once it ended");
 	}
 }
