@@ -24,6 +24,14 @@ public static class Program
 		// a game another session runs on this PC is not this test's business
 		Preflight.GameCheck = () => [];
 		Mo2Control.GameProbe = () => [];
+		// nor this PC's own state: its Mod Organizer, an update waiting, its battery, how it was started
+		SystemChecks.SelfAdmin = () => false;
+		SystemChecks.Mo2Unreadable = _ => false;
+		SystemChecks.AdminFlagged = _ => false;
+		SystemChecks.Mo2Paths = () => [];
+		SystemChecks.RestartPending = () => false;
+		SystemChecks.Battery = () => null;
+		SystemChecks.LongPathsOn = () => true;
 		var tests = typeof(Program).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
 			.Where(m => m.Name.StartsWith("T_", StringComparison.Ordinal) && m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).OrderBy(m => m.MetadataToken);
 		foreach (var t in tests) {
@@ -83,9 +91,12 @@ public static class Program
 		public string Data => Path.Combine(Root, "RunnerData");
 		public string SetupFile => Path.Combine(Data, "Setups", "Test.json");
 
-		public FakeMo2(string a_nl = "\r\n")
+		// every test runs under a folder with a space, an apostrophe, accents and a non-Latin letter in it - a player's paths can hold any
+		public const string OddFolder = "Pläyer's Mödding – ü ж";
+
+		public FakeMo2(string a_nl = "\r\n", string a_deeper = "")
 		{
-			Root = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", Guid.NewGuid().ToString("N")[..8]);
+			Root = Path.Combine(Path.GetTempPath(), "mo2 tool runner tests", OddFolder + " " + Guid.NewGuid().ToString("N")[..8], a_deeper);
 			Directory.CreateDirectory(Path.Combine(Game, "Data"));
 			Directory.CreateDirectory(ProfileDir);
 			Directory.CreateDirectory(Mods);
@@ -2379,5 +2390,97 @@ public static class Program
 		var d = cache.Read();
 		Equal(1, d.Count, "a removed run drops out");
 		Equal("2026-10-01 10-00-00", d[0].Id, "the one left");
+	}
+
+	// ------------------------------------------------------------------ the PC-level pre-checks (SystemChecks)
+	static void SetLight(string a_path)
+	{
+		var b = File.ReadAllBytes(a_path);
+		b[9] |= 0x02;
+		File.WriteAllBytes(a_path, b);
+	}
+
+	static void T_PluginLimitCountsByKind()
+	{
+		using var f = new FakeMo2();
+		f.Mod("Lights", ("Light.esl", false, []), ("LightFlag.esp", false, []), ("LightMaster.esm", true, []), ("Unticked.esp", false, []), ("Big.esp", false, []));
+		SetLight(Path.Combine(f.Mods, "Lights", "LightFlag.esp"));
+		SetLight(Path.Combine(f.Mods, "Lights", "LightMaster.esm"));
+		FakeMo2.Plugin(Path.Combine(f.Game, "Data", "ccTest.esl"), false);
+		FakeMo2.Plugin(Path.Combine(f.Game, "Data", "Update.esm"), true);
+		File.WriteAllText(Path.Combine(f.Game, "Skyrim.ccc"), "ccTest.esl\r\nccAbsent.esm\r\n");
+		File.WriteAllText(Path.Combine(f.ProfileDir, "modlist.txt"), "+Lights\r\n" + f.Text("modlist.txt"));
+		File.AppendAllText(Path.Combine(f.ProfileDir, "plugins.txt"), "*Light.esl\r\n*LightFlag.esp\r\n*LightMaster.esm\r\nUnticked.esp\r\n*Big.esp\r\n*Gone.esp\r\n*Update.esm\r\n");
+		var c = SystemChecks.CountPlugins(ProfileOf(f));
+		// full: Skyrim.esm, Update.esm (once, though plugins.txt names it too), the six of the fake, Big.esp; Gone.esp is nowhere
+		Equal(9, c.Full, "full plugins");
+		// light: the .esl, the flagged .esp, the flagged .esm, the Creation Club .esl that Skyrim.ccc names
+		Equal(4, c.Light, "light plugins");
+		Check(!Plugins.IsLight(Path.Combine(f.Mods, "Lights", "Big.esp")), "an unflagged .esp is full");
+		Check(Plugins.IsLight(Path.Combine(f.Mods, "Lights", "LightMaster.esm")), "an ESL-flagged .esm is light");
+		Equal(0, SystemChecks.PluginLimit(c).Count(), "far from both limits");
+		Check(SystemChecks.PluginLimit(new(255, 0)).Single().Blocking, "255 full plugins stop the run");
+		Check(!SystemChecks.PluginLimit(new(254, 0)).Single().Blocking, "254 full plugins only warn (the outputs add more)");
+		Equal(0, SystemChecks.PluginLimit(new(249, 4096)).Count(), "249 full and 4096 light: fine");
+		Check(SystemChecks.PluginLimit(new(10, 4097)).Single().Blocking, "4097 light plugins stop the run");
+	}
+
+	static void T_AdminOnOneSideOnly()
+	{
+		Equal(0, SystemChecks.Admin(false, false, false).Count(), "both normal");
+		Check(SystemChecks.Admin(false, true, false).Single().Blocking, "Mod Organizer as administrator, the runner not: stop");
+		Check(SystemChecks.Admin(false, false, true).Single().Blocking, "Mod Organizer set to always run as administrator: stop");
+		Equal(2, SystemChecks.Admin(false, true, true).Count(), "both named");
+		var self = SystemChecks.Admin(true, true, true).ToList();
+		Check(self.Count == 1 && !self[0].Blocking, "the runner as administrator: one warning (whatever it starts runs as administrator too)");
+	}
+
+	static void T_ASecondMo2IsNamed()
+	{
+		var ours = @"C:\Games\MO2\ModOrganizer.exe";
+		Equal(0, SystemChecks.OtherMo2([@"c:\games\mo2\MODORGANIZER.exe"], ours).Count(), "our own, any case");
+		var i = SystemChecks.OtherMo2([ours, @"D:\Other MO2\ModOrganizer.exe", @"D:\Other MO2\ModOrganizer.exe"], ours).Single();
+		Check(i.Blocking && i.Text.Contains(@"D:\Other MO2\ModOrganizer.exe", StringComparison.Ordinal), "another install stops the run, named once");
+	}
+
+	static void T_RestartBatteryAndLongPaths()
+	{
+		Equal(0, SystemChecks.Power(false, null).Count(), "plugged in, nothing pending");
+		Check(!SystemChecks.Power(true, null).Single().Blocking, "a pending restart warns");
+		var b = SystemChecks.Power(false, new(true, 40)).Single();
+		Check(!b.Blocking && b.Text.Contains("40 %", StringComparison.Ordinal), "on battery warns with its level");
+		Check(!SystemChecks.Power(false, new(true, 255)).Single().Text.Contains('%', StringComparison.Ordinal), "an unknown level is left out");
+		var deep = Path.Combine(Path.GetTempPath(), new string('x', SystemChecks.LongFolder));
+		Equal(0, SystemChecks.LongPaths([deep], true).Count(), "long paths switched on: nothing");
+		Check(!SystemChecks.LongPaths([deep, deep, "", Path.GetTempPath()], false).Single().Blocking, "a long folder warns once while long paths are off");
+	}
+
+	static void T_PrecheckCarriesThePcChecks()
+	{
+		using var f = new FakeMo2();
+		var setup = f.WriteSetup();
+		var mo2 = Mo2Instance.Load(f.Exe, f.Instance);
+		Equal(0, Preflight.Run(setup, mo2, []).Count(i => i.Blocking), "a clean fake: nothing blocks");
+		var was = SystemChecks.Mo2Paths;
+		try {
+			SystemChecks.Mo2Paths = () => [Path.Combine(f.Root, "Another", "ModOrganizer.exe")];
+			Check(Preflight.Run(setup, mo2, []).Any(i => i.Blocking && i.Text.Contains("another Mod Organizer", StringComparison.Ordinal)), "the check reaches the pre-check");
+		} finally {
+			SystemChecks.Mo2Paths = was;
+		}
+	}
+
+	// a player's folder can be deeper than Windows' old 260-letter limit: the profile's own files are still read, changed and put back
+	static void T_LongPathProfileWorks()
+	{
+		using var f = new FakeMo2("\r\n", string.Join('\\', Enumerable.Repeat("a long folder name for the test", 9)));
+		Check(f.ProfileDir.Length > 300, "the fake sits past 260 letters");
+		var p = ProfileOf(f);
+		var snap = p.Snapshot();
+		p.SetMods([], ["Base Mod"]);
+		Check(!p.IsOn("Base Mod"), "a mod switched off in a long path");
+		p.Restore(snap);
+		Check(p.IsOn("Base Mod"), "and put back");
+		Equal(7, SystemChecks.CountPlugins(p).Full, "its plugins counted");
 	}
 }

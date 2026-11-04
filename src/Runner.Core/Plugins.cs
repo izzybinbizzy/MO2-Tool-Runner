@@ -110,6 +110,23 @@ public static class Plugins
 		return outSet;
 	}
 
+	// a light plugin takes no full load-order slot: an .esl file, or an .esp / .esm whose TES4 record carries the light flag (0x200)
+	public static bool IsLight(string a_path)
+	{
+		if (a_path.EndsWith(".esl", StringComparison.OrdinalIgnoreCase)) {
+			return true;
+		}
+		try {
+			using var fs = new FileStream(a_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+			var h = new byte[12];
+			return fs.Read(h, 0, 12) == 12 && Encoding.ASCII.GetString(h, 0, 4) == "TES4" && (BitConverter.ToUInt32(h, 8) & 0x200) != 0;
+		} catch (IOException) {
+			return false;
+		} catch (UnauthorizedAccessException) {
+			return false;
+		}
+	}
+
 	// ESM-flagged (TES4 record flag bit 0) or an .esm file
 	public static bool IsMaster(string a_path)
 	{

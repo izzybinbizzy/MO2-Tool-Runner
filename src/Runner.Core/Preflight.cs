@@ -36,6 +36,7 @@ public static class Preflight
 		if (control.Running) {
 			outList.Add(new Issue("", false, "Mod Organizer is open - the run will close it"));
 		}
+		outList.AddRange(SystemChecks.Run(a_mo2, profile, [a_mo2.BaseDir, a_mo2.ModsDir, a_mo2.OverwriteDir, a_mo2.GameDir, a_setup.BackupDir]));
 		foreach (var d in new[] { a_setup.BackupDir, a_mo2.ModsDir }.Where(d => d != "")) {
 			var root = Path.GetPathRoot(Path.GetFullPath(d));
 			if (root == null) {
