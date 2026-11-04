@@ -2176,7 +2176,15 @@ public static class Program
 			Check(!Directory.Exists(Path.Combine(parent, Brand.Name + " Data")), "nothing moved");
 			p.Kill();
 			p.WaitForExit();
-			Equal(Path.Combine(parent, Brand.Name + " Data"), DataFolder.Adopt(parent, " Data"), "it ended: the folder is taken over");
+			// the check looks at the whole PC: another session running these tests beside us has its own old-name copy for a
+			// moment (2026-11-04: a full run failed here, the test alone passed) - waited for up to 10 s
+			var now = Path.Combine(parent, Brand.Name + " Data");
+			var got = DataFolder.Adopt(parent, " Data");
+			for (var i = 0; i < 20 && got != now; i++) {
+				Thread.Sleep(500);
+				got = DataFolder.Adopt(parent, " Data");
+			}
+			Equal(now, got, "it ended: the folder is taken over");
 		} finally {
 			if (!p.HasExited) {
 				p.Kill();
@@ -2736,5 +2744,50 @@ public static class Program
 			throw new InvalidOperationException(failed.Message, failed);
 		}
 		Check(read.Contains("Logo") && read.Any(n => n.EndsWith(".png", StringComparison.OrdinalIgnoreCase)), "the header logo and its file are among them: " + string.Join(", ", read));
+	}
+
+	// a start with no window of its own that hits an error ends with exit 1 and its error in crash.txt - no window and no box of
+	// it ever shows (2026-11-03: two snapshot tries put a crash box on his screen and waited on it forever). The real program,
+	// built beside the tests, is started on a hidden desktop so even a broken build never reaches the player's screen; its
+	// leak guard watches his screen too
+	static void T_AWindowlessErrorShowsNothing()
+	{
+		var exe = Path.Combine(AppContext.BaseDirectory, Brand.Name + ".exe");
+		Check(File.Exists(exe), "the program sits beside the tests: " + exe);
+		var crash = Path.Combine(AppContext.BaseDirectory, Brand.Name + " Data", "crash.txt");
+		var before = File.Exists(crash) ? new FileInfo(crash).Length : 0;
+		var keep = HiddenDesktop.GuardPoll;
+		HiddenDesktop.GuardPoll = TimeSpan.FromMilliseconds(50);
+		try {
+			using var desk = new HiddenDesktop("SUP-test-windowless");
+			// a folder Windows refuses to make: the snapshot's first step throws
+			using var p = desk.Start($"\"{exe}\" --snapshot \"{Path.Combine(Path.GetTempPath(), "bad<name>")}\"", AppContext.BaseDirectory);
+			// its handle held from the start: a process this object did not start gives no exit code once it ended without one
+			_ = p.SafeHandle;
+			// each window named the moment it is seen (gone by the time a message is written); one with no size is Windows' own
+			// input helper (UAC_InputIndicatorOverlayWnd, 0x0 - measured 2026-11-04), nothing a player can see
+			var shown = new Dictionary<nint, string>();
+			var sw = Stopwatch.StartNew();
+			while (!p.HasExited && sw.Elapsed < TimeSpan.FromSeconds(30)) {
+				foreach (var h in desk.Windows()) {
+					if (!shown.ContainsKey(h) && Native.IsWindowVisible(h) && Native.GetWindowThreadProcessId(h, out var pid) != 0 && pid == p.Id &&
+					    Native.GetWindowRect(h, out var r) && r.Right > r.Left && r.Bottom > r.Top) {
+						var inside = string.Join(" / ", Native.ChildWindows(h).Select(Native.WindowText).Where(t => t.Length > 0));
+						shown[h] = $"{Native.ClassName(h)} '{Native.WindowText(h)}' {r.Right - r.Left}x{r.Bottom - r.Top} [{inside}]";
+					}
+				}
+				Thread.Sleep(20);
+			}
+			if (!p.HasExited) {
+				Procs.KillTree(p.Id);
+			}
+			Check(desk.Leak == null, "it showed on the player's screen: " + desk.Leak);
+			Check(shown.Count == 0, "it showed " + string.Join("; ", shown.Values));
+			Check(sw.Elapsed < TimeSpan.FromSeconds(30), "it was still running after 30 s");
+			Equal(1, p.ExitCode, "its exit code");
+			Check(File.Exists(crash) && new FileInfo(crash).Length > before, "its error was written in crash.txt");
+		} finally {
+			HiddenDesktop.GuardPoll = keep;
+		}
 	}
 }
