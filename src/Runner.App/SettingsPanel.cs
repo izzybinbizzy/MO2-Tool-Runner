@@ -166,7 +166,7 @@ public static class SettingsPanel
 		Field(stack, apply, "Alert: sound", alerts, "sound", JsonValueKind.True);
 		Field(stack, apply, "Alert: flash the taskbar button", alerts, "flash", JsonValueKind.True);
 		// his checklist 461 / 463: both optional, off unless set
-		Choice(stack, apply, "After the run, the PC", work, "afterRunPower", [("none", "stays on"), ("sleep", "goes to sleep (a minute's notice, cancel in this window)"),
+		Choice(stack, apply, "After the run, the PC", work, "afterRunPower", [("none", "stays on"), ("sleep", "goes to sleep - or hibernates, as Windows is set (a minute's notice, cancel in this window)"),
 			("shutdown", "shuts down (a minute's notice, cancel in this window)")]);
 		work["afterRunPowerOnlyFinished"] ??= true;
 		Field(stack, apply, "Only after a run that finished (a failed run keeps the PC on, so you see why)", work, "afterRunPowerOnlyFinished", JsonValueKind.True);

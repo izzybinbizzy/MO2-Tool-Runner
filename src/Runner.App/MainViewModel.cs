@@ -216,8 +216,8 @@ public sealed partial class MainViewModel : Observable
 		}
 		_polling = true;
 		try {
-			var (mo2, game, runs) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs()));
-			Poll(mo2, game, runs);
+			var (mo2, game, runs, power) = await Task.Run(() => (Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs(), PowerAfter.Look(AppPaths.Data)));
+			Poll(mo2, game, runs, power);
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException) {
 			// a file or process that changed mid-read: the next tick reads it again
 		} finally {
@@ -225,13 +225,13 @@ public sealed partial class MainViewModel : Observable
 		}
 	}
 
-	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs());
+	public void Poll() => Poll(Procs.Running("ModOrganizer.exe"), Mo2Control.GameImages.Any(Procs.Running), Engine.Runs(), PowerAfter.Look(AppPaths.Data));
 
-	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs)
+	void Poll(bool a_mo2, bool a_game, List<Journal> a_runs, PowerAfter.Pending? a_power)
 	{
 		Mo2Open = a_mo2;
 		GameRunning = a_game;
-		var power = PowerAfter.Look(AppPaths.Data);
+		var power = a_power;
 		var newPower = power == null ? "" :
 			$"The PC will {(power.Action == nameof(PowerAfter.Kind.Sleep) ? "go to sleep" : "shut down")} in {Math.Max(0, (int)(power.At - DateTime.Now).TotalSeconds)} s, as this setup asks after a run.";
 		if (newPower != "" && PowerText == "") {
@@ -294,7 +294,7 @@ public sealed partial class MainViewModel : Observable
 		if (Waiting != "" && Waiting != _lastWaiting) {
 			Alert?.Invoke("Your turn in the game", Waiting);
 			_remindedAt = DateTime.Now;
-		} else if (Waiting != "" && ReminderDue(Setup.Int(Setup?.Root ?? [], "guidedReminderMin") ?? 0, _remindedAt, DateTime.Now)) {
+		} else if (Waiting != "" && ReminderDue(ReminderMinutes(_run), _remindedAt, DateTime.Now)) {
 			// his checklist 463: the same step still waits - said again, every so many minutes as the setup asks
 			Alert?.Invoke("Still your turn in the game", Waiting);
 			_remindedAt = DateTime.Now;
@@ -306,13 +306,32 @@ public sealed partial class MainViewModel : Observable
 	static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
 	DateTime _remindedAt;
+	(string File, double Minutes)? _reminder;
+
+	// the waiting run's own setup says how often (read once per setup file, not the setup picked in the window)
+	double ReminderMinutes(Journal a_run)
+	{
+		if (_reminder is not { } r || !string.Equals(r.File, a_run.SetupFile, StringComparison.OrdinalIgnoreCase)) {
+			double min = 0;
+			try {
+				min = Setup.Num(Setup.Load(a_run.SetupFile).Root, "guidedReminderMin") ?? 0;
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) {
+			}
+			_reminder = r = (a_run.SetupFile, min);
+		}
+		return r.Minutes;
+	}
 
 	// a reminder is due once every a_everyMin minutes (0 or less = never)
-	public static bool ReminderDue(int a_everyMin, DateTime a_last, DateTime a_now) => a_everyMin > 0 && a_now - a_last >= TimeSpan.FromMinutes(a_everyMin);
+	public static bool ReminderDue(double a_everyMin, DateTime a_last, DateTime a_now) => a_everyMin > 0 && a_now - a_last >= TimeSpan.FromMinutes(a_everyMin);
 
 	void CancelPower()
 	{
 		try {
+			if (PowerAfter.Look(AppPaths.Data) == null) {
+				Say("Too late to cancel - Windows was already asked.", "warn");
+				return;
+			}
 			PowerAfter.Cancel(AppPaths.Data);
 			Say("Cancelled - the PC stays on.", "good");
 		} catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
