@@ -33,7 +33,8 @@ public static class Preflight
 			outList.Add(new Issue("", false, $"Mod Organizer keeps {stale.Count} download(s) that already finished as \"unfinished\" (" + string.Join(", ", stale.Take(3)) +
 				") - each is the same as the finished file beside it; remove its row in Mod Organizer's Downloads tab, or MO2 resumes it at every start"));
 		}
-		var pc = SystemChecks.Run(a_mo2, profile, new[] { a_mo2.BaseDir, a_mo2.ModsDir, a_mo2.OverwriteDir, a_mo2.GameDir }.Concat(a_setup.Folders().Select(f => f.Dir)));
+		var pc = SystemChecks.Run(a_mo2, profile, new[] { ("the game", a_mo2.GameDir), ("Mod Organizer's instance", a_mo2.BaseDir), ("Mod Organizer's mods", a_mo2.ModsDir),
+			("Mod Organizer's overwrite", a_mo2.OverwriteDir) }.Concat(a_setup.Folders()));
 		if (control.Running && !pc.Any(i => i.Blocking && i.Text.StartsWith(SystemChecks.UnreadableText, StringComparison.Ordinal))) {
 			outList.Add(new Issue("", false, "Mod Organizer is open - the run will close it"));
 		}

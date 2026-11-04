@@ -8,8 +8,9 @@ namespace ToolRunner;
 // read, so the offline tests feed it made-up readings; the probes that read this PC are properties a test can replace.
 public static partial class SystemChecks
 {
-	public static List<Issue> Run(Mo2Instance a_mo2, Profile a_profile, IEnumerable<string> a_folders)
+	public static List<Issue> Run(Mo2Instance a_mo2, Profile a_profile, IEnumerable<(string What, string Dir)> a_folders)
 	{
+		var folders = a_folders.ToList();
 		var outList = new List<Issue>();
 		// a check that cannot read what it needs is told and the others still run - it never ends the pre-check
 		void Guard(string a_what, Func<IEnumerable<Issue>> a_check)
@@ -25,9 +26,8 @@ public static partial class SystemChecks
 		Guard("for another Mod Organizer", () => OtherMo2(Mo2Paths(), a_mo2.Exe));
 		Guard("the plugin limit", () => PluginLimit(CountPlugins(a_profile)));
 		Guard("Windows' restart and the battery", () => Power(RestartPending(), Battery()));
-		Guard("the folders' path lengths", () => LongPaths(a_folders));
-		Guard("for folders that cause trouble", () => TroubleFolders(new TroubleInput(a_mo2.GameDir, a_mo2.BaseDir, a_mo2.ModsDir, Documents(), ProgramFolders(),
-			CloudFolders(), ControlledFolderAccess(), IsNetwork)));
+		Guard("the folders' path lengths", () => LongPaths(folders.Select(f => f.Dir)));
+		Guard("for folders that cause trouble", () => TroubleFolders(ReadTrouble(folders, outList)));
 		return outList;
 	}
 
@@ -176,53 +176,113 @@ public static partial class SystemChecks
 		}
 	}
 
-	// ---- 489: folders that cause trouble (warnings only - his answer): Program Files, Documents in OneDrive, Windows' controlled
-	// folder access, mods on a network or cloud folder
+	// ---- 489: folders that cause trouble (warnings only - his answer): Program Files, a cloud-synced folder, a network drive, and
+	// Windows' controlled folder access. Every folder the run reads or writes is looked at; one cause is told once.
 	public static Func<string> Documents { get; set; } = () => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
 	public static Func<List<string>> ProgramFolders { get; set; } = () =>
 		new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }.Select(Environment.GetFolderPath).Where(d => d != "").Distinct().ToList();
 
-	// the folders cloud apps keep in step with the internet (their own environment variables, and their usual folders)
+	// the folders cloud apps keep in step with the internet: OneDrive's own variables, Dropbox's folder as its info.json names it,
+	// the usual Google Drive / iCloud folders, and a drive Google Drive puts up as a letter of its own
 	public static Func<List<string>> CloudFolders { get; set; } = () => {
 		var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-		return new[] { Environment.GetEnvironmentVariable("OneDrive"), Environment.GetEnvironmentVariable("OneDriveConsumer"), Environment.GetEnvironmentVariable("OneDriveCommercial"),
-				Path.Combine(home, "Dropbox"), Path.Combine(home, "Google Drive"), Path.Combine(home, "iCloudDrive") }
-			.OfType<string>().Where(d => d != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var outList = new List<string?> { Environment.GetEnvironmentVariable("OneDrive"), Environment.GetEnvironmentVariable("OneDriveConsumer"),
+			Environment.GetEnvironmentVariable("OneDriveCommercial"), Path.Combine(home, "Dropbox"), Path.Combine(home, "Google Drive"), Path.Combine(home, "iCloudDrive") };
+		foreach (var info in new[] { Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.LocalApplicationData }
+			         .Select(f => Path.Combine(Environment.GetFolderPath(f), "Dropbox", "info.json")).Where(File.Exists)) {
+			try {
+				using var doc = System.Text.Json.JsonDocument.Parse(Files.ReadShared(info));
+				foreach (var acct in doc.RootElement.EnumerateObject()) {
+					if (acct.Value.ValueKind == System.Text.Json.JsonValueKind.Object && acct.Value.TryGetProperty("path", out var path)) {
+						outList.Add(path.GetString());
+					}
+				}
+			} catch (System.Text.Json.JsonException) {
+			}
+		}
+		foreach (var d in DriveInfo.GetDrives()) {
+			try {
+				if (d.IsReady && d.VolumeLabel.Equals("Google Drive", StringComparison.OrdinalIgnoreCase)) {
+					outList.Add(d.RootDirectory.FullName);
+				}
+			} catch (IOException) {
+			} catch (UnauthorizedAccessException) {
+			}
+		}
+		return outList.OfType<string>().Where(d => d != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 	};
 
+	// on by Windows Security, or by a policy of the PC's owner
 	public static Func<bool> ControlledFolderAccess { get; set; } = () =>
-		Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access", "EnableControlledFolderAccess", 0) is int v && v == 1;
+		new[] { @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access",
+				@"HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access" }
+			.Any(k => Registry.GetValue(k, "EnableControlledFolderAccess", 0) is int v && v == 1);
 
-	public static Func<string, bool> IsNetwork { get; set; } = a_dir => {
-		if (a_dir.StartsWith(@"\\", StringComparison.Ordinal)) {
+	// a share (\\server\..., \\?\UNC\...) or a mapped network drive; \\?\D:\... and \\.\D:\... are the local disk
+	public static Func<string, bool> IsNetwork { get; set; } = IsNetworkPath;
+
+	public static bool IsNetworkPath(string a_dir)
+	{
+		if (a_dir.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) {
 			return true;
 		}
-		var root = Path.GetPathRoot(Path.GetFullPath(a_dir));
-		return root != null && new DriveInfo(root).DriveType == DriveType.Network;
-	};
+		var dir = a_dir.StartsWith(@"\\?\", StringComparison.Ordinal) || a_dir.StartsWith(@"\\.\", StringComparison.Ordinal) ? a_dir[4..] : a_dir;
+		if (dir.StartsWith(@"\\", StringComparison.Ordinal)) {
+			return true;
+		}
+		var root = Path.GetPathRoot(Path.GetFullPath(dir));
+		return root != null && root.Length <= 3 && new DriveInfo(root).DriveType == DriveType.Network;
+	}
 
-	public sealed record TroubleInput(string Game, string Mo2Base, string Mods, string Documents, List<string> ProgramFolders, List<string> CloudFolders,
+	public sealed record TroubleInput(List<(string What, string Dir)> Places, string Documents, List<string> ProgramFolders, List<string> CloudFolders,
 		bool ControlledAccess, Func<string, bool> IsNetwork);
+
+	// each probe on its own: one that cannot read leaves its part out, never the whole check
+	public static TroubleInput ReadTrouble(IEnumerable<(string What, string Dir)> a_places, List<Issue> a_notes)
+	{
+		T Safe<T>(string a_what, Func<T> a_probe, T a_none)
+		{
+			try {
+				return a_probe();
+			} catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or System.ComponentModel.Win32Exception) {
+				a_notes.Add(new Issue("", false, $"could not check {a_what}: {e.Message}"));
+				return a_none;
+			}
+		}
+		bool Net(string a_dir) => Safe("whether " + a_dir + " is on a network drive", () => IsNetwork(a_dir), false);
+		return new TroubleInput(a_places.Where(p => p.Dir != "").ToList(), Safe("where Documents is", Documents, ""), Safe("where Program Files is", ProgramFolders, []),
+			Safe("the cloud folders", CloudFolders, []), Safe("Windows' controlled folder access", ControlledFolderAccess, false), Net);
+	}
 
 	public static IEnumerable<Issue> TroubleFolders(TroubleInput a_in)
 	{
 		static bool Under(string a_dir, string a_root) => a_dir != "" && a_root != "" && Files.IsUnder(a_dir, a_root);
-		var places = new[] { ("the game", a_in.Game), ("Mod Organizer's instance", a_in.Mo2Base), ("Mod Organizer's mods", a_in.Mods) };
-		foreach (var (what, dir) in places) {
-			if (a_in.ProgramFolders.Any(p => Under(dir, p))) {
-				yield return new Issue("", false, $"{what} is inside Program Files ({dir}) - Windows guards that folder, so a tool's writes there can be refused " +
-					"or quietly sent elsewhere; the tools' authors advise a folder of its own, like C:\\Games");
+		// the places under one cause, named once each, a place inside another named place left out (the mods inside the instance)
+		static string Named(List<(string What, string Dir)> a_hits)
+		{
+			var top = a_hits.Where(h => !a_hits.Any(o => !Files.SamePath(o.Dir, h.Dir) && Files.IsUnder(h.Dir, o.Dir)))
+				.GroupBy(h => h.What).Select(g => g.First()).ToList();
+			return string.Join(", ", top.Select(h => $"{h.What} ({h.Dir})")) + (top.Count == 1 ? " is" : " are");
+		}
+		foreach (var pf in a_in.ProgramFolders) {
+			var hits = a_in.Places.Where(p => Under(p.Dir, pf)).ToList();
+			if (hits.Count > 0) {
+				yield return new Issue("", false, $"{Named(hits)} inside {pf} - Windows guards that folder, so a tool's writes there can be refused or " +
+					"quietly sent elsewhere; the tools' authors advise a folder of its own, like C:\\Games");
 			}
 		}
-		foreach (var (what, dir) in places.Skip(1)) {
-			if (a_in.CloudFolders.FirstOrDefault(c => Under(dir, c)) is { } cloud) {
-				yield return new Issue("", false, $"{what} is in a folder kept in step with the internet ({cloud}) - the cloud app locks and uploads files " +
-					"while the tools write thousands of them; move it out, or pause the syncing for the run");
-			} else if (dir != "" && a_in.IsNetwork(dir)) {
-				yield return new Issue("", false, $"{what} is on a network drive ({dir}) - the tools read and write thousands of files there, slowly and " +
-					"with locks the network can hold; a local drive is safer");
+		foreach (var cloud in a_in.CloudFolders) {
+			var hits = a_in.Places.Where(p => Under(p.Dir, cloud)).ToList();
+			if (hits.Count > 0) {
+				yield return new Issue("", false, $"{Named(hits)} in a folder a cloud app keeps in step with the internet ({cloud}) - it locks and uploads " +
+					"files while the tools write thousands of them; move it out, or pause the syncing for the run");
 			}
+		}
+		var net = a_in.Places.Where(p => !a_in.CloudFolders.Any(c => Under(p.Dir, c)) && a_in.IsNetwork(p.Dir)).ToList();
+		if (net.Count > 0) {
+			yield return new Issue("", false, $"{Named(net)} on a network drive - the tools read and write thousands of files there, slowly and with " +
+				"locks the network can hold; a local drive is safer");
 		}
 		if (a_in.CloudFolders.FirstOrDefault(c => Under(a_in.Documents, c)) is { } docs) {
 			yield return new Issue("", false, $"your Documents folder is kept in step by a cloud app ({docs}) - the game's saves and settings are there, " +

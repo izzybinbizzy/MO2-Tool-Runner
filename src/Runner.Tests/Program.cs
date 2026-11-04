@@ -2463,18 +2463,40 @@ public static class Program
 
 	static void T_TroubleFoldersAreWarned()
 	{
-		SystemChecks.TroubleInput In(string a_game = @"C:\Games\Skyrim", string a_mods = @"C:\Modding\MO2\mods", string a_docs = @"C:\Users\p\Documents",
-			bool a_cfa = false, Func<string, bool>? a_net = null) =>
-			new(a_game, @"C:\Modding\MO2", a_mods, a_docs, [@"C:\Program Files", @"C:\Program Files (x86)"], [@"C:\Users\p\OneDrive"], a_cfa, a_net ?? (_ => false));
+		SystemChecks.TroubleInput In(string a_game = @"C:\Games\Skyrim", string a_base = @"C:\Modding\MO2", string a_mods = @"C:\Modding\MO2\mods",
+			string a_out = "", string a_docs = @"C:\Users\p\Documents", bool a_cfa = false, Func<string, bool>? a_net = null) =>
+			new([("the game", a_game), ("Mod Organizer's instance", a_base), ("Mod Organizer's mods", a_mods), ("xlodgen's output folder", a_out)], a_docs,
+				[@"C:\Program Files", @"C:\Program Files (x86)"], [@"C:\Users\p\OneDrive"], a_cfa, a_net ?? (_ => false));
 		Equal(0, SystemChecks.TroubleFolders(In()).Count(), "a clean setup: nothing");
 		var pf = SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition")).Single();
-		Check(!pf.Blocking && pf.Text.StartsWith("the game is inside Program Files", StringComparison.Ordinal), "the game in Program Files warns");
+		Check(!pf.Blocking && pf.Text.StartsWith("the game (", StringComparison.Ordinal) && pf.Text.Contains(@"inside C:\Program Files (x86)", StringComparison.Ordinal),
+			"the game in Program Files warns");
 		Equal(0, SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files Extra\Skyrim")).Count(), "a folder that only starts with the same letters is not inside");
 		Check(SystemChecks.TroubleFolders(In(a_docs: @"C:\Users\p\OneDrive\Documents")).Single().Text.Contains("Documents", StringComparison.Ordinal), "Documents in OneDrive warns");
-		Check(SystemChecks.TroubleFolders(In(a_mods: @"C:\Users\p\OneDrive\MO2 mods")).Single().Text.Contains("in step with the internet", StringComparison.Ordinal), "mods in a cloud folder warn");
-		Check(SystemChecks.TroubleFolders(In(a_net: d => d.StartsWith(@"C:\Modding\MO2\mods", StringComparison.Ordinal))).Single().Text.Contains("network", StringComparison.Ordinal), "mods on a network drive warn");
+		// the instance in OneDrive with its mods inside it: one warning, naming the instance only
+		var one = SystemChecks.TroubleFolders(In(a_base: @"C:\Users\p\OneDrive\MO2", a_mods: @"C:\Users\p\OneDrive\MO2\mods")).Single();
+		Check(one.Text.Contains("Mod Organizer's instance", StringComparison.Ordinal) && !one.Text.Contains("mods (", StringComparison.Ordinal), "one cause told once");
+		Check(SystemChecks.TroubleFolders(In(a_out: @"C:\Users\p\OneDrive\LOD")).Single().Text.StartsWith("xlodgen's output folder", StringComparison.Ordinal), "a step's output in the cloud warns");
+		Check(SystemChecks.TroubleFolders(In(a_game: @"C:\Users\p\OneDrive\Skyrim")).Single().Text.StartsWith("the game", StringComparison.Ordinal), "the game in the cloud warns");
+		var net = SystemChecks.TroubleFolders(In(a_net: d => d.StartsWith(@"C:\Modding", StringComparison.Ordinal))).Single();
+		Check(net.Text.Contains("Mod Organizer's instance (", StringComparison.Ordinal) && !net.Text.Contains("Mod Organizer's mods (", StringComparison.Ordinal) &&
+			net.Text.Contains(" is on a network drive", StringComparison.Ordinal), "the network named once for the instance and the mods inside it");
 		Check(SystemChecks.TroubleFolders(In(a_cfa: true)).Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "controlled folder access warns");
 		Check(SystemChecks.TroubleFolders(In(a_cfa: true, a_docs: @"C:\Users\p\OneDrive\Documents")).All(i => !i.Blocking), "every one only warns");
+		// the real network probe on local paths
+		Check(!SystemChecks.IsNetworkPath(Path.GetTempPath()), "the temp folder is local");
+		Check(!SystemChecks.IsNetworkPath(@"\\?\" + Path.GetTempPath()), "a long-form local path is local");
+		Check(SystemChecks.IsNetworkPath(@"\\server\share\mods") && SystemChecks.IsNetworkPath(@"\\?\UNC\server\share\mods"), "a share is a network folder");
+		// a probe that throws leaves only its own part out
+		var notes = new List<ToolRunner.Steps.Issue>();
+		var was = SystemChecks.ControlledFolderAccess;
+		try {
+			SystemChecks.ControlledFolderAccess = () => throw new System.Security.SecurityException("locked down");
+			var input = SystemChecks.ReadTrouble([("the game", @"C:\Program Files\Skyrim")], notes);
+			Check(!input.ControlledAccess && notes.Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "the failing probe is told");
+		} finally {
+			SystemChecks.ControlledFolderAccess = was;
+		}
 	}
 
 	static void T_PrecheckCarriesThePcChecks()
@@ -2489,6 +2511,13 @@ public static class Program
 			Check(Preflight.Run(setup, mo2, []).Any(i => i.Blocking && i.Text.Contains("another Mod Organizer", StringComparison.Ordinal)), "the check reaches the pre-check");
 		} finally {
 			SystemChecks.Mo2Paths = was;
+		}
+		var clouds = SystemChecks.CloudFolders;
+		try {
+			SystemChecks.CloudFolders = () => [f.Root];
+			Check(Preflight.Run(setup, mo2, []).Any(i => i.Text.Contains("cloud app", StringComparison.Ordinal)), "the trouble folders reach the pre-check");
+		} finally {
+			SystemChecks.CloudFolders = clouds;
 		}
 		var unread = SystemChecks.Mo2Unreadable;
 		try {
