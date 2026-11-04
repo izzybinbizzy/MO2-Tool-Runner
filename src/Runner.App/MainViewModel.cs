@@ -60,6 +60,8 @@ public sealed partial class MainViewModel : Observable
 	public bool ProgressKnown { get; set => Set(ref field, value); }
 	// the whole run's share done (steps finished + the running step's part), for the taskbar button
 	public double RunProgress { get; set => Set(ref field, value); }
+	// what the taskbar draws: the share done, at least a visible piece while it waits, all of it when it is red
+	public double TaskbarValue { get; set => Set(ref field, value); }
 	public System.Windows.Shell.TaskbarItemProgressState TaskbarState { get; set => Set(ref field, value); }
 	public string Clock { get; set => Set(ref field, value); } = "";
 	public string Left { get; set => Set(ref field, value); } = "";
@@ -259,7 +261,15 @@ public sealed partial class MainViewModel : Observable
 		Progress = cur?.Progress ?? 0;
 		var steps = _run.Steps.Count;
 		RunProgress = steps == 0 ? 0 : Math.Clamp((_run.Steps.Count(s => s.State is StepState.Done or StepState.Skipped) + (cur?.Progress ?? 0)) / steps, 0, 1);
-		TaskbarState = TaskbarFor(IsRunning, Waiting != "", _run.State);
+		if (_lastState == RunState.Running && IsRunning == false && _run.State != RunState.Finished) {
+			_redSinceWatched = true;
+		}
+		TaskbarState = TaskbarFor(IsRunning, Waiting != "", _redSinceWatched || (_run.Unfinished && !_run.OwnerAlive));
+		TaskbarValue = TaskbarState switch {
+			System.Windows.Shell.TaskbarItemProgressState.Error => 1,
+			System.Windows.Shell.TaskbarItemProgressState.Paused => Math.Max(RunProgress, 0.1),
+			_ => RunProgress,
+		};
 		var elapsed = (_run.Ended ?? DateTime.Now) - _run.Started;
 		Clock = Long(elapsed);
 		var leftT = _run.Steps.Where(s => s.State is StepState.Pending or StepState.Running)
@@ -297,10 +307,13 @@ public sealed partial class MainViewModel : Observable
 
 	static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
-	// a run going: its share done; waiting for the player: paused (yellow); a run that failed: red until the next start; else none
-	public static System.Windows.Shell.TaskbarItemProgressState TaskbarFor(bool a_running, bool a_waiting, RunState a_state) =>
+	// set when a run this window watched ended other than finished; cleared by the next start
+	bool _redSinceWatched;
+
+	// a run going: its share done; waiting for the player: paused (yellow); a run that needs the player's look: red; else none
+	public static System.Windows.Shell.TaskbarItemProgressState TaskbarFor(bool a_running, bool a_waiting, bool a_needsLook) =>
 		a_running ? (a_waiting ? System.Windows.Shell.TaskbarItemProgressState.Paused : System.Windows.Shell.TaskbarItemProgressState.Normal) :
-		a_state == RunState.Failed ? System.Windows.Shell.TaskbarItemProgressState.Error : System.Windows.Shell.TaskbarItemProgressState.None;
+		a_needsLook ? System.Windows.Shell.TaskbarItemProgressState.Error : System.Windows.Shell.TaskbarItemProgressState.None;
 
 	// the watched run's newest record (the cache re-reads it only when its file changed)
 	static Journal Fresh(List<Journal> a_runs, Journal a_j) =>
@@ -456,6 +469,7 @@ public sealed partial class MainViewModel : Observable
 			Say("Could not start: " + text, "bad");
 			return;
 		}
+		_redSinceWatched = false;
 		// the engine checks everything first and may refuse: the next looks read its run record or its refusal
 		Say("Starting - checking every tool and setting ...", "");
 		_startAsked = DateTime.Now;

@@ -25,6 +25,8 @@ public static class Theme
 
 	static readonly string[] BuiltIns = [HighContrast, ColorBlind];
 
+	public static IReadOnlyList<string> BuiltInNames => BuiltIns;
+
 	static string Hex(Color a_c) => $"#{a_c.R:X2}{a_c.G:X2}{a_c.B:X2}";
 
 	static JsonObject Colors(params (string Key, string Value)[] a_values)
@@ -39,7 +41,7 @@ public static class Theme
 	static JsonObject BuiltIn(string a_name)
 	{
 		if (a_name == ColorBlind) {
-			return new JsonObject { ["colors"] = Colors(("Good", "#56B4E9"), ("Warn", "#F0E442"), ("Bad", "#E69F00")) };
+			return new JsonObject { ["colors"] = Colors(("Good", "#56B4E9"), ("Warn", "#F0E442"), ("Bad", "#D55E00"), ("BannerBad", "#3A2410")) };
 		}
 		var win = Hex(SystemColors.WindowColor);
 		var text = Hex(SystemColors.WindowTextColor);
@@ -52,6 +54,7 @@ public static class Theme
 			["colors"] = Colors(("Bg", win), ("Panel", win), ("Panel2", win), ("Line", text), ("Accent", high), ("AccentLight", text), ("AccentDim", text),
 				("Text", text), ("Muted", text), ("Good", text), ("Warn", text), ("Bad", text), ("OnAccent", onHigh), ("HoverFill", win), ("BannerBad", win),
 				("GuidedFill", win), ("Shade", "#99000000")),
+			["highContrastPairs"] = true,
 			["gradients"] = new JsonObject { ["PrimaryAndProgress"] = new JsonObject { ["stops"] = new JsonArray(
 				new JsonObject { ["color"] = high, ["at"] = 0.0 }, new JsonObject { ["color"] = high, ["at"] = 1.0 }) } },
 			["windowsAccent"] = new JsonObject { ["Light3"] = high, ["Light2"] = high, ["Light1"] = high, ["Base"] = high, ["Dark1"] = high, ["Dark2"] = high, ["Dark3"] = high },
@@ -69,36 +72,59 @@ public static class Theme
 		try {
 			Files.WriteAtomic(TextSizeFile, TextScale.ToString(InvariantCulture));
 		} catch (IOException) {
+		} catch (UnauthorizedAccessException) {
 		}
-		Apply(Current, false);
+		ApplyScale();
 	}
 
-	// every "Size..." value the theme left, times the text size
+	// the "Size..." values as the theme set them (before the text size), taken each time a theme is applied
+	static Dictionary<string, double> s_sizes = [];
+
+	static void TakeSizes()
+	{
+		var res = Application.Current.Resources;
+		s_sizes = res.Keys.OfType<string>().Where(k => k.StartsWith("Size", StringComparison.Ordinal) && res[k] is double).ToDictionary(k => k, k => (double)res[k]);
+	}
+
+	// every "Size..." value the theme set, times the text size
 	static void ApplyScale()
 	{
-		if (TextScale == 1) {
-			return;
-		}
 		var res = Application.Current.Resources;
-		foreach (var k in res.Keys.OfType<string>().Where(k => k.StartsWith("Size", StringComparison.Ordinal)).ToList()) {
-			if (res[k] is double d) {
-				res[k] = Math.Round(d * TextScale, 1);
-			}
+		foreach (var (k, d) in s_sizes) {
+			res[k] = Math.Round(d * TextScale, 1);
 		}
 	}
 
 	// Windows' high contrast switched on or off while the window is open: a player who never picked a theme follows it
 	static bool s_followHighContrast;
 
+	// Windows' colors changed (high contrast on or off, or another high-contrast theme): once WPF has taken Windows' new colors
+	// (a low-priority turn after the change), a player who never picked a theme follows high contrast, and the High contrast
+	// look takes the new colors. Nothing here may escape: it runs on the window's thread.
 	static void FollowHighContrast()
 	{
-		SystemParameters.StaticPropertyChanged += (_, e) => {
-			if (e.PropertyName != nameof(SystemParameters.HighContrast) || !s_followHighContrast) {
+		Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, e) => {
+			if (e.Category is not (Microsoft.Win32.UserPreferenceCategory.Color or Microsoft.Win32.UserPreferenceCategory.Accessibility or
+			    Microsoft.Win32.UserPreferenceCategory.General)) {
 				return;
 			}
-			Apply(SystemParameters.HighContrast ? HighContrast : Default, false);
+			Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => {
+				try {
+					if (s_followHighContrast && (SystemParameters.HighContrast ? Current != HighContrast : Current == HighContrast)) {
+						Apply(SystemParameters.HighContrast ? HighContrast : Default, false);
+					} else if (Current == HighContrast) {
+						Apply(HighContrast, false);
+					}
+					Changed?.Invoke();
+				} catch (Exception ex) when (ex is not OutOfMemoryException) {
+					Reset();
+				}
+			});
 		};
 	}
+
+	// the look changed without the player picking it (Settings shows the new one)
+	public static event Action? Changed;
 
 	// the template's colour names -> the window's resource keys (a brush, and the same name + "Color")
 	static readonly Dictionary<string, string> ColorKeys = new(StringComparer.Ordinal) {
@@ -161,7 +187,9 @@ public static class Theme
 			try {
 				var o = JsonNode.Parse(Files.ReadSharedText(f)) as JsonObject;
 				var name = (o?["name"] as JsonObject)?["value"]?.ToString() ?? o?["name"]?.ToString();
-				outList.Add((string.IsNullOrWhiteSpace(name) || name == Default || BuiltIns.Contains(name) ? Path.GetFileNameWithoutExtension(f) : name, f));
+				// a theme named like a built-in look (by its name or its file name) gets "(file)" added, so both can be picked
+				var shown = string.IsNullOrWhiteSpace(name) || name == Default || BuiltIns.Contains(name) ? Path.GetFileNameWithoutExtension(f) : name;
+				outList.Add((shown == Default || BuiltIns.Contains(shown) ? shown + " (file)" : shown, f));
 			} catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
 				outList.Add((Path.GetFileNameWithoutExtension(f) + " (does not read)", f));
 			}
@@ -256,6 +284,7 @@ public static class Theme
 			}
 		}
 		Current = a_name;
+		TakeSizes();
 		ApplyScale();
 		if (a_keep) {
 			// a theme the player picked: Windows' high contrast is no longer followed
@@ -359,6 +388,18 @@ public static class Theme
 					a_problems.Add($"shape.{name}: {d} is out of range");
 				}
 			}
+		}
+		if (a_t["highContrastPairs"] is JsonValue hc && hc.TryGetValue<bool>(out var pairs) && pairs) {
+			// a selected or hovered row and the attention banner: Windows' highlight behind its highlight text, as Windows draws them
+			var hb = new SolidColorBrush(SystemColors.HighlightColor);
+			var ht = new SolidColorBrush(SystemColors.HighlightTextColor);
+			hb.Freeze();
+			ht.Freeze();
+			foreach (var k in new[] { "ListBoxItemSelectedBackgroundThemeBrush", "ListBoxItemSelectedBackgroundPointerOverThemeBrush", "ListBoxItemSelectedBackgroundPressedThemeBrush",
+				         "ListBoxItemBackgroundSelectedPressedThemeBrush" }) {
+				res[k] = hb;
+			}
+			res["ListBoxItemSelectedForegroundThemeBrush"] = ht;
 		}
 		if (a_t["glyphs"] is JsonObject glyphs) {
 			foreach (var key in DefaultGlyphs.Keys) {

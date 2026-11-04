@@ -283,7 +283,7 @@ public partial class MainWindow : Window
 		list.ItemTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
 			"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><StackPanel Margin='2,4'>" +
 			"<TextBlock TextWrapping='Wrap'><Run Text='{Binding Mod, Mode=OneWay}' FontWeight='SemiBold'/><Run Text='   '/><Run Text='{Binding What, Mode=OneWay}'/></TextBlock>" +
-			"<TextBlock Text='{Binding Detail}' TextWrapping='Wrap' Opacity='0.8' FontSize='12.5'/></StackPanel></DataTemplate>");
+			"<TextBlock Text='{Binding Detail}' TextWrapping='Wrap' Opacity='0.8' FontSize='{DynamicResource SizeSmall}'/></StackPanel></DataTemplate>");
 		var rows = new List<ChangeRow>();
 		void Fill()
 		{
@@ -350,8 +350,8 @@ public partial class MainWindow : Window
 		list.ItemTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
 			"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><StackPanel Margin='2,4'>" +
 			"<TextBlock><Run Text='{Binding When, Mode=OneWay}' FontWeight='SemiBold'/><Run Text='   '/><Run Text='{Binding Setup, Mode=OneWay}'/><Run Text='   '/><Run Text='{Binding Took, Mode=OneWay}'/></TextBlock>" +
-			"<TextBlock Text='{Binding Verdict}' TextWrapping='Wrap' Opacity='0.8' FontSize='12.5'/></StackPanel></DataTemplate>");
-		var log = new TextBox { IsReadOnly = true, FontFamily = (System.Windows.Media.FontFamily)FindResource("MonoFont"), FontSize = 12, Background = Brushes2.Get("Panel2"),
+			"<TextBlock Text='{Binding Verdict}' TextWrapping='Wrap' Opacity='0.8' FontSize='{DynamicResource SizeSmall}'/></StackPanel></DataTemplate>");
+		var log = new TextBox { IsReadOnly = true, FontFamily = (System.Windows.Media.FontFamily)FindResource("MonoFont"), FontSize = (double)FindResource("SizeLog"), Background = Brushes2.Get("Panel2"),
 			Foreground = Brushes2.Get("Text"), VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
 		AutomationPropertiesName(log, "The run's log");
 		var open = new Button { Content = "Open its folder", Style = (Style)FindResource("Ghost"), Margin = new Thickness(0, 10, 0, 10), HorizontalAlignment = HorizontalAlignment.Left };
@@ -473,7 +473,7 @@ public static class Ask
 		buttons.Children.Add(yes);
 		buttons.Children.Add(no);
 		var body = new StackPanel { Margin = new Thickness(22) };
-		body.Children.Add(new TextBlock { Text = a_title, Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 12), FontSize = 18 });
+		body.Children.Add(new TextBlock { Text = a_title, Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 12), FontSize = (double)a_owner.FindResource("SizeHeading1") });
 		// a long text (a run's preview) scrolls inside the box instead of growing past the screen
 		var scroll = new ScrollViewer { MaxHeight = 460, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = true,
 			Content = new TextBlock { Text = a_text, TextWrapping = TextWrapping.Wrap } };

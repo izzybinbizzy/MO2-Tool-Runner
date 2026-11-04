@@ -15,7 +15,7 @@ public static class NewSetupDialog
 			Background = Brushes2.Get("Panel"), Foreground = Brushes2.Get("Text"), ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
 		};
 		var stack = new StackPanel { Margin = new Thickness(22) };
-		stack.Children.Add(new TextBlock { Text = "NEW SETUP", Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 6), FontSize = 18 });
+		stack.Children.Add(new TextBlock { Text = "NEW SETUP", Style = (Style)a_owner.FindResource("H1"), Margin = new Thickness(0, 0, 0, 6), FontSize = (double)a_owner.FindResource("SizeHeading1") });
 		stack.Children.Add(new TextBlock { Text = "One setup = one Mod Organizer profile. The steps are found from MO2's Executables list; you can switch any off afterwards.",
 			Style = (Style)a_owner.FindResource("MutedText"), Margin = new Thickness(0, 0, 0, 14) });
 

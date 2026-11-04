@@ -202,7 +202,8 @@ public static class SettingsPanel
 					// the theme in use stays listed beside the built-in one, so the picker shows what is on screen and the built-in
 					// look can still be picked (CodeRabbit on PR #4)
 					var keep = new List<(string Name, string? File)> { (Theme.Default, null) };
-					if (Theme.Current != Theme.Default) {
+					keep.AddRange(Theme.BuiltInNames.Select(b => (b, (string?)null)));
+					if (Theme.Current != Theme.Default && !Theme.BuiltInNames.Contains(Theme.Current)) {
 						keep.Add((Theme.Current, null));
 					}
 					return (keep, "The Themes folder could not be read: " + e.Message);
@@ -217,6 +218,14 @@ public static class SettingsPanel
 			filling = false;
 		}
 		FillThemes();
+		// a look changed by Windows (high contrast followed) shows in the picker while Settings is open
+		void OnChanged() => themes.Dispatcher.BeginInvoke(() => {
+			filling = true;
+			themes.SelectedItem = Theme.Current;
+			filling = false;
+		});
+		Theme.Changed += OnChanged;
+		themes.Unloaded += (_, _) => Theme.Changed -= OnChanged;
 		themes.SelectionChanged += async (_, _) => {
 			if (filling || themes.SelectedItem is not string name || name == Theme.Current) {
 				return;
@@ -465,7 +474,7 @@ public static class SettingsPanel
 			t.TextChanged += (_, _) => Changed();
 			edit = t;
 		} else if (kind is JsonValueKind.Object or JsonValueKind.Array) {
-			var t = new TextBox { Text = cur?.ToJsonString(Pretty) ?? "", AcceptsReturn = true, MinHeight = 80, FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 12 };
+			var t = new TextBox { Text = cur?.ToJsonString(Pretty) ?? "", AcceptsReturn = true, MinHeight = 80, FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = (double)Application.Current.FindResource("SizeLog") };
 			a_apply.Add(() => {
 				try {
 					a_obj[a_key] = JsonNode.Parse(t.Text);
