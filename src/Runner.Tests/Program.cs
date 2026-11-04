@@ -31,6 +31,10 @@ public static class Program
 		SystemChecks.Mo2Paths = () => [];
 		SystemChecks.RestartPending = () => false;
 		SystemChecks.Battery = () => null;
+		SystemChecks.ControlledFolderAccess = () => false;
+		SystemChecks.CloudFolders = () => [];
+		SystemChecks.ProgramFolders = () => [];
+		SystemChecks.IsNetwork = _ => false;
 		var tests = typeof(Program).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
 			.Where(m => m.Name.StartsWith("T_", StringComparison.Ordinal) && m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).OrderBy(m => m.MetadataToken);
 		foreach (var t in tests) {
@@ -2455,6 +2459,22 @@ public static class Program
 		Check(!SystemChecks.Power(false, new(true, 255)).Single().Text.Contains('%', StringComparison.Ordinal), "an unknown level is left out");
 		var deep = Path.Combine(Path.GetTempPath(), new string('x', SystemChecks.LongFolder));
 		Check(!SystemChecks.LongPaths([deep, deep, "", Path.GetTempPath()]).Single().Blocking, "a long folder warns once");
+	}
+
+	static void T_TroubleFoldersAreWarned()
+	{
+		SystemChecks.TroubleInput In(string a_game = @"C:\Games\Skyrim", string a_mods = @"C:\Modding\MO2\mods", string a_docs = @"C:\Users\p\Documents",
+			bool a_cfa = false, Func<string, bool>? a_net = null) =>
+			new(a_game, @"C:\Modding\MO2", a_mods, a_docs, [@"C:\Program Files", @"C:\Program Files (x86)"], [@"C:\Users\p\OneDrive"], a_cfa, a_net ?? (_ => false));
+		Equal(0, SystemChecks.TroubleFolders(In()).Count(), "a clean setup: nothing");
+		var pf = SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition")).Single();
+		Check(!pf.Blocking && pf.Text.StartsWith("the game is inside Program Files", StringComparison.Ordinal), "the game in Program Files warns");
+		Equal(0, SystemChecks.TroubleFolders(In(a_game: @"C:\Program Files Extra\Skyrim")).Count(), "a folder that only starts with the same letters is not inside");
+		Check(SystemChecks.TroubleFolders(In(a_docs: @"C:\Users\p\OneDrive\Documents")).Single().Text.Contains("Documents", StringComparison.Ordinal), "Documents in OneDrive warns");
+		Check(SystemChecks.TroubleFolders(In(a_mods: @"C:\Users\p\OneDrive\MO2 mods")).Single().Text.Contains("in step with the internet", StringComparison.Ordinal), "mods in a cloud folder warn");
+		Check(SystemChecks.TroubleFolders(In(a_net: d => d.StartsWith(@"C:\Modding\MO2\mods", StringComparison.Ordinal))).Single().Text.Contains("network", StringComparison.Ordinal), "mods on a network drive warn");
+		Check(SystemChecks.TroubleFolders(In(a_cfa: true)).Single().Text.Contains("controlled folder access", StringComparison.Ordinal), "controlled folder access warns");
+		Check(SystemChecks.TroubleFolders(In(a_cfa: true, a_docs: @"C:\Users\p\OneDrive\Documents")).All(i => !i.Blocking), "every one only warns");
 	}
 
 	static void T_PrecheckCarriesThePcChecks()

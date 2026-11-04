@@ -26,6 +26,8 @@ public static partial class SystemChecks
 		Guard("the plugin limit", () => PluginLimit(CountPlugins(a_profile)));
 		Guard("Windows' restart and the battery", () => Power(RestartPending(), Battery()));
 		Guard("the folders' path lengths", () => LongPaths(a_folders));
+		Guard("for folders that cause trouble", () => TroubleFolders(new TroubleInput(a_mo2.GameDir, a_mo2.BaseDir, a_mo2.ModsDir, Documents(), ProgramFolders(),
+			CloudFolders(), ControlledFolderAccess(), IsNetwork)));
 		return outList;
 	}
 
@@ -171,6 +173,64 @@ public static partial class SystemChecks
 		if (a_battery is { OnBattery: true } b) {
 			var pct = b.Percent <= 100 ? $" ({b.Percent} %)" : "";
 			yield return new Issue("", false, $"the PC runs on its battery{pct} - plug it in: a run takes hours and the tools work the processor hard");
+		}
+	}
+
+	// ---- 489: folders that cause trouble (warnings only - his answer): Program Files, Documents in OneDrive, Windows' controlled
+	// folder access, mods on a network or cloud folder
+	public static Func<string> Documents { get; set; } = () => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+	public static Func<List<string>> ProgramFolders { get; set; } = () =>
+		new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }.Select(Environment.GetFolderPath).Where(d => d != "").Distinct().ToList();
+
+	// the folders cloud apps keep in step with the internet (their own environment variables, and their usual folders)
+	public static Func<List<string>> CloudFolders { get; set; } = () => {
+		var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+		return new[] { Environment.GetEnvironmentVariable("OneDrive"), Environment.GetEnvironmentVariable("OneDriveConsumer"), Environment.GetEnvironmentVariable("OneDriveCommercial"),
+				Path.Combine(home, "Dropbox"), Path.Combine(home, "Google Drive"), Path.Combine(home, "iCloudDrive") }
+			.OfType<string>().Where(d => d != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+	};
+
+	public static Func<bool> ControlledFolderAccess { get; set; } = () =>
+		Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access", "EnableControlledFolderAccess", 0) is int v && v == 1;
+
+	public static Func<string, bool> IsNetwork { get; set; } = a_dir => {
+		if (a_dir.StartsWith(@"\\", StringComparison.Ordinal)) {
+			return true;
+		}
+		var root = Path.GetPathRoot(Path.GetFullPath(a_dir));
+		return root != null && new DriveInfo(root).DriveType == DriveType.Network;
+	};
+
+	public sealed record TroubleInput(string Game, string Mo2Base, string Mods, string Documents, List<string> ProgramFolders, List<string> CloudFolders,
+		bool ControlledAccess, Func<string, bool> IsNetwork);
+
+	public static IEnumerable<Issue> TroubleFolders(TroubleInput a_in)
+	{
+		static bool Under(string a_dir, string a_root) => a_dir != "" && a_root != "" && Files.IsUnder(a_dir, a_root);
+		var places = new[] { ("the game", a_in.Game), ("Mod Organizer's instance", a_in.Mo2Base), ("Mod Organizer's mods", a_in.Mods) };
+		foreach (var (what, dir) in places) {
+			if (a_in.ProgramFolders.Any(p => Under(dir, p))) {
+				yield return new Issue("", false, $"{what} is inside Program Files ({dir}) - Windows guards that folder, so a tool's writes there can be refused " +
+					"or quietly sent elsewhere; the tools' authors advise a folder of its own, like C:\\Games");
+			}
+		}
+		foreach (var (what, dir) in places.Skip(1)) {
+			if (a_in.CloudFolders.FirstOrDefault(c => Under(dir, c)) is { } cloud) {
+				yield return new Issue("", false, $"{what} is in a folder kept in step with the internet ({cloud}) - the cloud app locks and uploads files " +
+					"while the tools write thousands of them; move it out, or pause the syncing for the run");
+			} else if (dir != "" && a_in.IsNetwork(dir)) {
+				yield return new Issue("", false, $"{what} is on a network drive ({dir}) - the tools read and write thousands of files there, slowly and " +
+					"with locks the network can hold; a local drive is safer");
+			}
+		}
+		if (a_in.CloudFolders.FirstOrDefault(c => Under(a_in.Documents, c)) is { } docs) {
+			yield return new Issue("", false, $"your Documents folder is kept in step by a cloud app ({docs}) - the game's saves and settings are there, " +
+				"and a save the cloud app holds or brings back from another PC can break the in-game steps; pause the syncing for the run");
+		}
+		if (a_in.ControlledAccess) {
+			yield return new Issue("", false, "Windows' controlled folder access is on - it refuses unknown programs' writes to Documents (the game's saves " +
+				"and settings); allow the game, Mod Organizer and the tools in Windows Security, or the saves may not be written");
 		}
 	}
 
