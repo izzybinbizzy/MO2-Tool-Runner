@@ -58,6 +58,9 @@ public sealed partial class MainViewModel : Observable
 	public string NowActivity { get; set => Set(ref field, value); } = "";
 	public double Progress { get; set => Set(ref field, value); }
 	public bool ProgressKnown { get; set => Set(ref field, value); }
+	// the whole run's share done (steps finished + the running step's part), for the taskbar button
+	public double RunProgress { get; set => Set(ref field, value); }
+	public System.Windows.Shell.TaskbarItemProgressState TaskbarState { get; set => Set(ref field, value); }
 	public string Clock { get; set => Set(ref field, value); } = "";
 	public string Left { get; set => Set(ref field, value); } = "";
 	public string Verdict { get; set => Set(ref field, value); } = "";
@@ -190,6 +193,7 @@ public sealed partial class MainViewModel : Observable
 	void ShowReady()
 	{
 		IsRunning = false;
+		TaskbarState = System.Windows.Shell.TaskbarItemProgressState.None;
 		NowTitle = "Ready";
 		var on = Steps.Count(s => s.Runs);
 		NowActivity = SelectedSetup == null ? "Make a setup first (New setup)." :
@@ -253,6 +257,9 @@ public sealed partial class MainViewModel : Observable
 		NowActivity = Waiting != "" ? "" : act;
 		ProgressKnown = cur?.Progress != null;
 		Progress = cur?.Progress ?? 0;
+		var steps = _run.Steps.Count;
+		RunProgress = steps == 0 ? 0 : Math.Clamp((_run.Steps.Count(s => s.State is StepState.Done or StepState.Skipped) + (cur?.Progress ?? 0)) / steps, 0, 1);
+		TaskbarState = TaskbarFor(IsRunning, Waiting != "", _run.State);
 		var elapsed = (_run.Ended ?? DateTime.Now) - _run.Started;
 		Clock = Long(elapsed);
 		var leftT = _run.Steps.Where(s => s.State is StepState.Pending or StepState.Running)
@@ -289,6 +296,11 @@ public sealed partial class MainViewModel : Observable
 	}
 
 	static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+	// a run going: its share done; waiting for the player: paused (yellow); a run that failed: red until the next start; else none
+	public static System.Windows.Shell.TaskbarItemProgressState TaskbarFor(bool a_running, bool a_waiting, RunState a_state) =>
+		a_running ? (a_waiting ? System.Windows.Shell.TaskbarItemProgressState.Paused : System.Windows.Shell.TaskbarItemProgressState.Normal) :
+		a_state == RunState.Failed ? System.Windows.Shell.TaskbarItemProgressState.Error : System.Windows.Shell.TaskbarItemProgressState.None;
 
 	// the watched run's newest record (the cache re-reads it only when its file changed)
 	static Journal Fresh(List<Journal> a_runs, Journal a_j) =>

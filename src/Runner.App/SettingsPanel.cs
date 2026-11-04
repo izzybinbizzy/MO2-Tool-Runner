@@ -233,6 +233,20 @@ public static class SettingsPanel
 		themeRow.Children.Add(reload);
 		stack.Children.Add(themeNote);
 		stack.Children.Add(themeRow);
+		// his checklist 473: bigger text for every theme, kept for the next start
+		stack.Children.Add(new TextBlock { Text = "Text size", Foreground = Brushes2.Get("Gold"), Margin = new Thickness(0, 12, 0, 4) });
+		var size = new ComboBox { MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Left, ItemsSource = Theme.TextScales.Select(s => $"{s * 100:0} %").ToList(),
+			SelectedIndex = Math.Max(0, Array.IndexOf(Theme.TextScales, Theme.TextScale)) };
+		System.Windows.Automation.AutomationProperties.SetName(size, "Text size");
+		size.SelectionChanged += (_, _) => {
+			if (size.SelectedIndex >= 0) {
+				Theme.SetTextScale(Theme.TextScales[size.SelectedIndex]);
+			}
+		};
+		stack.Children.Add(size);
+		stack.Children.Add(new TextBlock { Text = "The \"High contrast\" theme takes Windows' own high-contrast colors and is used by itself while Windows has high contrast on " +
+			"and no theme was picked here. \"Color-blind safe\" keeps finished, warning and failed apart by more than red and green. Every state also has its own mark.",
+			Style = (Style)a_w.FindResource("MutedText"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
 
 		// his ask 2026-10-27: aware of a tool's updates, the download from the runner (its page, in the player's browser)
 		Head("TOOL UPDATES");
